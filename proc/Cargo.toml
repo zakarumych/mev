@@ -1,0 +1,16 @@
+[package]
+name = "mev-proc"
+edition.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+syn.workspace = true
+quote.workspace = true
+proc-easy.workspace = true

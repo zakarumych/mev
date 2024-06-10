@@ -1,0 +1,83 @@
+[package]
+name = "mev"
+edition.workspace = true
+authors.workspace = true
+readme.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Metal Et Vulkan abstraction"
+
+[dependencies]
+mev-proc = { path = "proc" }
+
+ahash.workspace = true
+bitflags.workspace = true
+bytemuck.workspace = true
+codespan-reporting.workspace = true
+hashbrown.workspace = true
+hidden-trait.workspace = true
+parking_lot.workspace = true
+raw-window-handle.workspace = true
+slab.workspace = true
+smallvec.workspace = true
+tracing.workspace = true
+
+[target.'cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))'.dependencies]
+ash.workspace = true
+gpu-alloc.workspace = true
+naga = { workspace = true, features = ["spv-out"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+metal.workspace = true
+objc.workspace = true
+core-graphics-types.workspace = true
+foreign-types.workspace = true
+naga = { workspace = true, features = ["msl-out"] }
+
+[workspace]
+members = ["proc", "."]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+authors = ["me"]
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+
+[workspace.dependencies]
+ahash = { version = "0.8" }
+ash = { version = "0.38", features = ["loaded"] }
+bitflags = "2.0"
+bytemuck = { version = "1.7", features = ["derive", "min_const_generics"] }
+codespan-reporting = "0.11"
+core-graphics-types = { version = "0.1" }
+foreign-types = { version = "0.5" }
+gpu-alloc = { version = "0.6" }
+hashbrown = { version = "0.14" }
+hidden-trait = "0.1"
+libloading = "0.8"
+metal = { version = "0.28" }
+naga = { version = "0.20", features = ["spv-in", "wgsl-in", "glsl-in"] }
+objc = { version = "0.2" }
+parking_lot = "0.12"
+proc-macro2 = "1"
+proc-easy = "0.3"
+quote = "1"
+raw-window-handle = "0.6"
+slab = "0.4"
+smallvec = "1.6"
+syn = "2"
+tracing = "0.1"
+
+[profile.dev.package.ahash]
+opt-level = 3
+
+[profile.dev.package.metal]
+opt-level = 3
+
+[profile.dev.package.hashbrown]
+opt-level = 3
+
+[profile.dev.package.ash]
+opt-level = 3
