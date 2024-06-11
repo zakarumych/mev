@@ -305,12 +305,27 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    fn write_buffer_raw(&mut self, buffer: impl AsBufferSlice, data: &[u8]) {
+    fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
+        let slice = slice.as_buffer_slice();
+
+        self.encoder.fill_buffer(
+            slice.buffer.metal(),
+            NSRange {
+                location: slice.offset as NSUInteger,
+                length: slice.size as NSUInteger,
+            },
+            byte,
+        );
+    }
+
+    #[cfg_attr(feature = "inline-more", inline(always))]
+    fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
         if data.is_empty() {
             return;
         }
-        let buffer_slice = buffer.as_buffer_slice();
-        if data.len() > buffer_slice.size {
+
+        let slice = slice.as_buffer_slice();
+        if data.len() > slice.size {
             out_of_bounds();
         }
 
@@ -323,8 +338,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         self.encoder.copy_from_buffer(
             &staged,
             0,
-            buffer_slice.buffer.metal(),
-            buffer_slice.offset as NSUInteger,
+            slice.buffer.metal(),
+            slice.offset as NSUInteger,
             data.len() as NSUInteger,
         );
     }

@@ -48,7 +48,7 @@ impl CommandEncoder {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::CommandEncoder for CommandEncoder {
+impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
         barrier(&self.device, self.handle, after, before);
@@ -59,7 +59,10 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
+}
 
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for CommandEncoder {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn present(&mut self, frame: Frame, after: PipelineStages) {
         unsafe {
@@ -288,7 +291,7 @@ impl ComputeCommandEncoder<'_> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
+impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
         barrier(&self.device, self.handle, after, before);
@@ -299,6 +302,10 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
+}
+
+#[hidden_trait::expose]
+impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
 
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn with_pipeline(&mut self, pipeline: &ComputePipeline) {
@@ -528,7 +535,7 @@ pub struct CopyCommandEncoder<'a> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
+impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
         barrier(&self.device, self.handle, after, before);
@@ -539,7 +546,10 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
+}
 
+#[hidden_trait::expose]
+impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn copy_buffer_to_image(
         &mut self,
@@ -646,6 +656,25 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                     },
                 }],
             )
+        }
+    }
+
+    #[cfg_attr(feature = "inline-more", inline(always))]
+    fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
+        let slice = slice.as_buffer_slice();
+
+        self.refs.add_buffer(slice.buffer.clone());
+
+        let data = u32::from_ne_bytes([byte; 4]);
+
+        unsafe {
+            self.device.ash().cmd_fill_buffer(
+                self.handle,
+                slice.buffer.handle(),
+                slice.offset as u64,
+                slice.size as u64,
+                data,
+            );
         }
     }
 

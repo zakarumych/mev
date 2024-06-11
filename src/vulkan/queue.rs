@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt, sync::Arc};
+use std::{collections::VecDeque, fmt, ops::Deref, sync::Arc};
 
 use ash::{prelude::VkResult, vk};
 use parking_lot::Mutex;
@@ -401,9 +401,25 @@ impl Queue {
     }
 }
 
+impl Deref for Queue {
+    type Target = Device;
+
+    #[inline(always)]
+    fn deref(&self) -> &Device {
+        &self.device
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::Queue for Queue {
+    /// Get the device associated with this queue.
+    #[inline(always)]
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
     /// Get the queue family index.
+    #[inline(always)]
     fn family(&self) -> u32 {
         self.family
     }

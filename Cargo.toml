@@ -7,6 +7,9 @@ license.workspace = true
 version.workspace = true
 description = "Metal Et Vulkan abstraction"
 
+[features]
+inline-more = []
+
 [dependencies]
 mev-proc = { path = "proc" }
 

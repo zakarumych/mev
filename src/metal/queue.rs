@@ -1,13 +1,13 @@
-use std::fmt;
+use std::{fmt, ops::Deref};
 
 use foreign_types::ForeignType;
 
 use crate::generic::{DeviceError, OutOfMemory, PipelineStages};
 
-use super::{CommandBuffer, CommandEncoder, Frame};
+use super::{CommandBuffer, CommandEncoder, Frame, Device};
 
 pub struct Queue {
-    device: metal::Device,
+    device: Device,
     queue: metal::CommandQueue,
 }
 
@@ -24,13 +24,26 @@ impl fmt::Debug for Queue {
 }
 
 impl Queue {
-    pub(super) fn new(device: metal::Device, queue: metal::CommandQueue) -> Self {
+    pub(super) fn new(device: Device, queue: metal::CommandQueue) -> Self {
         Queue { device, queue }
+    }
+}
+
+impl Deref for Queue {
+    type Target = Device;
+
+    #[inline(always)]
+    fn deref(&self) -> &Device {
+        &self.device
     }
 }
 
 #[hidden_trait::expose]
 impl crate::traits::Queue for Queue {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
     fn family(&self) -> u32 {
         0
     }

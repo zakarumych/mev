@@ -1,4 +1,4 @@
-use std::{fmt::Debug, hash::Hash, ops::Range};
+use std::{fmt::Debug, hash::Hash, ops::{Deref, Range}};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
@@ -66,7 +66,10 @@ pub trait Device: Clone + Debug + Eq + Send + Sync + 'static {
     fn new_tlas(&self, desc: TlasDesc) -> Result<crate::backend::Tlas, OutOfMemory>;
 }
 
-pub trait Queue: Debug + Send + Sync + 'static {
+pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Send + Sync + 'static {
+    /// Get the device associated with this queue.
+    fn device(&self) -> &crate::backend::Device;
+
     /// Get the queue family index.
     fn family(&self) -> u32;
 
@@ -90,7 +93,7 @@ pub trait Queue: Debug + Send + Sync + 'static {
     fn sync_frame(&mut self, frame: &mut crate::backend::Frame, before: PipelineStages);
 }
 
-pub trait CommandEncoder {
+pub trait SyncCommandEncoder {
     /// Synchronizes the access to the resources.
     /// Commands in `before` stages of subsequent commands will be
     /// executed only after commands in `after` stages of previous commands
@@ -108,7 +111,9 @@ pub trait CommandEncoder {
         before: PipelineStages,
         image: &crate::backend::Image,
     );
+}
 
+pub trait CommandEncoder: SyncCommandEncoder {
     /// Presents the frame to the surface.
     fn present(&mut self, frame: crate::backend::Frame, after: PipelineStages);
 
@@ -127,20 +132,7 @@ pub trait CommandEncoder {
     fn render(&mut self, desc: RenderPassDesc) -> crate::backend::RenderCommandEncoder<'_>;
 }
 
-pub trait ComputeCommandEncoder {
-    /// Synchronizes the access to the resources.
-    /// Commands in `before` stages of subsequent commands will be
-    /// executed only after commands in `after` stages of previous commands
-    /// are finished.
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages);
-
-    fn init_image(
-        &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
-        image: &crate::backend::Image,
-    );
-
+pub trait ComputeCommandEncoder: SyncCommandEncoder {
     /// Sets the current compute pipeline.
     fn with_pipeline(&mut self, pipeline: &crate::backend::ComputePipeline);
 
@@ -154,19 +146,9 @@ pub trait ComputeCommandEncoder {
     fn dispatch(&mut self, groups: Extent3);
 }
 
-pub trait CopyCommandEncoder {
-    /// Synchronizes the access to the resources.
-    /// Commands in `before` stages of subsequent commands will be
-    /// executed only after commands in `after` stages of previous commands
-    /// are finished.
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages);
-
-    fn init_image(
-        &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
-        image: &crate::backend::Image,
-    );
+pub trait CopyCommandEncoder: SyncCommandEncoder {
+    /// Fills the buffer slice with the given byte.
+    fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8);
 
     /// Writes data to the buffer.
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]);
