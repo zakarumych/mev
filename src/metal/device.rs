@@ -62,6 +62,13 @@ impl Device {
     }
 }
 
+impl Device {
+    #[inline(always)]
+    pub(crate) fn metal(&self) -> &metal::DeviceRef {
+        self.device.as_ref()
+    }
+}
+
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateLibraryError> {

@@ -62,18 +62,18 @@ impl crate::traits::Instance for Instance {
     }
 
     fn create(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
-        let device = metal::Device::system_default()
-            .ok_or(CreateError(CreateErrorKind::FailedToCreateDevice))?;
-
-        let device = Device::new(device);
-
         assert!(
             info.queues.iter().all(|&f| f == 0),
             "Only one queue family is supported"
         );
 
+        let device = metal::Device::system_default()
+            .ok_or(CreateError(CreateErrorKind::FailedToCreateDevice))?;
+
+        let device = Device::new(device);
+
         let queues = (0..info.queues.len())
-            .map(|_| Queue::new(device.clone(), device.new_command_queue()))
+            .map(|_| Queue::new(device.clone(), device.metal().new_command_queue()))
             .collect();
 
         Ok((device, queues))

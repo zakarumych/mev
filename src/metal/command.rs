@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, ops::Range, sync::Arc};
 
-use metal::NSUInteger;
+use metal::{NSRange, NSUInteger};
 use objc::{msg_send, Message};
 use smallvec::SmallVec;
 
@@ -41,13 +41,16 @@ impl CommandEncoder {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::CommandEncoder for CommandEncoder {
+impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[inline(always)]
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
     fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+}
 
+#[hidden_trait::expose]
+impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline(always)]
     fn copy(&mut self) -> CopyCommandEncoder {
         let encoder = self.buffer.new_blit_command_encoder();
@@ -193,13 +196,16 @@ impl Drop for CopyCommandEncoder<'_> {
 }
 
 #[hidden_trait::expose]
-impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
+impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     #[inline(always)]
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
     fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+}
 
+#[hidden_trait::expose]
+impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn copy_buffer_to_image(
         &mut self,
@@ -386,13 +392,16 @@ impl Drop for ComputeCommandEncoder<'_> {
 }
 
 #[hidden_trait::expose]
-impl traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
+impl traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline(always)]
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
     fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+}
 
+#[hidden_trait::expose]
+impl traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline(always)]
     fn with_pipeline(&mut self, pipeline: &crate::backend::ComputePipeline) {
         self.encoder.set_compute_pipeline_state(pipeline.metal());

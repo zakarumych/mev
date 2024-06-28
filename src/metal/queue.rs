@@ -4,7 +4,7 @@ use foreign_types::ForeignType;
 
 use crate::generic::{DeviceError, OutOfMemory, PipelineStages};
 
-use super::{CommandBuffer, CommandEncoder, Frame, Device};
+use super::{CommandBuffer, CommandEncoder, Device, Frame};
 
 pub struct Queue {
     device: Device,
@@ -17,7 +17,7 @@ unsafe impl Sync for Queue {}
 impl fmt::Debug for Queue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Queue")
-            .field("device", &self.device.as_ptr())
+            .field("device", &self.device.metal())
             .field("queue", &self.queue.as_ptr())
             .finish()
     }
@@ -50,7 +50,7 @@ impl crate::traits::Queue for Queue {
 
     fn new_command_encoder(&mut self) -> Result<CommandEncoder, OutOfMemory> {
         Ok(CommandEncoder::new(
-            self.device.clone(),
+            self.device.metal().to_owned(),
             self.queue.new_command_buffer().to_owned(),
         ))
     }
