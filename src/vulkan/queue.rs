@@ -115,7 +115,7 @@ impl Epoch {
     /// Device must be the same device that created the epoch.
     /// Pools must contain all pools that were used to allocate command buffers in the epoch.
     unsafe fn destroy(&mut self, device: &ash::Device, pools: &mut VecDeque<Pool>) {
-        // Safety: called must ensure device is owner.
+        // Safety: caller must ensure device is owner.
         unsafe {
             device.destroy_fence(self.fence, None);
         }
@@ -305,9 +305,10 @@ impl Queue {
         if let Some(front) = pools.front_mut() {
             if front.allocated == 0 {
                 // If front pool has no allocated command buffers, reuse it.
-                // If pool is in array it was used to allocate command buffers
+
+                // Since pool is in array it *was* used to allocate command buffers
                 // unless allocation of the first command buffer failed.
-                // So don't hasitate to reset it first.
+                // So don't hesitate to reset it first.
 
                 // Keep resources allocated by the pool.
 

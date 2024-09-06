@@ -142,6 +142,24 @@ impl ImageExtent {
     }
 
     #[inline(always)]
+    pub fn into_1d(self) -> Extent1<u32> {
+        match self {
+            ImageExtent::D1(e) => e,
+            ImageExtent::D2(e) => e.to_1d(),
+            ImageExtent::D3(e) => e.to_1d(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn into_2d(self) -> Extent2<u32> {
+        match self {
+            ImageExtent::D1(e) => e.to_2d(),
+            ImageExtent::D2(e) => e,
+            ImageExtent::D3(e) => e.to_2d(),
+        }
+    }
+
+    #[inline(always)]
     pub fn into_3d(self) -> Extent3<u32> {
         match self {
             ImageExtent::D1(e) => e.to_3d(),

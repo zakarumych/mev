@@ -16,6 +16,21 @@ pub enum StoreOp {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClearColor(pub f32, pub f32, pub f32, pub f32);
 
+impl ClearColor {
+    pub const BLACK: Self = ClearColor(0.0, 0.0, 0.0, 1.0);
+    pub const TRANSPARENT: Self = ClearColor(0.0, 0.0, 0.0, 0.0);
+    pub const WHITE: Self = ClearColor(1.0, 1.0, 1.0, 1.0);
+    pub const RED: Self = ClearColor(1.0, 0.0, 0.0, 1.0);
+    pub const GREEN: Self = ClearColor(0.0, 1.0, 0.0, 1.0);
+    pub const BLUE: Self = ClearColor(0.0, 0.0, 1.0, 1.0);
+    pub const YELLOW: Self = ClearColor(1.0, 1.0, 0.0, 1.0);
+    pub const CYAN: Self = ClearColor(0.0, 1.0, 1.0, 1.0);
+    pub const MAGENTA: Self = ClearColor(1.0, 0.0, 1.0, 1.0);
+    pub const GRAY: Self = ClearColor(0.5, 0.5, 0.5, 1.0);
+    pub const DARK_GRAY: Self = ClearColor(0.25, 0.25, 0.25, 1.0);
+    pub const LIGHT_GRAY: Self = ClearColor(0.75, 0.75, 0.75, 1.0);
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct ClearDepthStencil {
     pub depth: f32,

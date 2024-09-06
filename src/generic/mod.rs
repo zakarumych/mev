@@ -16,7 +16,7 @@ mod shader;
 mod stages;
 mod surface;
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, mem::{ManuallyDrop, MaybeUninit}};
 
 pub use self::{
     acst::{
@@ -342,4 +342,162 @@ impl<T: Copy> Extent3<T> {
         let [width, height, _] = self.0;
         Extent2::new(width, height)
     }
+}
+
+impl<T, const D: usize> Offset<T, D> {
+    #[inline]
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Offset<U, D> {
+        Offset(self.0.map(f))
+    }
+}
+
+impl<T, const D: usize> Offset<T, D> {
+    #[inline]
+    pub fn cast<U>(extent: Offset<U, D>) -> Self
+    where
+        U: Into<T>,
+    {
+        Offset(extent.0.map(Into::into))
+    }
+}
+
+impl<T, const D: usize> Offset<T, D> {
+    #[inline]
+    pub fn try_cast<U>(extent: Offset<U, D>) -> Result<Self, U::Error>
+    where
+        U: TryInto<T>,
+    {
+        let array = array_try_map(extent.0, <U as TryInto<T>>::try_into)?;
+        Ok(Offset(array))
+    }
+}
+
+impl<T, const D: usize> Extent<T, D> {
+    #[inline]
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Extent<U, D> {
+        Extent(self.0.map(f))
+    }
+}
+
+impl<T, const D: usize> Extent<T, D> {
+    #[inline]
+    pub fn cast<U>(extent: Extent<U, D>) -> Self
+    where
+        U: Into<T>,
+    {
+        Extent(extent.0.map(Into::into))
+    }
+}
+
+impl<T, const D: usize> Extent<T, D> {
+    #[inline]
+    pub fn try_cast<U>(extent: Extent<U, D>) -> Result<Self, U::Error>
+    where
+        U: TryInto<T>,
+    {
+        let array = array_try_map(extent.0, <U as TryInto<T>>::try_into)?;
+        Ok(Extent(array))
+    }
+}
+
+fn array_try_map<T, U, E, const N: usize>(array: [T; N], mut f: impl FnMut(T) -> Result<U, E>) -> Result<[U; N], E> {
+    struct PartiallyUsed<T, const N: usize> {
+        array: [MaybeUninit<T>; N],
+        used: usize,
+    }
+
+    impl<T, const N: usize> Drop for PartiallyUsed<T, N> {
+        fn drop(&mut self) {
+            for i in self.used..N {
+                unsafe {
+                    self.array[i].assume_init_drop();
+                }
+            }
+        }
+    }
+
+    struct PartiallyInit<U, const N: usize> {
+        array: [MaybeUninit<U>; N],
+        init: usize,
+    }
+
+    impl<T, const N: usize> Drop for PartiallyInit<T, N> {
+        fn drop(&mut self) {
+            for i in 0..self.init {
+                unsafe {
+                    self.array[i].assume_init_drop();
+                }
+            }
+        }
+    }
+
+    let mut pu = PartiallyUsed::<T, N> {
+        array: array.map(MaybeUninit::new),
+        used: 0,
+    };
+
+    let mut pi = PartiallyInit::<U, N> {
+        array: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
+        init: 0,
+    };
+
+    for i in 0..N {
+        pu.used = i + 1;
+        let t = unsafe { pu.array[i].assume_init_read() };
+        let u = f(t)?;
+
+        pi.array[i].write(u);
+        pi.init = i + 1;
+    }
+
+    let pi = ManuallyDrop::new(pi);
+    let array = unsafe { core::ptr::read(&pi.array) };
+
+    Ok(unsafe { array.map(|e| MaybeUninit::assume_init(e)) })
+}
+
+macro_rules! impl_cast_as {
+    (.EACH $($t:ty),+ as $cast_as_u:ident $u:ty) => {
+        $(
+            impl<const D: usize> Offset< $t, D > {
+                pub fn $cast_as_u(self) -> Offset< $u, D > {
+                    Offset(self.0.map(|x| x as $u))
+                }
+            }
+
+            impl<const D: usize> Extent< $t, D > {
+                pub fn $cast_as_u(self) -> Extent< $u, D > {
+                    Extent(self.0.map(|x| x as $u))
+                }
+            }
+        )+
+    };
+
+    (.HEAD $($t:ty),+ as ) => {};
+
+    (.HEAD $($t:ty),+ as $cast_as_head:ident $head:ty, $($cast_as_tail:ident $tail:ty,)*) => {
+        impl_cast_as!(.EACH $($t),+ as $cast_as_head $head);
+        impl_cast_as!(.HEAD $($t),+ as $($cast_as_tail $tail,)*);
+    };
+
+    ($($cast_as_t:ident $t:ty),+ $(,)?) => {
+        impl_cast_as!(.HEAD $($t),+ as $($cast_as_t $t,)*);
+    };
+}
+
+impl_cast_as! {
+    cast_as_u8 u8,
+    cast_as_u16 u16,
+    cast_as_u32 u32,
+    cast_as_u64 u64,
+    cast_as_u128 u128,
+    cast_as_i8 i8,
+    cast_as_i16 i16,
+    cast_as_i32 i32,
+    cast_as_i64 i64,
+    cast_as_i128 i128,
+    cast_as_usize usize,
+    cast_as_isize isize,
+    cast_as_f32 f32,
+    cast_as_f64 f64,
 }

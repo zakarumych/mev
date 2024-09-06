@@ -37,6 +37,9 @@ core-graphics-types.workspace = true
 foreign-types.workspace = true
 naga = { workspace = true, features = ["msl-out"] }
 
+[dev-dependencies]
+winit = "0.30"
+
 [workspace]
 members = ["proc", "."]
 resolver = "2"
@@ -84,3 +87,6 @@ opt-level = 3
 
 [profile.dev.package.ash]
 opt-level = 3
+
+[[example]]
+name = "triangle"
