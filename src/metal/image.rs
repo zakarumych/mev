@@ -58,7 +58,7 @@ impl crate::traits::Image for Image {
         self.texture.pixel_format().expect_metal_into()
     }
 
-    fn dimensions(&self) -> ImageExtent {
+    fn extent(&self) -> ImageExtent {
         match self.texture.texture_type() {
             MTLTextureType::D1 | MTLTextureType::D1Array => {
                 let width = self.texture.width();

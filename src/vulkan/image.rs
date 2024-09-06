@@ -36,7 +36,7 @@ struct ImageData {
     owner: WeakDevice,
     format: PixelFormat,
     usage: ImageUsage,
-    dimensions: ImageExtent,
+    extent: ImageExtent,
     layers: u32,
     levels: u32,
     flavor: Flavor,
@@ -59,7 +59,7 @@ struct Inner {
     data: Arc<ImageData>,
     desc: ViewDesc,
     usage: ImageUsage,
-    dimensions: ImageExtent,
+    extent: ImageExtent,
     owner: WeakDevice,
 }
 
@@ -110,14 +110,14 @@ impl Image {
         handle: vk::Image,
         view: vk::ImageView,
         view_idx: usize,
-        dimensions: impl Into<ImageExtent>,
+        extent: impl Into<ImageExtent>,
         format: PixelFormat,
         usage: ImageUsage,
         layers: u32,
         levels: u32,
         flavor: Flavor,
     ) -> Self {
-        let dimensions = dimensions.into();
+        let extent = extent.into();
         let desc = ViewDesc {
             format,
             base_layer: 0,
@@ -136,7 +136,7 @@ impl Image {
             inner: Arc::new(Inner {
                 data: Arc::new(ImageData {
                     owner: owner.clone(),
-                    dimensions,
+                    extent,
                     format,
                     usage,
                     layers,
@@ -145,7 +145,7 @@ impl Image {
                     views: Mutex::new(views),
                 }),
                 desc,
-                dimensions,
+                extent,
                 usage,
                 owner,
             }),
@@ -157,7 +157,7 @@ impl Image {
         handle: vk::Image,
         view: vk::ImageView,
         view_idx: usize,
-        dimensions: ImageExtent,
+        extent: ImageExtent,
         format: PixelFormat,
         usage: ImageUsage,
         layers: u32,
@@ -170,7 +170,7 @@ impl Image {
             handle,
             view,
             view_idx,
-            dimensions,
+            extent,
             format,
             usage,
             layers,
@@ -187,7 +187,7 @@ impl Image {
         handle: vk::Image,
         view: vk::ImageView,
         view_idx: usize,
-        dimensions: impl Into<ImageExtent>,
+        extent: impl Into<ImageExtent>,
         format: PixelFormat,
         usage: ImageUsage,
     ) -> Self {
@@ -196,7 +196,7 @@ impl Image {
             handle,
             view,
             view_idx,
-            dimensions,
+            extent,
             format,
             usage,
             1,
@@ -221,7 +221,7 @@ impl Image {
             Entry::Occupied(entry) => entry.get().0,
             Entry::Vacant(entry) => {
                 let (view, idx) =
-                    device.new_image_view(self.handle, self.inner.dimensions.into_ash(), desc)?;
+                    device.new_image_view(self.handle, self.inner.extent.into_ash(), desc)?;
                 entry.insert((view, idx)).0
             }
         };
@@ -232,7 +232,7 @@ impl Image {
             inner: Arc::new(Inner {
                 data: self.inner.data.clone(),
                 desc,
-                dimensions: self.inner.dimensions,
+                extent: self.inner.extent,
                 usage: self.inner.usage,
                 owner: self.inner.owner.clone(),
             }),
@@ -268,8 +268,8 @@ impl crate::traits::Image for Image {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    fn dimensions(&self) -> ImageExtent {
-        self.inner.dimensions
+    fn extent(&self) -> ImageExtent {
+        self.inner.extent
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]

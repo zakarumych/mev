@@ -488,8 +488,8 @@ impl AshFrom<BlendFactor> for vk::BlendFactor {
             BlendFactor::DstAlpha => vk::BlendFactor::DST_ALPHA,
             BlendFactor::OneMinusDstAlpha => vk::BlendFactor::ONE_MINUS_DST_ALPHA,
             BlendFactor::SrcAlphaSaturated => vk::BlendFactor::SRC_ALPHA_SATURATE,
-            BlendFactor::BlendColor => vk::BlendFactor::CONSTANT_COLOR,
-            BlendFactor::OneMinusBlendColor => vk::BlendFactor::ONE_MINUS_CONSTANT_COLOR,
+            // BlendFactor::BlendColor => vk::BlendFactor::CONSTANT_COLOR,
+            // BlendFactor::OneMinusBlendColor => vk::BlendFactor::ONE_MINUS_CONSTANT_COLOR,
         }
     }
 }

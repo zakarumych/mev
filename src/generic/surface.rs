@@ -2,6 +2,7 @@ use std::fmt;
 
 use crate::generic::OutOfMemory;
 
+/// Error that can occur when working with a surface.
 #[derive(Debug)]
 pub enum SurfaceError {
     OutOfMemory,

@@ -245,8 +245,8 @@ pub trait Image: Clone + Debug + Eq + Hash + Send + Sync + 'static {
     /// Returns the pixel format of the image.
     fn format(&self) -> PixelFormat;
 
-    /// Returns the dimensions of the image.
-    fn dimensions(&self) -> ImageExtent;
+    /// Returns the extent of the image.
+    fn extent(&self) -> ImageExtent;
 
     /// Returns the number of layers in the image.
     fn layers(&self) -> u32;

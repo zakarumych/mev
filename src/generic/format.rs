@@ -1,80 +1,236 @@
+
+
+/// Format of the pixel.
+///
+/// It specifies channels, channel bits and data type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PixelFormat {
+    /// 8-bit unsigned normalized red channel.
     R8Unorm,
+
+    /// 8-bit signed normalized red channel.
     R8Snorm,
+
+    /// 8-bit unsigned red channel.
     R8Uint,
+
+    /// 8-bit signed red channel.
     R8Sint,
+
+    /// 8-bit unsigned normalized red channel in sRGB color space.
     R8Srgb,
+
+    /// 16-bit unsigned normalized red channel.
     R16Unorm,
+
+    /// 16-bit signed normalized red channel.
     R16Snorm,
+
+    /// 16-bit unsigned red channel.
     R16Uint,
+
+    /// 16-bit signed red channel.
     R16Sint,
+
+    /// 16-bit floating-point red channel.
     R16Float,
+
+    /// 32-bit unsigned normalized red channel.
     R32Unorm,
+
+    /// 32-bit signed normalized red channel.
     R32Snorm,
+
+    /// 32-bit unsigned red channel.
     R32Uint,
+
+    /// 32-bit signed red channel.
     R32Sint,
+
+    /// 32-bit floating-point red channel.
     R32Float,
+
+    /// 8-bit unsigned normalized red and green channels.
     Rg8Unorm,
+
+    /// 8-bit signed normalized red and green channels.
     Rg8Snorm,
+
+    /// 8-bit unsigned red and green channels.
     Rg8Uint,
+
+    /// 8-bit signed red and green channels.
     Rg8Sint,
+
+    /// 8-bit unsigned normalized red and green channels in sRGB color space.
     Rg8Srgb,
+
+    /// 16-bit unsigned normalized red and green channels.
     Rg16Unorm,
+
+    /// 16-bit signed normalized red and green channels.
     Rg16Snorm,
+
+    /// 16-bit unsigned red and green channels.
     Rg16Uint,
+
+    /// 16-bit signed red and green channels.
     Rg16Sint,
+
+    /// 16-bit floating-point red and green channels.
     Rg16Float,
+
+    /// 32-bit unsigned normalized red and green channels.
     Rg32Unorm,
+
+    /// 32-bit signed normalized red and green channels.
     Rg32Snorm,
+
+    /// 32-bit unsigned red and green channels.
     Rg32Uint,
+
+    /// 32-bit signed red and green channels.
     Rg32Sint,
+
+    /// 32-bit floating-point red and green channels.
     Rg32Float,
+
+    /// 8-bit unsigned normalized red, green and blue channels.
     Rgb8Unorm,
+
+    /// 8-bit signed normalized red, green and blue channels.
     Rgb8Snorm,
+
+    /// 8-bit unsigned red, green and blue channels.
     Rgb8Uint,
+
+    /// 8-bit signed red, green and blue channels.
     Rgb8Sint,
+
+    /// 8-bit unsigned normalized red, green and blue channels in sRGB color space.
     Rgb8Srgb,
+
+    /// 16-bit unsigned normalized red, green and blue channels.
     Rgb16Unorm,
+
+    /// 16-bit signed normalized red, green and blue channels.
     Rgb16Snorm,
+
+    /// 16-bit unsigned red, green and blue channels.
     Rgb16Uint,
+
+    /// 16-bit signed red, green and blue channels.
     Rgb16Sint,
+
+    /// 16-bit floating-point red, green and blue channels.
     Rgb16Float,
+
+    /// 32-bit unsigned normalized red, green and blue channels.
     Rgb32Unorm,
+
+    /// 32-bit signed normalized red, green and blue channels.
     Rgb32Snorm,
+
+    /// 32-bit unsigned red, green and blue channels.
     Rgb32Uint,
+
+    /// 32-bit signed red, green and blue channels.
     Rgb32Sint,
+
+    /// 32-bit floating-point red, green and blue channels.
     Rgb32Float,
+
+    /// 8-bit unsigned normalized red, green, blue and alpha channels.
     Rgba8Unorm,
+
+    /// 8-bit signed normalized red, green, blue and alpha channels.
     Rgba8Snorm,
+
+    /// 8-bit unsigned red, green, blue and alpha channels.
     Rgba8Uint,
+
+    /// 8-bit signed red, green, blue and alpha channels.
     Rgba8Sint,
+
+    /// 8-bit unsigned normalized red, green, blue and alpha channels in sRGB color space.
     Rgba8Srgb,
+
+    /// 16-bit unsigned normalized red, green, blue and alpha channels.
     Rgba16Unorm,
+
+    /// 16-bit signed normalized red, green, blue and alpha channels.
     Rgba16Snorm,
+
+    /// 16-bit unsigned red, green, blue and alpha channels.
     Rgba16Uint,
+
+    /// 16-bit signed red, green, blue and alpha channels.
     Rgba16Sint,
+
+    /// 16-bit floating-point red, green, blue and alpha channels.
     Rgba16Float,
+
+    /// 32-bit unsigned normalized red, green, blue and alpha channels.
     Rgba32Unorm,
+
+    /// 32-bit signed normalized red, green, blue and alpha channels.
     Rgba32Snorm,
+
+    /// 32-bit unsigned red, green, blue and alpha channels.
     Rgba32Uint,
+
+    /// 32-bit signed red, green, blue and alpha channels.
     Rgba32Sint,
+
+    /// 32-bit floating-point red, green, blue and alpha channels.
     Rgba32Float,
+
+    /// 8-bit unsigned normalized blue, green and red channels.
     Bgr8Unorm,
+
+    /// 8-bit signed normalized blue, green and red channels.
     Bgr8Snorm,
+
+    /// 8-bit unsigned blue, green and red channels.
     Bgr8Uint,
+
+    /// 8-bit signed blue, green and red channels.
     Bgr8Sint,
+
+    /// 8-bit unsigned normalized blue, green and red channels in sRGB color space.
     Bgr8Srgb,
+
+    /// 8-bit unsigned normalized blue, green, red and alpha channels.
     Bgra8Unorm,
+
+    /// 8-bit signed normalized blue, green, red and alpha channels.
     Bgra8Snorm,
+
+    /// 8-bit unsigned blue, green, red and alpha channels.
     Bgra8Uint,
+
+    /// 8-bit signed blue, green, red and alpha channels.
     Bgra8Sint,
+
+    /// 8-bit unsigned normalized blue, green, red and alpha channels in sRGB color space.
     Bgra8Srgb,
+
+    /// 16-bit unsigned normalized depth channel.
     D16Unorm,
+
+    /// 32-bit floating-point depth channel.
     D32Float,
+
+    /// 8-bit unsigned stencil channel.
     S8Uint,
+
+    /// 16-bit unsigned normalized depth and 8-bit unsigned stencil channels.
     D16UnormS8Uint,
+
+    /// 24-bit unsigned normalized depth and 8-bit unsigned stencil channels.
     D24UnormS8Uint,
+
+    /// 32-bit floating-point depth and 8-bit unsigned stencil channels.
     D32FloatS8Uint,
 }
 
@@ -420,62 +576,176 @@ impl PixelFormat {
     }
 }
 
+/// Format of the vertex attribute.
+/// 
+/// It specifies the data type and number of components.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VertexFormat {
+    /// 8-bit unsigned integer.
     Uint8,
+
+    /// 16-bit unsigned integer.
     Uint16,
+
+    /// 32-bit unsigned integer.
     Uint32,
+
+    /// 8-bit signed integer.
     Sint8,
+
+    /// 16-bit signed integer.
     Sint16,
+
+    /// 32-bit signed integer.
     Sint32,
+
+    /// 8-bit unsigned normalized integer.
     Unorm8,
+
+    /// 16-bit unsigned normalized integer.
     Unorm16,
+
+    /// 32-bit unsigned normalized integer.
     Unorm32,
+
+    /// 8-bit signed normalized integer.
     Snorm8,
+
+    /// 16-bit signed normalized integer.
     Snorm16,
+
+    /// 32-bit signed normalized integer.
     Snorm32,
+
+    /// 16-bit floating-point number.
     Float16,
+
+    /// 32-bit floating-point number.
     Float32,
+
+    /// 8-bit unsigned integer pair.
     Uint8x2,
+
+    /// 16-bit unsigned integer pair.
     Uint16x2,
+
+    /// 32-bit unsigned integer pair.
     Uint32x2,
+
+    /// 8-bit signed integer pair.
     Sint8x2,
+
+    /// 16-bit signed integer pair.
     Sint16x2,
+
+    /// 32-bit signed integer pair.
     Sint32x2,
+
+    /// 8-bit unsigned normalized integer pair.
     Unorm8x2,
+
+    /// 16-bit unsigned normalized integer pair.
     Unorm16x2,
+
+    /// 32-bit unsigned normalized integer pair.
     Unorm32x2,
+
+    /// 8-bit signed normalized integer pair.
     Snorm8x2,
+
+    /// 16-bit signed normalized integer pair.
     Snorm16x2,
+
+    /// 32-bit signed normalized integer pair.
     Snorm32x2,
+
+    /// 16-bit floating-point number pair.
     Float16x2,
+
+    /// 32-bit floating-point number pair.
     Float32x2,
+
+    /// 8-bit unsigned integer triple.
     Uint8x3,
+
+    /// 16-bit unsigned integer triple.
     Uint16x3,
+
+    /// 32-bit unsigned integer triple.
     Uint32x3,
+
+    /// 8-bit signed integer triple.
     Sint8x3,
+
+    /// 16-bit signed integer triple.
     Sint16x3,
+
+    /// 32-bit signed integer triple.
     Sint32x3,
+
+    /// 8-bit unsigned normalized integer triple.
     Unorm8x3,
+
+    /// 16-bit unsigned normalized integer triple.
     Unorm16x3,
+
+    /// 32-bit unsigned normalized integer triple.
     Unorm32x3,
+
+    /// 8-bit signed normalized integer triple.
     Snorm8x3,
+
+    /// 16-bit signed normalized integer triple.
     Snorm16x3,
+
+    /// 32-bit signed normalized integer triple.
     Snorm32x3,
+
+    /// 16-bit floating-point number triple.
     Float16x3,
+
+    /// 32-bit floating-point number triple.
     Float32x3,
+
+    /// 8-bit unsigned integer quadruple.
     Uint8x4,
+
+    /// 16-bit unsigned integer quadruple.
     Uint16x4,
+
+    /// 32-bit unsigned integer quadruple.
     Uint32x4,
+
+    /// 8-bit signed integer quadruple.
     Sint8x4,
+
+    /// 16-bit signed integer quadruple.
     Sint16x4,
+
+    /// 32-bit signed integer quadruple.
     Sint32x4,
+
+    /// 8-bit unsigned normalized integer quadruple.
     Unorm8x4,
+
+    /// 16-bit unsigned normalized integer quadruple.
     Unorm16x4,
+
+    /// 32-bit unsigned normalized integer quadruple.
     Unorm32x4,
+
+    /// 8-bit signed normalized integer quadruple.
     Snorm8x4,
+
+    /// 16-bit signed normalized integer quadruple.
     Snorm16x4,
+
+    /// 32-bit signed normalized integer quadruple.
     Snorm32x4,
+
+    /// 16-bit floating-point number quadruple.
     Float16x4,
+
+    /// 32-bit floating-point number quadruple.
     Float32x4,
 }

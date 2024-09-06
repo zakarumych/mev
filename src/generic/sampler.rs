@@ -1,52 +1,68 @@
 use std::hash::{Hash, Hasher};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Filter to use when sampling the texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Filter {
+    /// Sample from nearest texel.
+    #[default]
     Nearest,
+
+    /// Sample by linear interpolation of the four nearest texels.
     Linear,
 }
 
-impl Default for Filter {
-    fn default() -> Self {
-        Filter::Nearest
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Mip-map mode to use when sampling the texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum MipMapMode {
+    /// Sample from nearest mip-map level.
+    #[default]
     Nearest,
+
+    /// Sample by linear interpolation of the two nearest mip-map levels.
     Linear,
 }
 
-impl Default for MipMapMode {
-    fn default() -> Self {
-        MipMapMode::Nearest
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Address mode to use when sampling the texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AddressMode {
+    /// Repeat the texture.
+    #[default]
     Repeat,
+
+    /// Repeat the texture with mirroring.
     MirrorRepeat,
+
+    /// Sample closes edge texel.
     ClampToEdge,
 }
 
-impl Default for AddressMode {
-    fn default() -> Self {
-        AddressMode::Repeat
-    }
-}
-
+/// Describes how to sample the texture.
 #[derive(Clone, Copy, Debug)]
 pub struct SamplerDesc {
+    /// Filter to use when sampling the texture with pixels smaller than fragment.
     pub min_filter: Filter,
+
+    /// Filter to use when sampling the texture with pixels larger than fragment.
     pub mag_filter: Filter,
+
+    /// Mip-map mode to use when sampling the texture.
     pub mip_map_mode: MipMapMode,
+
+    /// Address mode to use when sampling the texture, for each dimension.
     pub address_mode: [AddressMode; 3],
+
+    /// Maximum anisotropy level to use when sampling the texture.
     pub anisotropy: Option<f32>,
 
+    /// Minimum level of detail to use when sampling the texture.
     pub min_lod: f32,
+
+    /// Maximum level of detail to use when sampling the texture.
     pub max_lod: f32,
+
+    /// Whether to normalize the texture coordinates.
+    /// If true, 0.0 and 1.0 are treated as edges of the texture.
+    /// Otherwise 1.0 is size of one texel.
     pub normalized: bool,
 }
 

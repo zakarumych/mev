@@ -6,7 +6,7 @@ use std::{
 
 use super::{format::PixelFormat, Extent1, Extent2, Extent3};
 
-/// Image component swizzle
+/// Image component swizzle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ComponentSwizzle {
     Identity,
@@ -24,7 +24,9 @@ impl Default for ComponentSwizzle {
     }
 }
 
-/// Image swizzle
+/// Image swizzle for each component.
+/// 
+/// It is used to remap components of an image in image views.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Swizzle {
     pub r: ComponentSwizzle,
@@ -34,6 +36,8 @@ pub struct Swizzle {
 }
 
 impl Swizzle {
+    /// Identity swizzle.
+    /// i.e. use as-is.
     pub const IDENTITY: Self = Swizzle {
         r: ComponentSwizzle::Identity,
         g: ComponentSwizzle::Identity,
@@ -41,6 +45,7 @@ impl Swizzle {
         a: ComponentSwizzle::Identity,
     };
 
+    /// Map all components to R component.
     pub const RRRR: Self = Swizzle {
         r: ComponentSwizzle::R,
         g: ComponentSwizzle::R,
@@ -48,6 +53,7 @@ impl Swizzle {
         a: ComponentSwizzle::R,
     };
 
+    /// Map components R, G and B to one and Alpha to R.
     pub const _111R: Self = Swizzle {
         r: ComponentSwizzle::One,
         g: ComponentSwizzle::One,
@@ -56,6 +62,7 @@ impl Swizzle {
     };
 }
 
+/// Combine two swizzles.
 impl Mul for Swizzle {
     type Output = Self;
 
@@ -82,6 +89,9 @@ impl Mul for Swizzle {
     }
 }
 
+/// Extent of the image.
+/// 
+/// It can be 1D, 2D or 3D.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImageExtent {
     D1(Extent1),
@@ -90,6 +100,7 @@ pub enum ImageExtent {
 }
 
 impl ImageExtent {
+    /// Returns the width of the image.
     #[inline(always)]
     pub fn width(&self) -> u32 {
         match self {
@@ -99,6 +110,9 @@ impl ImageExtent {
         }
     }
 
+    /// Returns the height of the image.
+    /// 
+    /// If the image is 1D, it returns 1.
     #[inline(always)]
     pub fn height(&self) -> u32 {
         match self {
@@ -108,6 +122,9 @@ impl ImageExtent {
         }
     }
 
+    /// Returns the depth of the image.
+    /// 
+    /// If the image is 1D or 2D, it returns 1.
     #[inline(always)]
     pub fn depth(&self) -> u32 {
         match self {
@@ -117,6 +134,11 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent1`, expecting 1D image.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if the image is not 1D.
     #[inline(always)]
     pub fn expect_1d(self) -> Extent1<u32> {
         match self {
@@ -125,6 +147,11 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent2`, expecting 2D image.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if the image is not 2D.
     #[inline(always)]
     pub fn expect_2d(self) -> Extent2<u32> {
         match self {
@@ -133,6 +160,11 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent3`, expecting 3D image.
+    /// 
+    /// # Panics
+    /// 
+    /// Panics if the image is not 3D.
     #[inline(always)]
     pub fn expect_3d(self) -> Extent3<u32> {
         match self {
@@ -141,6 +173,10 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent1` from any image extent.
+    /// 
+    /// Ignores height if the image is 2D or 3D.
+    /// Ignores depth if the image is 3D.
     #[inline(always)]
     pub fn into_1d(self) -> Extent1<u32> {
         match self {
@@ -150,6 +186,10 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent2` from any image extent.
+    /// 
+    /// Uses 1 for height if the image is 1D.
+    /// Ignores depth is the image is 3D.
     #[inline(always)]
     pub fn into_2d(self) -> Extent2<u32> {
         match self {
@@ -159,6 +199,10 @@ impl ImageExtent {
         }
     }
 
+    /// Convert into `Extent3` from any image extent.
+    /// 
+    /// Uses 1 for height if the image is 1D.
+    /// Uses 1 for depth if the image is 1D or 2D.
     #[inline(always)]
     pub fn into_3d(self) -> Extent3<u32> {
         match self {
@@ -221,29 +265,57 @@ impl From<Extent3> for ImageExtent {
 }
 
 bitflags::bitflags! {
+    /// Image usage flags.
+    /// 
+    /// Image can only be used according to usage flags specified during creation.
+    /// When creating a buffer, choose all flags that apply.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct ImageUsage: u32 {
+        /// Image can be used as a source for transfer operations.
+        /// i.e. it will be copied from.
         const TRANSFER_SRC = 0x0000_0001;
+
+        /// Image can be used as a destination for transfer operations.
+        /// i.e. it will be copied to.
         const TRANSFER_DST = 0x0000_0002;
+
+        /// Image can be used as a sampled image in shader arguments.
         const SAMPLED = 0x0000_0004;
+
+        /// Image can be used as a storage image in shader arguments.
         const STORAGE = 0x0000_0008;
+
+        /// Image can be used as a target for rendering.
         const TARGET = 0x0000_0010;
     }
 }
 
+/// Description used for image creation.
 pub struct ImageDesc<'a> {
-    pub dimensions: ImageExtent,
+    /// Image extent.
+    pub extent: ImageExtent,
+
+    /// Image pixel format.
     pub format: PixelFormat,
+
+    /// Image usage flags.
     pub usage: ImageUsage,
+
+    /// Image layers count.
     pub layers: u32,
+
+    /// Image mip levels count.
     pub levels: u32,
+
+    /// Image debug name.
     pub name: &'a str,
 }
 
 impl<'a> ImageDesc<'a> {
-    pub const fn new(dimensions: ImageExtent, format: PixelFormat, usage: ImageUsage) -> Self {
+    /// Create a new image description.
+    pub const fn new(extent: ImageExtent, format: PixelFormat, usage: ImageUsage) -> Self {
         ImageDesc {
-            dimensions,
+            extent,
             format,
             usage,
             layers: 1,
@@ -252,14 +324,17 @@ impl<'a> ImageDesc<'a> {
         }
     }
 
+    /// Create a new 1D image description.
     pub const fn new_d1(width: u32, format: PixelFormat, usage: ImageUsage) -> Self {
         ImageDesc::new(ImageExtent::D1(Extent1::new(width)), format, usage)
     }
 
+    /// Create a new 2D image description.
     pub const fn new_d2(width: u32, height: u32, format: PixelFormat, usage: ImageUsage) -> Self {
         ImageDesc::new(ImageExtent::D2(Extent2::new(width, height)), format, usage)
     }
 
+    /// Create a new 3D image description.
     pub const fn new_d3(
         width: u32,
         height: u32,
@@ -274,16 +349,19 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
+    /// Set image layers count.
     pub fn layers(mut self, layers: u32) -> Self {
         self.layers = layers;
         self
     }
 
+    /// Set image mip levels count.
     pub fn levels(mut self, levels: u32) -> Self {
         self.levels = levels;
         self
     }
 
+    /// Create a new 1D texture description.
     pub const fn new_d1_texture(width: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d1(
             width,
@@ -292,6 +370,7 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
+    /// Create a new 2D texture description.
     pub const fn new_d2_texture(width: u32, height: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d2(
             width,
@@ -301,6 +380,7 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
+    /// Create a new 3D texture description.
     pub const fn new_d3_texture(width: u32, height: u32, depth: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d3(
             width,
@@ -311,7 +391,8 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
-    pub const fn new_d1_rtt(width: u32, format: PixelFormat) -> Self {
+    /// Create a new 1D render target description.
+    pub const fn new_d1_rt(width: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d1(
             width,
             format,
@@ -319,7 +400,8 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
-    pub const fn new_d2_rtt(width: u32, height: u32, format: PixelFormat) -> Self {
+    /// Create a new 2D render target description.
+    pub const fn new_d2_rt(width: u32, height: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d2(
             width,
             height,
@@ -328,7 +410,8 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
-    pub const fn new_d3_rtt(width: u32, height: u32, depth: u32, format: PixelFormat) -> Self {
+    /// Create a new 3D render target description.
+    pub const fn new_d3_rt(width: u32, height: u32, depth: u32, format: PixelFormat) -> Self {
         ImageDesc::new_d3(
             width,
             height,
@@ -338,23 +421,40 @@ impl<'a> ImageDesc<'a> {
         )
     }
 
+    /// Set image debug name.
     pub const fn with_name(mut self, name: &'a str) -> Self {
         self.name = name;
         self
     }
 }
 
+/// Description used for image view creation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewDesc {
+    /// View pixel format.
+    /// It can be different from the image format, but must be compatible.
     pub format: PixelFormat,
+
+    /// Base layer of the view.
+    /// 0's layer of the view would correspond to this layer of the parent image.
     pub base_layer: u32,
+
+    /// Number of layers in the view.
     pub layers: u32,
+
+    /// Base mip level of the view.
+    /// 0's level of the view would correspond to this level of the parent image.
     pub base_level: u32,
+
+    /// Number of mip levels in the view.
     pub levels: u32,
+
+    /// Image component swizzle.
     pub swizzle: Swizzle,
 }
 
 impl ViewDesc {
+    /// Create a new image view description.
     pub fn new(format: PixelFormat) -> Self {
         ViewDesc {
             format,
@@ -366,6 +466,7 @@ impl ViewDesc {
         }
     }
 
+    /// Set layers range of the view.
     pub fn layers(self, range: Range<u32>) -> Self {
         Self {
             layers: range.end - range.start,
@@ -374,6 +475,7 @@ impl ViewDesc {
         }
     }
 
+    /// Set mip levels range of the view.
     pub fn levels(self, range: Range<u32>) -> Self {
         Self {
             levels: range.end - range.start,
@@ -382,6 +484,7 @@ impl ViewDesc {
         }
     }
 
+    /// Set image component swizzle.
     pub fn swizzle(self, swizzle: Swizzle) -> Self {
         Self { swizzle, ..self }
     }

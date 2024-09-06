@@ -50,7 +50,7 @@ impl TriangleApp {
     fn render(&mut self) {
         let mut frame = self.surface.as_mut().unwrap().next_frame().unwrap();
         let target_format = frame.image().format();
-        let target_extent = frame.image().dimensions();
+        let target_extent = frame.image().extent();
         let angle = self.start.elapsed().as_secs_f32() * 0.1;
 
         if self.pipeline.is_none() || self.last_format != Some(target_format) {

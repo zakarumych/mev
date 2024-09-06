@@ -149,7 +149,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             let format = color.image.format();
             debug_assert!(format.is_color());
 
-            let color_extent: ash::vk::Extent2D = color.image.dimensions().expect_2d().into_ash();
+            let color_extent: ash::vk::Extent2D = color.image.extent().expect_2d().into_ash();
             extent.width = extent.width.min(color_extent.width);
             extent.height = extent.height.min(color_extent.height);
 
@@ -187,7 +187,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             let format = depth.image.format();
             debug_assert!(format.is_depth() || format.is_stencil());
 
-            let depth_extent: ash::vk::Extent2D = depth.image.dimensions().expect_2d().into_ash();
+            let depth_extent: ash::vk::Extent2D = depth.image.extent().expect_2d().into_ash();
             extent.width = extent.width.min(depth_extent.width);
             extent.height = extent.height.min(depth_extent.height);
 

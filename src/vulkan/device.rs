@@ -1338,9 +1338,9 @@ impl crate::traits::Device for Device {
         let image = unsafe {
             self.inner.device.create_image(
                 &vk::ImageCreateInfo::default()
-                    .image_type(desc.dimensions.into_ash())
+                    .image_type(desc.extent.into_ash())
                     .format(desc.format.try_into_ash().expect("Unsupported format"))
-                    .extent(desc.dimensions.into_ash())
+                    .extent(desc.extent.into_ash())
                     .array_layers(desc.layers)
                     .mip_levels(desc.levels)
                     .samples(vk::SampleCountFlags::TYPE_1)
@@ -1407,7 +1407,7 @@ impl crate::traits::Device for Device {
 
         let result = self.new_image_view(
             image,
-            desc.dimensions.into_ash(),
+            desc.extent.into_ash(),
             ViewDesc {
                 format: desc.format,
                 base_layer: 0,
@@ -1440,7 +1440,7 @@ impl crate::traits::Device for Device {
             image,
             view,
             view_idx,
-            desc.dimensions,
+            desc.extent,
             desc.format,
             desc.usage,
             desc.layers,

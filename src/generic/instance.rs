@@ -2,6 +2,9 @@ use std::fmt;
 
 use super::{feature::Features, queue::QueueFlags};
 
+/// Error that can occur when creating an instance.
+/// 
+/// This signals that backend could not be loaded.
 #[derive(Debug)]
 pub struct LoadError(pub(crate) crate::backend::LoadErrorKind);
 
@@ -14,6 +17,7 @@ impl fmt::Display for LoadError {
 
 impl std::error::Error for LoadError {}
 
+/// Error that can occur when creating device from an instance.
 #[derive(Debug)]
 pub struct CreateError(pub(crate) crate::backend::CreateErrorKind);
 
@@ -55,11 +59,16 @@ pub struct Capabilities {
 /// Specifies how the device should be created.
 pub struct DeviceDesc<'a> {
     /// Index of the device.
+    /// 
+    /// Device created will use physical device at that index in [`Capabilities::devices`].
     pub idx: usize,
 
-    /// List of families to request queues from.
+    /// Specifies families from which queues should be created.
+    /// Same family may be specified more than once, up to maximum number of queues in that family. See [`FamilyCapabilities::queue_count`].
     pub queues: &'a [u32],
 
     /// List of features that should be enabled.
+    /// 
+    /// It should not include features not supported by the device. See [`DeviceCapabilities::features`].
     pub features: Features,
 }

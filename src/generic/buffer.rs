@@ -6,27 +6,69 @@ use std::{
 use crate::backend::Buffer;
 
 bitflags::bitflags! {
+    /// Buffer usage flags.
+    /// 
+    /// Buffer can only be used according to usage flags specified during creation.
+    /// When creating a buffer, choose all flags that apply.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct BufferUsage: u32 {
+        /// Buffer can be used as a source for transfer operations.
+        /// i.e. it will be copied from.
         const TRANSFER_SRC = 0x0000_0001;
+
+        /// Buffer can be used as a destination for transfer operations.
+        /// i.e. it will be copied to.
         const TRANSFER_DST = 0x0000_0002;
+        
+        /// Buffer can be used as a uniform buffer in shader arguments.
         const UNIFORM = 0x0000_0004;
+
+        /// Buffer can be used as a storage buffer in shader arguments.
         const STORAGE = 0x0000_0008;
+
+        /// Buffer can be used as a index buffer in indexed draw calls.
         const INDEX = 0x0000_0010;
+
+        /// Buffer can be used as a vertex buffer in draw calls.
         const VERTEX = 0x0000_0020;
+
+        /// Buffer can be used as a indirect buffer in indirect draw calls.
         const INDIRECT = 0x0000_0040;
     }
 }
 
+/// Specifies what memory type should be allocated for the buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Memory {
+    /// Memory is allocated on the device.
+    /// This memory is fastest to access by the device,
+    /// but may not be accessible by the host.
     Device,
+
+    /// Memory is allocated so that it can be accessed by the host.
+    /// It can be used directly in shaders, but it is slower than device memory.
+    /// 
+    /// Note that memory access must be synchronized between the host and the device.
     Shared,
+
+    /// Memory is allocated on the device and can be accessed by the host.
+    /// 
+    /// It is designated for upload operations.
+    /// 
+    /// Typical use case is staging memory to copy data from host to device memory.
+    /// e.g. Host memory -> Staging buffer -> Device buffer.
     Upload,
+
+    /// Memory is allocated on the device and can be accessed by the host.
+    /// 
+    /// It is designated for download operations.
+    /// 
+    /// Typical use case is staging memory to copy data from device to host memory.
+    /// e.g. Device buffer -> Staging buffer -> Host memory.
     Download,
 }
 
-/// Buffer description.
+/// Description used for buffer creation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferDesc<'a> {
     /// Buffer size.
@@ -42,7 +84,7 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
 }
 
-/// Buffer description with initial contents.
+/// Description used for buffer creation with initial contents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferInitDesc<'a> {
     /// Buffer initial contents.
@@ -58,7 +100,10 @@ pub struct BufferInitDesc<'a> {
     pub name: &'a str,
 }
 
+/// Trait for types that can be used to index a buffer to get a slice of it.
+/// It is implemented for different range types over `usize`.
 pub trait BufferIndex {
+    /// Returns range for given buffer size.
     fn range(self, size: usize) -> Range<usize>;
 }
 
@@ -97,6 +142,8 @@ impl BufferIndex for RangeFull {
     }
 }
 
+/// Slice of a buffer is a reference to a buffer with offset and size.
+/// Mostly found in function arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BufferSlice<'a> {
     pub(crate) buffer: &'a Buffer,
@@ -136,7 +183,7 @@ impl BufferSlice<'_> {
 }
 
 impl Buffer {
-    /// Returns range of the buffer.
+    /// Returns buffer slice with given range.
     #[inline(always)]
     pub fn slice<R>(&self, range: R) -> BufferSlice
     where
@@ -150,7 +197,7 @@ impl Buffer {
         }
     }
 
-    /// Returns range of the buffer.
+    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
     #[inline(always)]
     pub fn split_at(&self, at: usize) -> (BufferSlice, BufferSlice) {
         let size = self.size();
@@ -173,7 +220,7 @@ impl Buffer {
 }
 
 impl<'a> BufferSlice<'a> {
-    /// Returns sub-range of the buffer range.
+    /// Returns buffer slice with given range.
     #[inline(always)]
     pub fn slice<R>(self, range: R) -> BufferSlice<'a>
     where
@@ -187,7 +234,7 @@ impl<'a> BufferSlice<'a> {
         }
     }
 
-    /// Returns range of the buffer.
+    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
     #[inline(always)]
     pub fn split_at(&self, at: usize) -> (BufferSlice<'a>, BufferSlice<'a>) {
         let size = self.size();
@@ -210,6 +257,7 @@ impl<'a> BufferSlice<'a> {
     }
 }
 
+// To accept whole buffer where buffer slice is expected.
 impl<'a> From<&'a Buffer> for BufferSlice<'a> {
     #[inline(always)]
     fn from(buffer: &'a Buffer) -> Self {
@@ -221,7 +269,8 @@ impl<'a> From<&'a Buffer> for BufferSlice<'a> {
     }
 }
 
-/// Trait for taking slice from the buffer.
+/// Trait to generalize over types that can be converted to buffer slice.
+/// This is a buffer slice itself, a buffer and references.
 pub trait AsBufferSlice {
     fn as_buffer_slice(&self) -> BufferSlice;
 }

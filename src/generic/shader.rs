@@ -9,10 +9,16 @@ use naga::FastHashMap;
 
 use crate::{backend::Library, generic::OutOfMemory};
 
+/// Shader stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderStage {
+    /// Vertex shader stage.
     Vertex,
+
+    /// Fragment shader stage.
     Fragment,
+
+    /// Compute shader stage.
     Compute,
 }
 
@@ -27,19 +33,44 @@ impl fmt::Display for ShaderStage {
 }
 
 bitflags::bitflags! {
+    /// Flags that describe the shader stages.
+    /// 
+    /// Each flag corresponds to one [`ShaderStage`].
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct ShaderStages : u32 {
+        /// Bit for [`Vertex`](ShaderStage::Vertex) stage.
         const VERTEX = 1 << ShaderStage::Vertex as u32;
+        /// Bit for [`Fragment`](ShaderStage::Fragment) stage.
         const FRAGMENT = 1 << ShaderStage::Fragment as u32;
+        /// Bit for [`Compute`](ShaderStage::Compute) stage.
         const COMPUTE = 1 << ShaderStage::Compute as u32;
     }
 }
 
+/// Shader language.
+/// 
+/// Must be specified when loading shader source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderLanguage {
+    /// SPIR-V.
+    /// This is native format for Vulkan.
+    /// Shader source code will be compiled to native format on other backends.
     SpirV,
+
+    /// WGSL (WebGPU Shading Language).
+    /// This is native format for WebGPU.
+    /// Shader source code will be compiled to native format.
     Wgsl,
+
+    /// GLSL (OpenGL Shading Language).
+    /// Shader source code will be compiled to native format.
+    /// 
+    /// Requires specifying shader stage.
     Glsl { stage: ShaderStage },
+
+    /// MSL (Metal Shading Language).
+    /// This is native format for Metal.
+    /// Shader source code will be compiled to native format on other backends.
     Msl,
 }
 
@@ -54,13 +85,20 @@ impl fmt::Display for ShaderLanguage {
     }
 }
 
+/// Describes shader source.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct ShaderSource<'a> {
+    /// Code of the shader.
     pub code: Cow<'a, [u8]>,
+
+    /// Optional filename of the shader.
     pub filename: Option<&'a str>,
+
+    /// Language of the shader code.
     pub language: ShaderLanguage,
 }
 
+/// Convenience macro to include shader source code from a file during compilation.
 #[macro_export]
 macro_rules! include_shader_source {
     ($filename:literal as $lang:expr) => {
@@ -72,11 +110,15 @@ macro_rules! include_shader_source {
     };
 }
 
+/// Input for the library.
+/// Currently only source code is supported.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub enum LibraryInput<'a> {
+    /// Shader source code.
     Source(ShaderSource<'a>),
 }
 
+/// Convenience macro to include shader library input from a source code file during compilation.
 #[macro_export]
 macro_rules! include_library {
     ($filename:literal as $lang:expr) => {
@@ -84,21 +126,33 @@ macro_rules! include_library {
     };
 }
 
+/// Describes shader library.
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct LibraryDesc<'a> {
+    /// Name of the library.
     pub name: &'a str,
+
+    /// Input for the library.
     pub input: LibraryInput<'a>,
 }
 
+/// Shader from the library.
 #[derive(Clone)]
 pub struct Shader<'a> {
+    /// Library that contains the shader.
     pub library: Library,
+
+    /// Shader entry point.
     pub entry: Cow<'a, str>,
 }
 
+/// Error that can occur during library creation.
 #[derive(Debug)]
 pub enum CreateLibraryError {
+    /// Out of memory.
     OutOfMemory,
+
+    /// Shader compilation error.
     CompileError(ShaderCompileError),
 }
 

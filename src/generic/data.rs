@@ -7,24 +7,25 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 
-union TransmuteUnchecked<A: Copy, B: Copy> {
-    a: A,
-    b: B,
-}
 
 /// Transmutes type without compile-time check of sizes.
 ///
 /// # Safety
 ///
-/// Sizes must have equal size.
+/// Sizes must have equal.
 /// Current bits of argument must be valid for type `B`.
 #[inline(always)]
-unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {
+unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {    
+    union TransmuteUnchecked<A: Copy, B: Copy> {
+        a: A,
+        b: B,
+    }
+
     debug_assert_eq!(size_of::<A>(), size_of::<B>());
     unsafe { TransmuteUnchecked { a }.b }
 }
 
-/// Type represetable as a POD type with GPU compatible layout
+/// Type representable as a POD type with GPU compatible layout
 pub trait DeviceRepr: Sized + 'static {
     /// A POD type that can represent same data with layout compatible with shaders.
     /// It is `Self` or another type with same data and manual padding.
@@ -38,31 +39,40 @@ pub trait DeviceRepr: Sized + 'static {
     fn as_repr(&self) -> Self::Repr;
 
     #[inline(always)]
+    #[cold]
     fn make_array_repr(&self) -> Self::ArrayRepr {
         unimplemented!("<{} as DeviceRepr>::make_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`", type_name::<Self>());
     }
 
+    /// Construct a `Self::ArrayRepr` from `&self`.
     #[inline(always)]
     fn as_array_repr(&self) -> Self::ArrayRepr {
         if size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() {
-            // Safety: transmutting between POD types with same size is safe.
+            // Safety: transmuting between POD types with same size is safe.
             unsafe { transmute_unchecked(self.as_repr()) }
         }
         self.make_array_repr()
     }
 
+    /// Return byte representation of `Repr`.
     #[inline(always)]
     fn as_bytes(repr: &Self::Repr) -> &[u8] {
         bytemuck::bytes_of(repr)
     }
 
+    /// Return byte representation of `ArrayRepr` slice.
     #[inline(always)]
     fn as_array_bytes(repr: &[Self::ArrayRepr]) -> &[u8] {
         bytemuck::cast_slice(repr)
     }
 
+    /// Alignment of repr type.
     const ALIGN: usize;
+
+    /// Size of repr type.
     const SIZE: usize = size_of::<Self::Repr>();
+
+    /// Size of array repr type.
     const ARRAY_SIZE: usize = size_of::<Self::ArrayRepr>();
 }
 
@@ -149,11 +159,15 @@ impl ScalarType {
     }
 }
 
+/// Scalar types compatible with shaders primitives.
 pub trait Scalar: crate::private::Sealed + Sized + Debug + 'static {
+    /// Type of the scalar.
     const TYPE: ScalarType;
 
+    /// Scalar representation.
     type ScalarRepr: bytemuck::Pod + Debug;
 
+    /// Convert to scalar representation.
     #[inline(always)]
     fn as_scalar_repr(&self) -> Self::ScalarRepr {
         assert_eq!(align_of::<Self>(), align_of::<Self::ScalarRepr>());
@@ -269,10 +283,16 @@ pub enum VectorSize {
     Four = 4,
 }
 
+/// Device data types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DataType {
+    /// Scalar type of the data type.
     pub scalar: ScalarType,
+
+    /// Number of columns in the data type.
     pub columns: VectorSize,
+
+    /// Number of rows in the data type.
     pub rows: VectorSize,
 }
 
@@ -294,6 +314,8 @@ where
     };
 }
 
+/// Vector data type.
+/// Element type should be `Scalar`, then it can be used as device data type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub struct vec<T, const N: usize>(pub [T; N]);
@@ -325,6 +347,8 @@ where
     }
 }
 
+/// Matrix data type.
+/// Element type should be `Scalar`, then it can be used as device data type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub struct mat<T, const N: usize, const M: usize>(pub [vec<T, M>; N]);
@@ -356,121 +380,151 @@ where
     }
 }
 
+/// Vector type of two elements.
 #[allow(non_camel_case_types)]
 pub type vec2<T = f32> = vec<T, 2>;
 
+/// Construct a `vec2`.
 #[inline(always)]
 pub fn vec2<T>(x: T, y: T) -> vec2<T> {
     vec([x, y])
 }
 
+/// Vector type of three elements.
 #[allow(non_camel_case_types)]
 pub type vec3<T = f32> = vec<T, 3>;
 
+/// Construct a `vec3`.
 #[inline(always)]
 pub fn vec3<T>(x: T, y: T, z: T) -> vec3<T> {
     vec([x, y, z])
 }
 
+/// Vector type of four elements.
 #[allow(non_camel_case_types)]
 pub type vec4<T = f32> = vec<T, 4>;
 
+/// Construct a `vec4`.
 #[inline(always)]
 pub fn vec4<T>(x: T, y: T, z: T, w: T) -> vec4<T> {
     vec([x, y, z, w])
 }
 
+/// Square matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type mat2<T = f32> = mat<T, 2, 2>;
 
+/// Construct a `mat2`.
 #[inline(always)]
 pub fn mat2<T>(x: vec2<T>, y: vec2<T>) -> mat2<T> {
     mat([x, y])
 }
 
+/// Square matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type mat3<T = f32> = mat<T, 3, 3>;
 
+/// Construct a `mat3`.
 #[inline(always)]
 pub fn mat3<T>(x: vec3<T>, y: vec3<T>, z: vec3<T>) -> mat3<T> {
     mat([x, y, z])
 }
 
+/// Square matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type mat4<T = f32> = mat<T, 4, 4>;
 
+/// Construct a `mat4`.
 #[inline(always)]
 pub fn mat4<T>(x: vec4<T>, y: vec4<T>, z: vec4<T>, w: vec4<T>) -> mat4<T> {
     mat([x, y, z, w])
 }
 
+/// Square matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type mat2x2<T = f32> = mat<T, 2, 2>;
 
+/// Construct a `mat2x2`.
 #[inline(always)]
 pub fn mat2x2<T>(x: vec2<T>, y: vec2<T>) -> mat2x2<T> {
     mat([x, y])
 }
 
+/// Matrix type of two columns and three rows.
 #[allow(non_camel_case_types)]
 pub type mat2x3<T = f32> = mat<T, 2, 3>;
 
+/// Construct a `mat2x3`.
 #[inline(always)]
 pub fn mat2x3<T>(x: vec3<T>, y: vec3<T>) -> mat2x3<T> {
     mat([x, y])
 }
 
+/// Matrix type of two columns and four rows.
 #[allow(non_camel_case_types)]
 pub type mat2x4<T = f32> = mat<T, 2, 4>;
 
+/// Construct a `mat2x4`.
 #[inline(always)]
 pub fn mat2x4<T>(x: vec4<T>, y: vec4<T>) -> mat2x4<T> {
     mat([x, y])
 }
 
+/// Matrix type of three columns and two rows.
 #[allow(non_camel_case_types)]
 pub type mat3x2<T = f32> = mat<T, 3, 2>;
 
+/// Construct a `mat3x2`.
 #[inline(always)]
 pub fn mat3x2<T>(x: vec2<T>, y: vec2<T>, z: vec2<T>) -> mat3x2<T> {
     mat([x, y, z])
 }
 
+/// Square matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type mat3x3<T = f32> = mat<T, 3, 3>;
 
+/// Construct a `mat3x3`.
 #[inline(always)]
 pub fn mat3x3<T>(x: vec3<T>, y: vec3<T>, z: vec3<T>) -> mat3x3<T> {
     mat([x, y, z])
 }
 
+/// Matrix type of three columns and four rows.
 #[allow(non_camel_case_types)]
 pub type mat3x4<T = f32> = mat<T, 3, 4>;
 
+/// Construct a `mat3x4`.
 #[inline(always)]
 pub fn mat3x4<T>(x: vec4<T>, y: vec4<T>, z: vec4<T>) -> mat3x4<T> {
     mat([x, y, z])
 }
 
+/// Matrix type of four columns and two rows.
 #[allow(non_camel_case_types)]
 pub type mat4x2<T = f32> = mat<T, 4, 2>;
 
+/// Construct a `mat4x2`.
 #[inline(always)]
 pub fn mat4x2<T>(x: vec2<T>, y: vec2<T>, z: vec2<T>, w: vec2<T>) -> mat4x2<T> {
     mat([x, y, z, w])
 }
 
+/// Matrix type of four columns and three rows.
 #[allow(non_camel_case_types)]
 pub type mat4x3<T = f32> = mat<T, 4, 3>;
 
+/// Construct a `mat4x3`.
 #[inline(always)]
 pub fn mat4x3<T>(x: vec3<T>, y: vec3<T>, z: vec3<T>, w: vec3<T>) -> mat4x3<T> {
     mat([x, y, z, w])
 }
 
+/// Square matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type mat4x4<T = f32> = mat<T, 4, 4>;
 
+/// Construct a `mat4x4`.
 #[inline(always)]
 pub fn mat4x4<T>(x: vec4<T>, y: vec4<T>, z: vec4<T>, w: vec4<T>) -> mat4x4<T> {
     mat([x, y, z, w])
@@ -648,182 +702,242 @@ where
     const ALIGN: usize = <vec<T, M> as DeviceRepr>::ALIGN;
 }
 
+/// Boolean vector type of two elements.
 #[allow(non_camel_case_types)]
 pub type bvec2 = vec2<bool>;
 
+/// Boolean vector type of three elements.
 #[allow(non_camel_case_types)]
 pub type bvec3 = vec3<bool>;
 
+/// Boolean vector type of four elements.
 #[allow(non_camel_case_types)]
 pub type bvec4 = vec4<bool>;
 
+/// Square boolean matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type bmat2 = mat2<bool>;
 
+/// Square boolean matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type bmat3 = mat3<bool>;
 
+/// Square boolean matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type bmat4 = mat4<bool>;
 
+/// Square boolean matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type bmat2x2 = mat2x2<bool>;
 
+/// Boolean matrix type of two columns and three rows.
 #[allow(non_camel_case_types)]
 pub type bmat2x3 = mat2x3<bool>;
 
+/// Boolean matrix type of two columns and four rows.
 #[allow(non_camel_case_types)]
 pub type bmat2x4 = mat2x4<bool>;
 
+/// Boolean matrix type of three columns and two rows.
 #[allow(non_camel_case_types)]
 pub type bmat3x2 = mat3x2<bool>;
 
+/// Square boolean matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type bmat3x3 = mat3x3<bool>;
 
+/// Boolean matrix type of three columns and four rows.
 #[allow(non_camel_case_types)]
 pub type bmat3x4 = mat3x4<bool>;
 
+/// Boolean matrix type of four columns and two rows.
 #[allow(non_camel_case_types)]
 pub type bmat4x2 = mat4x2<bool>;
 
+/// Boolean matrix type of four columns and three rows.
 #[allow(non_camel_case_types)]
 pub type bmat4x3 = mat4x3<bool>;
 
+/// Square boolean matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type bmat4x4 = mat4x4<bool>;
 
+/// Signed integer vector type of two elements.
 #[allow(non_camel_case_types)]
 pub type ivec2 = vec2<i32>;
 
+/// Signed integer vector type of three elements.
 #[allow(non_camel_case_types)]
 pub type ivec3 = vec3<i32>;
 
+/// Signed integer vector type of four elements.
 #[allow(non_camel_case_types)]
 pub type ivec4 = vec4<i32>;
 
+/// Square signed integer matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type imat2 = mat2<i32>;
 
+/// Square signed integer matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type imat3 = mat3<i32>;
 
+/// Square signed integer matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type imat4 = mat4<i32>;
 
+/// Square signed integer matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type imat2x2 = mat2x2<i32>;
 
+/// Signed integer matrix type of two columns and three rows.
 #[allow(non_camel_case_types)]
 pub type imat2x3 = mat2x3<i32>;
 
+/// Signed integer matrix type of two columns and four rows.
 #[allow(non_camel_case_types)]
 pub type imat2x4 = mat2x4<i32>;
 
+/// Signed integer matrix type of three columns and two rows.
 #[allow(non_camel_case_types)]
 pub type imat3x2 = mat3x2<i32>;
 
+/// Square signed integer matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type imat3x3 = mat3x3<i32>;
 
+/// Signed integer matrix type of three columns and four rows.
 #[allow(non_camel_case_types)]
 pub type imat3x4 = mat3x4<i32>;
 
+/// Signed integer matrix type of four columns and two rows.
 #[allow(non_camel_case_types)]
 pub type imat4x2 = mat4x2<i32>;
 
+/// Signed integer matrix type of four columns and three rows.
 #[allow(non_camel_case_types)]
 pub type imat4x3 = mat4x3<i32>;
 
+/// Square signed integer matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type imat4x4 = mat4x4<i32>;
 
+/// Unsigned integer vector type of two elements.
 #[allow(non_camel_case_types)]
 pub type uvec2 = vec2<u32>;
 
+/// Unsigned integer vector type of three elements.
 #[allow(non_camel_case_types)]
 pub type uvec3 = vec3<u32>;
 
+/// Unsigned integer vector type of four elements.
 #[allow(non_camel_case_types)]
 pub type uvec4 = vec4<u32>;
 
+/// Square unsigned integer matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type umat2 = mat2<u32>;
 
+/// Square unsigned integer matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type umat3 = mat3<u32>;
 
+/// Square unsigned integer matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type umat4 = mat4<u32>;
 
+/// Square unsigned integer matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type umat2x2 = mat2x2<u32>;
 
+/// Unsigned integer matrix type of two columns and three rows.
 #[allow(non_camel_case_types)]
 pub type umat2x3 = mat2x3<u32>;
 
+/// Unsigned integer matrix type of two columns and four rows.
 #[allow(non_camel_case_types)]
 pub type umat2x4 = mat2x4<u32>;
 
+/// Unsigned integer matrix type of three columns and two rows.
 #[allow(non_camel_case_types)]
 pub type umat3x2 = mat3x2<u32>;
 
+/// Square unsigned integer matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type umat3x3 = mat3x3<u32>;
 
+/// Unsigned integer matrix type of three columns and four rows.
 #[allow(non_camel_case_types)]
 pub type umat3x4 = mat3x4<u32>;
 
+/// Unsigned integer matrix type of four columns and two rows.
 #[allow(non_camel_case_types)]
 pub type umat4x2 = mat4x2<u32>;
 
+/// Unsigned integer matrix type of four columns and three rows.
 #[allow(non_camel_case_types)]
 pub type umat4x3 = mat4x3<u32>;
 
+/// Square unsigned integer matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type umat4x4 = mat4x4<u32>;
 
+/// Double precision floating point vector type of two elements.
 #[allow(non_camel_case_types)]
 pub type dvec2 = vec2<f64>;
 
+/// Double precision floating point vector type of three elements.
 #[allow(non_camel_case_types)]
 pub type dvec3 = vec3<f64>;
 
+/// Double precision floating point vector type of four elements.
 #[allow(non_camel_case_types)]
 pub type dvec4 = vec4<f64>;
 
+/// Square double precision floating point matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type dmat2 = mat2<f64>;
 
+/// Square double precision floating point matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type dmat3 = mat3<f64>;
 
+/// Square double precision floating point matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type dmat4 = mat4<f64>;
 
+/// Square double precision floating point matrix type of two columns and two rows.
 #[allow(non_camel_case_types)]
 pub type dmat2x2 = mat2x2<f64>;
 
+/// Double precision floating point matrix type of two columns and three rows.
 #[allow(non_camel_case_types)]
 pub type dmat2x3 = mat2x3<f64>;
 
+/// Double precision floating point matrix type of two columns and four rows.
 #[allow(non_camel_case_types)]
 pub type dmat2x4 = mat2x4<f64>;
 
+/// Double precision floating point matrix type of three columns and two rows.
 #[allow(non_camel_case_types)]
 pub type dmat3x2 = mat3x2<f64>;
 
+/// Square double precision floating point matrix type of three columns and three rows.
 #[allow(non_camel_case_types)]
 pub type dmat3x3 = mat3x3<f64>;
 
+/// Double precision floating point matrix type of three columns and four rows.
 #[allow(non_camel_case_types)]
 pub type dmat3x4 = mat3x4<f64>;
 
+/// Double precision floating point matrix type of four columns and two rows.
 #[allow(non_camel_case_types)]
 pub type dmat4x2 = mat4x2<f64>;
 
+/// Double precision floating point matrix type of four columns and three rows.
 #[allow(non_camel_case_types)]
 pub type dmat4x3 = mat4x3<f64>;
 
+/// Square double precision floating point matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type dmat4x4 = mat4x4<f64>;

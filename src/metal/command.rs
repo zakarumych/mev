@@ -263,8 +263,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         // If copying entire slices, use optimized method
         if src_offset == Offset3::ZERO
             && dst_offset == Offset3::ZERO
-            && src.dimensions().into_3d() == extent
-            && dst.dimensions().into_3d() == extent
+            && src.extent().into_3d() == extent
+            && dst.extent().into_3d() == extent
         {
             unsafe {
                 let () = msg_send![self.encoder,

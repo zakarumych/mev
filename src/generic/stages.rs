@@ -30,6 +30,9 @@ pub enum PipelineStage {
 }
 
 bitflags::bitflags! {
+    /// Pipeline stages flags.
+    /// 
+    /// Each flag corresponds to one [`PipelineStage`].
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
     pub struct PipelineStages: u32 {
         /// Bit for [`DrawIndirect`](PipelineStage::DrawIndirect) stage.
