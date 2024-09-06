@@ -122,6 +122,8 @@ impl TriangleApp {
         self.queue.sync_frame(&mut frame, mev::PipelineStages::FRAGMENT_SHADER);
         encoder.present(frame, mev::PipelineStages::FRAGMENT_SHADER);
         let cbuf = encoder.finish().unwrap();
+
+        self.window.as_ref().unwrap().pre_present_notify();
         self.queue.submit([cbuf], true).unwrap();
     
     }
