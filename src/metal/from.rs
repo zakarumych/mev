@@ -456,8 +456,8 @@ impl MetalFrom<BlendFactor> for metal::MTLBlendFactor {
             BlendFactor::DstAlpha => metal::MTLBlendFactor::DestinationAlpha,
             BlendFactor::OneMinusDstAlpha => metal::MTLBlendFactor::OneMinusDestinationAlpha,
             BlendFactor::SrcAlphaSaturated => metal::MTLBlendFactor::SourceAlphaSaturated,
-            BlendFactor::BlendColor => metal::MTLBlendFactor::BlendColor,
-            BlendFactor::OneMinusBlendColor => metal::MTLBlendFactor::OneMinusBlendColor,
+            // BlendFactor::BlendColor => metal::MTLBlendFactor::BlendColor,
+            // BlendFactor::OneMinusBlendColor => metal::MTLBlendFactor::OneMinusBlendColor,
         }
     }
 }

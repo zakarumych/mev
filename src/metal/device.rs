@@ -326,7 +326,7 @@ impl crate::traits::Device for Device {
     fn new_image(&self, desc: ImageDesc) -> Result<Image, OutOfMemory> {
         let mdesc = metal::TextureDescriptor::new();
         mdesc.set_pixel_format(desc.format.try_into_metal().unwrap());
-        match desc.dimensions {
+        match desc.extent {
             ImageExtent::D1(extent) => {
                 mdesc.set_texture_type(metal::MTLTextureType::D1);
                 mdesc.set_width(extent.width() as _);
