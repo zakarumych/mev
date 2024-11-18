@@ -227,6 +227,9 @@ pub struct Queue {
     wait_semaphores: Vec<vk::Semaphore>,
     wait_stages: Vec<vk::PipelineStageFlags>,
 
+    // Signals to add into next submission
+    signal_semaphores: Vec<vk::Semaphore>,
+
     pools: VecDeque<Pool>,
     free_refs: Vec<Refs>,
     this_epoch: Option<Epoch>,
@@ -282,6 +285,7 @@ impl Queue {
             family,
             wait_semaphores: Vec::new(),
             wait_stages: Vec::new(),
+            signal_semaphores: Vec::new(),
             pools: VecDeque::new(),
             free_refs: Vec::new(),
             this_epoch: None,
@@ -449,12 +453,12 @@ impl crate::traits::Queue for Queue {
         debug_assert!(self.command_buffer_submit.is_empty());
         debug_assert!(self.command_buffers.is_empty());
 
+        let signal_semaphores_len = self.signal_semaphores.len();
         let present_semaphores_len = self.present_semaphores.len();
         let present_swapchains_len = self.present_swapchains.len();
         let present_indices_len = self.present_indices.len();
 
         let device = self.device.ash();
-        let mut do_present = false;
 
         let epoch = match Self::get_epoch(
             &mut self.this_epoch,
@@ -477,10 +481,14 @@ impl crate::traits::Queue for Queue {
             self.command_buffer_submit.push(cbuf.handle);
 
             for frame in &cbuf.present {
-                do_present = true;
-                self.present_semaphores.push(frame.present);
-                self.present_swapchains.push(frame.swapchain);
-                self.present_indices.push(frame.idx);
+                if frame.is_real() {
+                    self.signal_semaphores.push(frame.present);
+                    self.present_semaphores.push(frame.present);
+                    self.present_swapchains.push(frame.swapchain);
+                    self.present_indices.push(frame.idx);
+                } else {
+                    self.signal_semaphores.push(frame.present);
+                }
             }
 
             self.command_buffers.push(cbuf);
@@ -498,7 +506,7 @@ impl crate::traits::Queue for Queue {
                 &[vk::SubmitInfo::default()
                     .wait_semaphores(&self.wait_semaphores)
                     .wait_dst_stage_mask(&self.wait_stages)
-                    .signal_semaphores(&self.present_semaphores)
+                    .signal_semaphores(&self.signal_semaphores)
                     .command_buffers(&self.command_buffer_submit)],
                 fence,
             )
@@ -509,6 +517,7 @@ impl crate::traits::Queue for Queue {
         match result {
             Ok(()) => {}
             Err(err) => {
+                self.signal_semaphores.truncate(signal_semaphores_len);
                 self.present_semaphores.truncate(present_semaphores_len);
                 self.present_swapchains.truncate(present_swapchains_len);
                 self.present_indices.truncate(present_indices_len);
@@ -519,6 +528,7 @@ impl crate::traits::Queue for Queue {
                         handle_host_oom()
                     }
                     vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                        // Attempt to reclaim some resources.
                         for mut cbuf in self.command_buffers.drain(..) {
                             cbuf.refs.clear();
                             self.free_refs.push(cbuf.refs);
@@ -530,6 +540,7 @@ impl crate::traits::Queue for Queue {
                         return Err(DeviceError::OutOfMemory);
                     }
                     vk::Result::ERROR_DEVICE_LOST => {
+                        // Nothing can be done now.
                         self.command_buffers.clear();
                         return Err(DeviceError::DeviceLost);
                     }
@@ -542,8 +553,10 @@ impl crate::traits::Queue for Queue {
             epoch.refs.push(cbuf.refs);
             epoch.cbufs.push((cbuf.handle, cbuf.pool));
         }
+
         self.wait_semaphores.clear();
         self.wait_stages.clear();
+        self.signal_semaphores.clear();
 
         if check_point {
             unsafe {
@@ -551,13 +564,15 @@ impl crate::traits::Queue for Queue {
             }
         }
 
-        if do_present {
+        if !self.present_swapchains.is_empty() {
+            debug_assert_eq!(self.present_swapchains.len(), self.present_indices.len());
+
             let result = unsafe {
                 self.device.swapchain().queue_present(
                     self.handle,
                     &vk::PresentInfoKHR::default()
-                        .wait_semaphores(&self.present_semaphores)
                         .swapchains(&self.present_swapchains)
+                        .wait_semaphores(&self.present_semaphores)
                         .image_indices(&self.present_indices),
                 )
             };
@@ -604,8 +619,12 @@ impl crate::traits::Queue for Queue {
     }
 
     fn sync_frame(&mut self, frame: &mut Frame, before: PipelineStages) {
-        assert!(!frame.synced);
-        self.add_wait(frame.acquire, before);
+        assert!(!frame.synced, "Frame must be synced exactly once");
+
+        if frame.acquire != vk::Semaphore::null() {
+            self.add_wait(frame.acquire, before);
+        }
+
         frame.synced = true;
     }
 }

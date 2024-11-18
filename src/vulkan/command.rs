@@ -77,7 +77,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
                     .src_access_mask(access_for_stages(after))
                     .dst_access_mask(ash::vk::AccessFlags::empty())
                     .old_layout(ash::vk::ImageLayout::GENERAL)
-                    .new_layout(ash::vk::ImageLayout::PRESENT_SRC_KHR)
+                    .new_layout(frame.present_layout())
                     .image(frame.image().handle())
                     .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -306,7 +306,6 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
-
     #[cfg_attr(feature = "inline-more", inline(always))]
     fn with_pipeline(&mut self, pipeline: &ComputePipeline) {
         unsafe {
