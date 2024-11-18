@@ -6,6 +6,7 @@ use std::{
 };
 
 use ash::vk;
+use smallvec::SmallVec;
 
 use crate::{
     generic::{Extent2, ImageExtent, OutOfMemory, PipelineStages, SurfaceError, Swizzle, ViewDesc},
@@ -19,10 +20,16 @@ use super::{
 
 const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
 
+struct SwachainFences {
+    array: SmallVec<[vk::Fence; 4]>,
+    next: usize,
+}
+
 struct Swapchain {
     handle: vk::SwapchainKHR,
-    images: Vec<(Image, [vk::Semaphore; 2])>,
+    images: SmallVec<[(Image, [vk::Semaphore; 2]); 4]>,
     next: vk::Semaphore,
+    fences: Option<SwachainFences>,
 }
 
 struct FakeSwapchain {
@@ -88,6 +95,14 @@ impl Drop for Surface {
 
                 unsafe {
                     device.destroy_semaphore(swapchain.next, None);
+                }
+
+                if let Some(fences) = swapchain.fences {
+                    for fence in fences.array {
+                        unsafe {
+                            device.destroy_fence(fence, None);
+                        }
+                    }
                 }
 
                 unsafe {
@@ -276,7 +291,7 @@ impl Surface {
         let pixel_format = self.preferred_format.format.try_ash_into().unwrap();
         let usage = self.preferred_usage.ash_into();
 
-        let mut swapchain_images = Vec::new();
+        let mut swapchain_images = SmallVec::new();
         for &handle in &images {
             let (view, view_idx) = self
                 .device
@@ -317,6 +332,10 @@ impl Surface {
             handle,
             images: swapchain_images,
             next,
+            fences: self.device.swapchain_maintenance1().is_some().then(|| SwachainFences {
+                array: SmallVec::new(),
+                next: 0,
+            }),
         }));
         Ok(())
     }
@@ -350,13 +369,33 @@ impl Surface {
         while let Some(mut swapchain) = self.retired.pop_front() {
             match swapchain {
                 MaybeFakeSwapchain::Real(swapchain) => {
-                    let can_destroy = swapchain.images.iter().all(|(image, _)| image.detached());
-                    if can_destroy {
-                        if do_wait {
-                            self.device.wait_idle()?;
-                            do_wait = false;
-                        }
+                    let images_detached = swapchain.images.iter().all(|(image, _)| image.detached());
+                    let mut can_destroy = false;
 
+                    if images_detached {
+                        if do_wait {
+                            match swapchain.fences {
+                                None => {
+                                    self.device.wait_idle()?;
+                                    do_wait = false;
+                                    can_destroy = true;
+                                }
+                                Some(ref fences) => {
+                                    let mut all_signaled = true;
+                                    for &fence in &fences.array {
+                                        all_signaled &= self.device.get_fence_status(fence)?;
+                                    }
+                                    if all_signaled {
+                                        can_destroy = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            can_destroy = true;
+                        }
+                    }
+
+                    if can_destroy {
                         for (_, [acquire, present]) in swapchain.images {
                             unsafe {
                                 device.destroy_semaphore(acquire, None);
@@ -366,6 +405,14 @@ impl Surface {
 
                         unsafe {
                             device.destroy_semaphore(swapchain.next, None);
+                        }
+
+                        if let Some(fences) = swapchain.fences {
+                            for fence in fences.array {
+                                unsafe {
+                                    device.destroy_fence(fence, None);
+                                }
+                            }
                         }
 
                         unsafe {
@@ -457,6 +504,28 @@ impl crate::traits::Surface for Surface {
                     let (ref image, [ref mut acquire, present]) = swapchain.images[idx as usize];
                     std::mem::swap(&mut swapchain.next, acquire);
 
+                    let fence = match &mut swapchain.fences {
+                        None => vk::Fence::null(),
+                        Some(fences) if fences.array.is_empty() => {
+                            let fence = self.device.new_fence()?;
+                            fences.array.push(fence);
+                            fences.next = 0;
+                            fence
+                        }
+                        Some(fences) => {
+                            let fence = fences.array[fences.next];
+                            if self.device.get_fence_status(fence)? {
+                                self.device.reset_fences(&[fence])?;
+                                fences.next = (fences.next + 1) % fences.array.len();
+                                fence
+                            } else {
+                                let fence = self.device.new_fence()?;
+                                fences.array.insert(fences.next, fence);
+                                fence
+                            }
+                        }
+                    };
+
                     return Ok(Frame {
                         swapchain: swapchain.handle,
                         image: image.clone(),
@@ -464,6 +533,7 @@ impl crate::traits::Surface for Surface {
                         acquire: *acquire,
                         present,
                         synced: false,
+                        fence,
                     });
                 }
                 MaybeFakeSwapchain::Fake(fake) => {
@@ -482,6 +552,7 @@ impl crate::traits::Surface for Surface {
                         },
                         present: fake.semaphore,
                         synced: false,
+                        fence: vk::Fence::null(),
                     };
                     fake.frame_idx += 1;
                     return Ok(frame);
@@ -498,6 +569,7 @@ pub struct Frame {
     pub(super) acquire: vk::Semaphore,
     pub(super) present: vk::Semaphore,
     pub(super) synced: bool,
+    pub(super) fence: vk::Fence,
 }
 
 impl Frame {

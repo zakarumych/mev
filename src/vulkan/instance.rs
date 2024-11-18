@@ -9,6 +9,7 @@ use std::{
 
 use ash::*;
 use hashbrown::HashMap;
+use khr::get_physical_device_properties2;
 
 use crate::generic::{
     Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features,
@@ -26,12 +27,28 @@ macro_rules! extension_name {
     };
 }
 
-pub struct Instance {
+pub(super) struct InstanceGuard {
     entry: ash::Entry,
+    instance: ash::Instance,
+}
+
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance.destroy_instance(None);
+        }
+    }
+}
+
+pub struct Instance {
+    guard: Arc<InstanceGuard>,
     version: Version,
     instance: ash::Instance,
     devices: Vec<vk::PhysicalDevice>,
     capabilities: Capabilities,
+
+    // # Extensions
+    get_physical_device_properties2: Option<ash::khr::get_physical_device_properties2::Instance>,
 
     #[cfg(any(debug_assertions, feature = "debug"))]
     debug_utils: Option<ash::ext::debug_utils::Instance>,
@@ -159,12 +176,12 @@ impl Instance {
         }
 
         #[cfg(any(debug_assertions, feature = "debug"))]
-        let mut debug_utils = false;
+        let mut has_debug_utils = false;
 
         #[cfg(any(debug_assertions, feature = "debug"))]
         if let Some(extension) = unsafe { find_extension(&extensions, "VK_EXT_debug_utils") } {
             enabled_extension_names.push(extension.extension_name.as_ptr());
-            debug_utils = true;
+            has_debug_utils = true;
         }
 
         let mut has_surface = false;
@@ -176,6 +193,10 @@ impl Instance {
                 has_surface = true;
                 enabled_extension_names.push(surface_extension.extension_name.as_ptr());
                 enabled_extension_names.push(platform_extension.extension_name.as_ptr());
+
+                if let Some(surface_maintenance1) = unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") } {
+                    enabled_extension_names.push(surface_maintenance1.extension_name.as_ptr());
+                }
             }
         }
 
@@ -246,11 +267,14 @@ impl Instance {
             err => unexpected_error(err),
         })?;
 
+        let get_physical_device_properties2 = has_physical_device_properties2
+            .then(|| ash::khr::get_physical_device_properties2::Instance::new(&entry, &instance));
+
         // Init debug utils extension functions
 
         #[cfg(any(debug_assertions, feature = "debug"))]
         let debug_utils =
-            debug_utils.then(|| ash::ext::debug_utils::Instance::new(&entry, &instance));
+            has_debug_utils.then(|| ash::ext::debug_utils::Instance::new(&entry, &instance));
 
         // Init surface extension functions
         let mut surface = None;
@@ -294,7 +318,15 @@ impl Instance {
             let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
 
-            if version >= Version::V1_1 || has_physical_device_properties2 {
+            if version < Version::V1_1 {
+                if get_physical_device_properties2.is_some() {
+                    unsafe {
+                        instance.get_physical_device_features2(device, &mut features);
+                    }
+                } else {
+                    features.features = unsafe { instance.get_physical_device_features(device) };
+                }
+            } else {
                 if version >= Version::V1_1 {
                     features = features.push_next(&mut features11);
                 }
@@ -304,12 +336,9 @@ impl Instance {
                 if version >= Version::V1_3 {
                     features = features.push_next(&mut features13);
                 }
-
                 unsafe {
                     instance.get_physical_device_features2(device, &mut features);
                 }
-            } else {
-                features.features = unsafe { instance.get_physical_device_features(device) };
             }
 
             if version < Version::V1_1 {
@@ -415,13 +444,14 @@ impl Instance {
 
         Ok(Instance {
             version,
-            entry,
-            instance,
+            instance: instance.clone(),
+            guard: Arc::new(InstanceGuard { entry, instance }),
             devices,
             capabilities: Capabilities {
                 devices: device_caps,
             },
 
+            get_physical_device_properties2,
             #[cfg(any(debug_assertions, feature = "debug"))]
             debug_utils,
             surface,
@@ -441,6 +471,18 @@ impl crate::traits::Instance for Instance {
     fn create(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
         let physical_device = self.devices[desc.idx];
         let device_caps = &self.capabilities.devices[desc.idx];
+
+        let result = unsafe {
+            self.instance
+                .enumerate_device_extension_properties(physical_device)
+        };
+
+        let extensions = result.map_err(|err| match err {
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreateError(CreateErrorKind::OutOfMemory),
+            vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("No layer specified"),
+            err => unexpected_error(err),
+        })?;
 
         // Collect queue create infos
         // Pre-allocate queue priorities array of enough size
@@ -538,8 +580,16 @@ impl crate::traits::Instance for Instance {
 
         enabled_extension_names.push(extension_name!("VK_KHR_push_descriptor"));
 
+        let mut has_swapchain_maintenance1 = false;
         if desc.features.contains(Features::SURFACE) {
             enabled_extension_names.push(extension_name!("VK_KHR_swapchain"));
+
+            if let Some(extension) =
+                unsafe { find_extension(&extensions, "VK_EXT_swapchain_maintenance1") }
+            {
+                has_swapchain_maintenance1 = true;
+                enabled_extension_names.push(extension.extension_name.as_ptr());
+            }
         }
 
         let mut info = vk::DeviceCreateInfo::default()
@@ -575,6 +625,9 @@ impl crate::traits::Instance for Instance {
             err => unexpected_error(err),
         })?;
 
+        let swapchain_maintenance1 = has_swapchain_maintenance1
+            .then(|| ash::ext::swapchain_maintenance1::Device::new(&self.instance, &device));
+
         let swapchain = desc
             .features
             .contains(Features::SURFACE)
@@ -592,8 +645,8 @@ impl crate::traits::Instance for Instance {
             .take(desc.queues.len())
             .collect::<Vec<_>>();
         let device = Device::new(
+            self.guard.clone(),
             self.version,
-            self.entry.clone(),
             self.instance.clone(),
             physical_device,
             device,
@@ -604,12 +657,13 @@ impl crate::traits::Instance for Instance {
             desc.features,
             properties,
             allocator,
+            epochs.clone(),
             push_descriptor,
             self.surface.clone(),
-            swapchain,
-            epochs.clone(),
             #[cfg(target_os = "windows")]
             self.win32_surface.clone(),
+            swapchain,
+            swapchain_maintenance1,
             #[cfg(any(debug_assertions, feature = "debug"))]
             debug_utils,
         );

@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, fmt, ops::Deref, sync::Arc};
 
-use ash::{prelude::VkResult, vk};
+use ash::{ext::swapchain_maintenance1, prelude::VkResult, vk};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
@@ -14,6 +14,9 @@ use super::{
 /// Maximum number of pending epochs to keep in queue.
 /// Queue will wait for earliest epoch to be complete and reuse it
 /// when number of epochs exceeds this limit.
+/// 
+/// The number is chosen to minimize waiting (ideally epoch would be already complete when it's recycled)
+/// and to minimize memory usage (epoch contains resources that are not released until it's complete).
 const MAX_EPOCHS: usize = 3;
 
 /// Maximum number of command pools to keep in queue.
@@ -102,7 +105,7 @@ struct Epoch {
     fence: vk::Fence,
     refs: Vec<Refs>,
 
-    /// Contains owning commpand pool handle for each command buffer in the epoch.
+    /// Contains owning command pool handle for each command buffer in the epoch.
     cbufs: Vec<(vk::CommandBuffer, vk::CommandPool)>,
 }
 
@@ -209,7 +212,7 @@ impl PendingEpochs {
     }
 
     /// Releases all resources but keeps the epochs.
-    pub fn device_idle(&self) {
+    pub fn queue_is_idle(&self) {
         let mut array = self.array.lock();
         for epoch in array.iter_mut() {
             epoch.refs.clear();
@@ -218,29 +221,53 @@ impl PendingEpochs {
 }
 
 pub struct Queue {
+    /// Device associated with the queue.
     device: Device,
+
+    /// Vulkan queue handle.
     handle: vk::Queue,
+
+    /// Queue family index.
     family: u32,
+
+    /// Queue flags.
     flags: QueueFlags,
+
+    /// Command pools to allocate command buffers from.
+    pools: VecDeque<Pool>,
+
+    /// Free refs instances to reuse.
+    /// Refs from recycled epochs are added here.
+    free_refs: Vec<Refs>,
 
     // Waits to add into next submission
     wait_semaphores: Vec<vk::Semaphore>,
+
+    // Stages to wait for.
     wait_stages: Vec<vk::PipelineStageFlags>,
 
     // Signals to add into next submission
     signal_semaphores: Vec<vk::Semaphore>,
 
-    pools: VecDeque<Pool>,
-    free_refs: Vec<Refs>,
+    /// Current epoch that is being filled with resources from command buffers.
     this_epoch: Option<Epoch>,
+
+    /// Pending epochs that are waiting for completion.
+    /// Epochs might be recycled when associated fence is signaled.
+    /// Or if Device::wait_idle or Queue::wait_idle wait is called.
     pending_epochs: Arc<PendingEpochs>,
 
+    /// Temporary array for command buffers.
     command_buffers: Vec<CommandBuffer>,
 
+    /// Temporary array for command buffers to submit
     command_buffer_submit: Vec<vk::CommandBuffer>,
+
+    // Present resources
     present_semaphores: Vec<vk::Semaphore>,
     present_swapchains: Vec<vk::SwapchainKHR>,
     present_indices: Vec<u32>,
+    present_fences: Vec<vk::Fence>,
 }
 
 impl Drop for Queue {
@@ -296,6 +323,7 @@ impl Queue {
             present_semaphores: Vec::new(),
             present_swapchains: Vec::new(),
             present_indices: Vec::new(),
+            present_fences: Vec::new(),
         }
     }
 
@@ -323,7 +351,7 @@ impl Queue {
                 }
                 .map_err(map_oom)?;
 
-                /// Place the pool to the back of the queue where it will be used below.
+                /// Place the pool to the back of the queue where it will be used in `get_pool`.
                 let reset_pool = unsafe { pools.pop_front().unwrap_unchecked() };
                 pools.push_back(reset_pool);
             }
@@ -331,6 +359,7 @@ impl Queue {
         Ok(())
     }
 
+    #[inline]
     fn get_pool<'a>(
         pools: &'a mut VecDeque<Pool>,
         device: &ash::Device,
@@ -339,21 +368,35 @@ impl Queue {
         match pools.back() {
             Some(pool) if !more_pools || pool.allocated == 0 => {}
             _ => {
-                let pool = unsafe {
-                    device.create_command_pool(
-                        &vk::CommandPoolCreateInfo::default()
-                            .flags(vk::CommandPoolCreateFlags::TRANSIENT),
-                        None,
-                    )
-                }
-                .map_err(map_oom)?;
+                // Create a new pool.
+                // Use non-inline cold function to reduce code size.
+                // As this branch would be taken only few times at the beginning of mev usage.
+                #[cold]
+                #[inline(never)]
+                fn create_pool(
+                    device: &ash::Device,
+                    pools: &mut VecDeque<Pool>,
+                )  -> Result<(), OutOfMemory> {
+                    let pool = unsafe {
+                        device.create_command_pool(
+                            &vk::CommandPoolCreateInfo::default()
+                                .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                            None,
+                        )
+                    }
+                    .map_err(map_oom)?;
 
-                let pool = Pool {
-                    pool,
-                    free_cbufs: Vec::new(),
-                    allocated: 0,
-                };
-                pools.push_back(pool);
+                    let pool = Pool {
+                        pool,
+                        free_cbufs: Vec::new(),
+                        allocated: 0,
+                    };
+                    
+                    pools.push_back(pool);
+                    Ok(())
+                }
+
+                create_pool(device, pools)?;
             }
         }
         Ok(unsafe { pools.back_mut().unwrap_unchecked() })
@@ -378,22 +421,20 @@ impl Queue {
         pending_epochs: &PendingEpochs,
         pools: &mut VecDeque<Pool>,
         free_refs: &mut Vec<Refs>,
-        device: &ash::Device,
+        device: &Device,
     ) -> Result<&'a mut Epoch, DeviceError> {
         if let Some(epoch) = this_epoch {
             return Ok(epoch);
         }
 
-        match pending_epochs.recycle(device, pools)? {
+        match pending_epochs.recycle(device.ash(), pools)? {
             Some(epoch) => {
                 // Always inserts since this_epoch is None.
                 return Ok(this_epoch.get_or_insert(epoch));
             }
             None => {
                 /// Create a new epoch fence.
-                let fence =
-                    unsafe { device.create_fence(&ash::vk::FenceCreateInfo::default(), None) }
-                        .map_err(map_oom)?;
+                let fence = device.new_fence()?;
 
                 // Always inserts since this_epoch is None.
                 Ok(this_epoch.get_or_insert(Epoch {
@@ -429,6 +470,8 @@ impl crate::traits::Queue for Queue {
         self.family
     }
 
+    /// Create a new command encoder associated with this queue.
+    /// The encoder must be submitted to the queue it was created from.
     fn new_command_encoder(&mut self) -> Result<CommandEncoder, OutOfMemory> {
         let device = self.device.ash();
         Self::refresh_pools(&mut self.pools, device)?;
@@ -446,6 +489,10 @@ impl crate::traits::Queue for Queue {
         ))
     }
 
+    /// Submit command buffers to the queue.
+    ///
+    /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
+    /// Checkpoints are required for resource reclamation.
     fn submit<I>(&mut self, command_buffers: I, check_point: bool) -> Result<(), DeviceError>
     where
         I: IntoIterator<Item = CommandBuffer>,
@@ -458,14 +505,12 @@ impl crate::traits::Queue for Queue {
         let present_swapchains_len = self.present_swapchains.len();
         let present_indices_len = self.present_indices.len();
 
-        let device = self.device.ash();
-
         let epoch = match Self::get_epoch(
             &mut self.this_epoch,
             &mut self.pending_epochs,
             &mut self.pools,
             &mut self.free_refs,
-            device,
+            &self.device,
         ) {
             Ok(epoch) => epoch,
             Err(DeviceError::OutOfMemory) => {
@@ -486,6 +531,7 @@ impl crate::traits::Queue for Queue {
                     self.present_semaphores.push(frame.present);
                     self.present_swapchains.push(frame.swapchain);
                     self.present_indices.push(frame.idx);
+                    self.present_fences.push(frame.fence);
                 } else {
                     self.signal_semaphores.push(frame.present);
                 }
@@ -549,6 +595,8 @@ impl crate::traits::Queue for Queue {
             }
         }
 
+        // Drain refs from command buffers and add them to the epoch
+        // when submitting was successful.
         for cbuf in self.command_buffers.drain(..) {
             epoch.refs.push(cbuf.refs);
             epoch.cbufs.push((cbuf.handle, cbuf.pool));
@@ -566,15 +614,24 @@ impl crate::traits::Queue for Queue {
 
         if !self.present_swapchains.is_empty() {
             debug_assert_eq!(self.present_swapchains.len(), self.present_indices.len());
+            debug_assert_eq!(self.present_swapchains.len(), self.present_semaphores.len());
+            debug_assert_eq!(self.present_swapchains.len(), self.present_fences.len());
+
+            let mut present_info = vk::PresentInfoKHR::default()
+                .swapchains(&self.present_swapchains)
+                .wait_semaphores(&self.present_semaphores)
+                .image_indices(&self.present_indices);
+
+            let mut present_fence = vk::SwapchainPresentFenceInfoEXT::default();
+            if let Some(swapchain_maintenance1) = self.device.swapchain_maintenance1() {
+                present_fence = present_fence.fences(&self.present_fences);
+                present_info = present_info.push_next(&mut present_fence);
+            }
 
             let result = unsafe {
-                self.device.swapchain().queue_present(
-                    self.handle,
-                    &vk::PresentInfoKHR::default()
-                        .swapchains(&self.present_swapchains)
-                        .wait_semaphores(&self.present_semaphores)
-                        .image_indices(&self.present_indices),
-                )
+                self.device
+                    .swapchain()
+                    .queue_present(self.handle, &present_info)
             };
 
             match result {
@@ -582,6 +639,7 @@ impl crate::traits::Queue for Queue {
                     self.present_semaphores.clear();
                     self.present_swapchains.clear();
                     self.present_indices.clear();
+                    self.present_fences.clear();
                 }
                 Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                 Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
@@ -597,6 +655,7 @@ impl crate::traits::Queue for Queue {
                     self.present_semaphores.clear();
                     self.present_swapchains.clear();
                     self.present_indices.clear();
+                    self.present_fences.clear();
                 }
                 Err(err) => unexpected_error(err),
             };
@@ -604,6 +663,7 @@ impl crate::traits::Queue for Queue {
         Ok(())
     }
 
+    /// Drop command buffers without submitting them to the queue.
     fn drop_command_buffer<I>(&mut self, command_buffers: I)
     where
         I: IntoIterator<Item = CommandBuffer>,
@@ -618,6 +678,7 @@ impl crate::traits::Queue for Queue {
         }
     }
 
+    /// Synchronize the access to the frame resources.
     fn sync_frame(&mut self, frame: &mut Frame, before: PipelineStages) {
         assert!(!frame.synced, "Frame must be synced exactly once");
 
@@ -626,5 +687,20 @@ impl crate::traits::Queue for Queue {
         }
 
         frame.synced = true;
+    }
+
+    fn wait_idle(&self) -> Result<(), OutOfMemory> {
+        let result = unsafe { self.device.ash().queue_wait_idle(self.handle) };
+
+        let result = result.map_err(|err| match err {
+            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
+            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
+            _ => unexpected_error(err),
+        });
+
+        self.pending_epochs.queue_is_idle();
+
+        result
     }
 }

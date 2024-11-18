@@ -28,6 +28,7 @@ use super::{
     from::{IntoAsh, TryIntoAsh},
     handle_host_oom,
     image::Image,
+    instance::InstanceGuard,
     layout::{
         DescriptorSetLayout, DescriptorSetLayoutDesc, PipelineLayout, PipelineLayoutDesc,
         WeakDescriptorSetLayout, WeakPipelineLayout,
@@ -222,6 +223,7 @@ impl Hash for DescriptorUpdateTemplateEntries {
 }
 
 pub(super) struct DeviceInner {
+    _guard: Arc<InstanceGuard>,
     device: ash::Device,
     instance: ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -243,15 +245,15 @@ pub(super) struct DeviceInner {
 
     allocator: Mutex<gpu_alloc::GpuAllocator<(vk::DeviceMemory, usize)>>,
 
-    _entry: ash::Entry,
-
-    push_descriptor: ash::khr::push_descriptor::Device,
-    surface: Option<ash::khr::surface::Instance>,
-    swapchain: Option<ash::khr::swapchain::Device>,
-
     /// Epochs of all queues.
     /// Cleared when `wait_idle` is called.
     epochs: Vec<Arc<PendingEpochs>>,
+
+    // # Extensions
+    push_descriptor: ash::khr::push_descriptor::Device,
+    surface: Option<ash::khr::surface::Instance>,
+    swapchain: Option<ash::khr::swapchain::Device>,
+    swapchain_maintenance1: Option<ash::ext::swapchain_maintenance1::Device>,
 
     #[cfg(target_os = "windows")]
     win32_surface: Option<ash::khr::win32_surface::Instance>,
@@ -539,8 +541,8 @@ impl fmt::Debug for Device {
 
 impl Device {
     pub(super) fn new(
+        guard: Arc<InstanceGuard>,
         version: Version,
-        entry: ash::Entry,
         instance: ash::Instance,
         physical_device: vk::PhysicalDevice,
         device: ash::Device,
@@ -548,17 +550,19 @@ impl Device {
         features: Features,
         properties: ash::vk::PhysicalDeviceProperties,
         allocator: gpu_alloc::GpuAllocator<(vk::DeviceMemory, usize)>,
+        epochs: Vec<Arc<PendingEpochs>>,
         push_descriptor: ash::khr::push_descriptor::Device,
         surface: Option<ash::khr::surface::Instance>,
-        swapchain: Option<ash::khr::swapchain::Device>,
-        epochs: Vec<Arc<PendingEpochs>>,
         #[cfg(target_os = "windows")] win32_surface: Option<ash::khr::win32_surface::Instance>,
+        swapchain: Option<ash::khr::swapchain::Device>,
+        swapchain_maintenance1: Option<ash::ext::swapchain_maintenance1::Device>,
         #[cfg(any(debug_assertions, feature = "debug"))] debug_utils: Option<
             ash::ext::debug_utils::Device,
         >,
     ) -> Self {
         Device {
             inner: Arc::new(DeviceInner {
+                _guard: guard,
                 device,
                 instance,
                 physical_device,
@@ -578,12 +582,12 @@ impl Device {
                 allocator: Mutex::new(allocator),
                 push_descriptor,
                 surface,
-                swapchain,
-                epochs,
                 win32_surface,
+                swapchain,
+                swapchain_maintenance1,
+                epochs,
                 #[cfg(any(debug_assertions, feature = "debug"))]
                 debug_utils,
-                _entry: entry,
             }),
         }
     }
@@ -621,11 +625,6 @@ impl Device {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    pub(super) fn swapchain(&self) -> &ash::khr::swapchain::Device {
-        self.inner.swapchain.as_ref().unwrap()
-    }
-
-    #[cfg_attr(feature = "inline-more", inline(always))]
     pub fn push_descriptor(&self) -> &ash::khr::push_descriptor::Device {
         &self.inner.push_descriptor
     }
@@ -636,6 +635,16 @@ impl Device {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
+    pub(super) fn swapchain(&self) -> &ash::khr::swapchain::Device {
+        self.inner.swapchain.as_ref().unwrap()
+    }
+
+    #[cfg_attr(feature = "inline-more", inline(always))]
+    pub(super) fn swapchain_maintenance1(&self) -> Option<&ash::ext::swapchain_maintenance1::Device> {
+        self.inner.swapchain_maintenance1.as_ref()
+    }
+
+    #[cfg_attr(feature = "inline-more", inline(always))]
     pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
         self.inner.physical_device
     }
@@ -643,25 +652,6 @@ impl Device {
     #[cfg_attr(feature = "inline-more", inline(always))]
     pub(super) fn queue_families(&self) -> &[u32] {
         &self.inner.families
-    }
-
-    #[cfg_attr(feature = "inline-more", inline(always))]
-    pub(super) fn wait_idle(&self) -> Result<(), OutOfMemory> {
-        let result = unsafe { self.inner.device.device_wait_idle() };
-
-        let result = result.map_err(|err| match err {
-            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
-            _ => unexpected_error(err),
-        });
-
-        self.inner
-            .epochs
-            .iter()
-            .for_each(|epochs| epochs.device_idle());
-
-        result
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
@@ -908,6 +898,40 @@ impl Device {
         let idx = self.inner.image_views.lock().insert(view);
 
         Ok((view, idx))
+    }
+
+    pub(super) fn new_fence(&self) -> Result<vk::Fence, OutOfMemory> {
+        let result = unsafe {
+            self.ash().create_fence(
+                &vk::FenceCreateInfo::default(),
+                None,
+            )
+        };
+
+        result.map_err(|err| match err {
+            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
+            _ => unexpected_error(err),
+        })
+    }
+
+    pub(super) fn get_fence_status(&self, fence: vk::Fence) -> Result<bool, OutOfMemory> {
+        match unsafe { self.ash().get_fence_status(fence) } {
+            Ok(true) => Ok(true),
+            Ok(false) => Ok(false),
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => Err(handle_host_oom()),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => Err(OutOfMemory),
+            Err(err) => Err(unexpected_error(err)),
+        }
+    }
+
+    pub(super) fn reset_fences(&self, fences: &[vk::Fence]) -> Result<(), OutOfMemory> {
+        match unsafe { self.ash().reset_fences(fences) } {
+            Ok(()) => Ok(()),
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => Err(handle_host_oom()),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => Err(OutOfMemory),
+            Err(err) => Err(unexpected_error(err)),
+        }
     }
 }
 
@@ -1580,6 +1604,26 @@ impl crate::traits::Device for Device {
     fn new_tlas(&self, desc: TlasDesc) -> Result<Tlas, OutOfMemory> {
         todo!()
     }
+
+    /// Wait for all operations on the device to complete.
+    fn wait_idle(&self) -> Result<(), OutOfMemory> {
+        let result = unsafe { self.inner.device.device_wait_idle() };
+
+        let result = result.map_err(|err| match err {
+            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
+            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
+            _ => unexpected_error(err),
+        });
+
+        self.inner
+            .epochs
+            .iter()
+            .for_each(|epochs| epochs.queue_is_idle());
+
+        result
+    }
+
 }
 
 fn memory_to_usage_flags(memory: Memory) -> gpu_alloc::UsageFlags {

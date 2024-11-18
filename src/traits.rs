@@ -64,6 +64,9 @@ pub trait Device: Clone + Debug + Eq + Send + Sync + 'static {
 
     /// Create a new top-level acceleration structure.
     fn new_tlas(&self, desc: TlasDesc) -> Result<crate::backend::Tlas, OutOfMemory>;
+
+    /// Wait for all operations on the device to complete.
+    fn wait_idle(&self) -> Result<(), OutOfMemory>;
 }
 
 pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Send + Sync + 'static {
@@ -90,7 +93,11 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Send + Sync + 
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 
+    /// Synchronize the access to the frame resources.
     fn sync_frame(&mut self, frame: &mut crate::backend::Frame, before: PipelineStages);
+    
+    /// Wait for all operations on the queue to complete.
+    fn wait_idle(&self) -> Result<(), OutOfMemory>;
 }
 
 pub trait SyncCommandEncoder {
