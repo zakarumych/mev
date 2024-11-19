@@ -100,11 +100,17 @@ impl TriangleApp {
         let pipeline = self.pipeline.as_ref().unwrap();
 
         let mut encoder = self.queue.new_command_encoder().unwrap();
-        encoder.init_image(mev::PipelineStages::empty(), mev::PipelineStages::FRAGMENT_SHADER, frame.image());
+        encoder.init_image(
+            mev::PipelineStages::empty(),
+            mev::PipelineStages::FRAGMENT_SHADER,
+            frame.image(),
+        );
         {
             let mut render = encoder.render(mev::RenderPassDesc {
                 name: "main",
-                color_attachments: &[mev::AttachmentDesc::new(frame.image()).clear(mev::ClearColor::DARK_GRAY)],
+                color_attachments: &[
+                    mev::AttachmentDesc::new(frame.image()).clear(mev::ClearColor::DARK_GRAY)
+                ],
                 depth_stencil_attachment: None,
             });
 
@@ -119,17 +125,26 @@ impl TriangleApp {
             render.draw(0..3, 0..1);
         }
 
-        self.queue.sync_frame(&mut frame, mev::PipelineStages::FRAGMENT_SHADER);
+        self.queue
+            .sync_frame(&mut frame, mev::PipelineStages::FRAGMENT_SHADER);
         encoder.present(frame, mev::PipelineStages::FRAGMENT_SHADER);
         let cbuf = encoder.finish().unwrap();
 
         self.window.as_ref().unwrap().pre_present_notify();
         self.queue.submit([cbuf], true).unwrap();
-    
     }
 }
 
 fn main() {
+    mev::match_backend! {
+        metal => {
+            println!("Metal backend");
+        }
+        vulkan => {
+            println!("Vulkan backend");
+        }
+    }
+
     let instance = mev::Instance::load().expect("Failed to init graphics");
 
     let (_device, mut queues) = instance
@@ -150,6 +165,7 @@ fn main() {
         pipeline: None,
         start: Instant::now(),
     };
+
     let _ = event_loop.run_app(&mut app);
 }
 
@@ -159,3 +175,4 @@ pub struct TriangleConstants {
     pub width: u32,
     pub height: u32,
 }
+

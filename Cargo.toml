@@ -11,7 +11,7 @@ description = "Metal Et Vulkan abstraction"
 inline-more = []
 
 [dependencies]
-mev-proc = { path = "proc" }
+mev-proc = { version = "=0.1.0", path = "proc" }
 
 ahash.workspace = true
 bitflags.workspace = true
@@ -41,12 +41,11 @@ naga = { workspace = true, features = ["msl-out"] }
 winit = "0.30"
 
 [workspace]
-members = ["proc", "."]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-authors = ["me"]
+authors = ["Zakarum <zaq.dev@icloud.com>"]
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 version = "0.1.0"

@@ -1,29 +1,20 @@
 use proc_easy::private::Spanned;
-use proc_macro::TokenStream;
+use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn;
 
-pub fn derive(input: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(input as syn::DeriveInput);
-
-    match derive_impl(input) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
 
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
-            input.generics,
+            &input.generics,
             "generic arguments are not supported by `#[derive(DeviceRepr)]`",
         ));
     }
 
-    let data = match input.data {
+    let data = match &input.data {
         syn::Data::Struct(data) => data,
         _ => {
             return Err(syn::Error::new_spanned(
@@ -52,27 +43,27 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 .take(idx)
                 .fold(quote! { 0 }, |acc, field| {
                     let ty = &field.ty;
-                    quote_spanned! { ty.span() => mev::for_macro::repr_append_field::<#ty>(#acc) }
+                    quote_spanned! { ty.span() => #mev::for_macro::repr_append_field::<#ty>(#acc) }
                 });
 
             let ty = &field.ty;
             quote::quote_spanned! {
-                ty.span() => mev::for_macro::repr_pad_for::<#ty>(#end)
+                ty.span() => #mev::for_macro::repr_pad_for::<#ty>(#end)
             }
         })
         .collect::<Vec<_>>();
 
     let tail = data.fields.iter().fold(quote! { 0 }, |acc, field| {
         let ty = &field.ty;
-        quote_spanned! { ty.span() => mev::for_macro::repr_append_field::<#ty>(#acc) }
+        quote_spanned! { ty.span() => #mev::for_macro::repr_append_field::<#ty>(#acc) }
     });
 
     let total_align = data.fields.iter().fold(quote! { 0 }, |acc, field| {
         let ty = &field.ty;
-        quote_spanned! { ty.span() => #acc | (mev::for_macro::repr_align_of::<#ty>() - 1) }
+        quote_spanned! { ty.span() => #acc | (#mev::for_macro::repr_align_of::<#ty>() - 1) }
     });
 
-    let tail_pad = quote::quote!(mev::for_macro::pad_align(#tail, #total_align + 1));
+    let tail_pad = quote::quote!(#mev::for_macro::pad_align(#tail, #total_align + 1));
 
     match data.fields {
         syn::Fields::Named(_) => {
@@ -95,15 +86,15 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 #vis struct #name_repr {
                     #(
                         #pad_names: [u8; #field_pad_sizes],
-                        #field_names: <#field_types as mev::for_macro::DeviceRepr>::Repr,
+                        #field_names: <#field_types as #mev::for_macro::DeviceRepr>::Repr,
                     )*
                     _mev_tail_pad: [u8; #tail_pad],
                 }
 
-                unsafe impl mev::for_macro::Zeroable for #name_repr {}
-                unsafe impl mev::for_macro::Pod for #name_repr {}
+                unsafe impl #mev::for_macro::Zeroable for #name_repr {}
+                unsafe impl #mev::for_macro::Pod for #name_repr {}
 
-                impl mev::for_macro::DeviceRepr for #name {
+                impl #mev::for_macro::DeviceRepr for #name {
                     type Repr = #name_repr;
                     type ArrayRepr = #name_repr;
 
@@ -112,7 +103,7 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                         #name_repr {
                             #(
                                 #pad_names: [0xDAu8; #field_pad_sizes],
-                                #field_names: mev::for_macro::DeviceRepr::as_repr(&self.#field_names),
+                                #field_names: #mev::for_macro::DeviceRepr::as_repr(&self.#field_names),
                             )*
                             _mev_tail_pad: [0xDAu8; #tail_pad],
                         }

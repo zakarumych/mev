@@ -1,31 +1,22 @@
 use proc_easy::{private::Spanned, EasyAttributes};
-use proc_macro::TokenStream;
+use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn;
 
 use crate::args::*;
 
-pub fn derive(input: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(input as syn::DeriveInput);
-
-    match derive_impl(input) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
 
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
-            input.generics,
+            &input.generics,
             "generic arguments are not supported by `#[derive(Arguments)]`",
         ));
     }
 
-    let data = match input.data {
+    let data = match &input.data {
         syn::Data::Struct(data) => data,
         _ => {
             return Err(syn::Error::new_spanned(
@@ -48,18 +39,18 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         .map(|(field, attrs)| {
             let ty = &field.ty;
             match attrs.kind {
-                None => quote::quote!(<#ty as mev::for_macro::ArgumentsField<mev::for_macro::Automatic>>),
+                None => quote::quote!(<#ty as #mev::for_macro::ArgumentsField<#mev::for_macro::Automatic>>),
                 // Some(Kind::Constant(_)) => {
-                //     quote::quote!(<#ty as mev::for_macro::ArgumentsField<mev::for_macro::Constant>>)
+                //     quote::quote!(<#ty as #mev::for_macro::ArgumentsField<#mev::for_macro::Constant>>)
                 // }
                 Some(Kind::Uniform(_)) => {
-                    quote::quote!(<#ty as mev::for_macro::ArgumentsField<mev::for_macro::Uniform>>)
+                    quote::quote!(<#ty as #mev::for_macro::ArgumentsField<#mev::for_macro::Uniform>>)
                 }
                 Some(Kind::Sampled(_)) => {
-                    quote::quote!(<#ty as mev::for_macro::ArgumentsField<mev::for_macro::Sampled>>)
+                    quote::quote!(<#ty as #mev::for_macro::ArgumentsField<#mev::for_macro::Sampled>>)
                 }
                 Some(Kind::Storage(_)) => {
-                    quote::quote!(<#ty as mev::for_macro::ArgumentsField<mev::for_macro::Storage>>)
+                    quote::quote!(<#ty as #mev::for_macro::ArgumentsField<#mev::for_macro::Storage>>)
                 }
             }
         })
@@ -71,7 +62,7 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
         .zip(&field_attrs)
         .map(|(field, attrs)| {
             if attrs.shaders.flags.is_empty() {
-                quote_spanned!(field.span() => mev::ShaderStage::empty())
+                quote_spanned!(field.span() => #mev::ShaderStage::empty())
             } else {
                 let mut tokens = quote!(0);
 
@@ -82,14 +73,14 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                                 tokens.extend(quote_spanned!(vertex.span() => | ));
                             }
                             tokens
-                                .extend(quote_spanned!(vertex.span() => mev::ShaderStages::VERTEX.bits()))
+                                .extend(quote_spanned!(vertex.span() => #mev::ShaderStages::VERTEX.bits()))
                         }
                         Shader::Fragment(fragment) => {
                             if !tokens.is_empty() {
                                 tokens.extend(quote_spanned!(fragment.span() => | ));
                             }
                             tokens.extend(
-                                quote_spanned!(fragment.span() => mev::ShaderStages::FRAGMENT.bits()),
+                                quote_spanned!(fragment.span() => #mev::ShaderStages::FRAGMENT.bits()),
                             )
                         }
                         Shader::Compute(compute) => {
@@ -97,13 +88,13 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                                 tokens.extend(quote_spanned!(compute.span() => | ));
                             }
                             tokens.extend(
-                                quote_spanned!(compute.span() => mev::ShaderStages::COMPUTE.bits()),
+                                quote_spanned!(compute.span() => #mev::ShaderStages::COMPUTE.bits()),
                             )
                         }
                     }
                 }
 
-                quote!(mev::ShaderStages::from_bits_truncate(#tokens))
+                quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
             }
         })
         .collect::<Vec<_>>();
@@ -116,7 +107,7 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
     match &data.fields {
         syn::Fields::Unit => {
             return Err(syn::Error::new_spanned(
-                data.fields,
+                &data.fields,
                 "unit structs are not supported by `#[derive(Arguments)]`",
             ));
         }
@@ -135,12 +126,12 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                 }
 
                 impl #name {
-                    const fn mev_generated_template_entries() -> [mev::for_macro::DescriptorUpdateTemplateEntry; #fields_count] {
-                        let update = mev::for_macro::MaybeUninit::<#update_name>::uninit();
+                    const fn mev_generated_template_entries() -> [#mev::for_macro::DescriptorUpdateTemplateEntry; #fields_count] {
+                        let update = #mev::for_macro::MaybeUninit::<#update_name>::uninit();
                         let ptr = update.as_ptr();
                         [
                             #(
-                                mev::for_macro::DescriptorUpdateTemplateEntry {
+                                #mev::for_macro::DescriptorUpdateTemplateEntry {
                                     dst_binding: #field_bindings,
                                     dst_array_element: 0,
                                     descriptor_count: {
@@ -149,8 +140,8 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                                         }
                                         #field_argument_impls::SIZE as u32
                                     },
-                                    descriptor_type: mev::for_macro::descriptor_type(#field_argument_impls::KIND),
-                                    offset: unsafe { mev::for_macro::addr_of!((*ptr).#field_names).cast::<u8>().offset_from(ptr.cast::<u8>()) as usize },
+                                    descriptor_type: #mev::for_macro::descriptor_type(#field_argument_impls::KIND),
+                                    offset: unsafe { #mev::for_macro::addr_of!((*ptr).#field_names).cast::<u8>().offset_from(ptr.cast::<u8>()) as usize },
                                     stride: #field_argument_impls::STRIDE,
                                 },
                             )*
@@ -158,9 +149,9 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     }
                 }
 
-                impl mev::for_macro::Arguments for #name {
-                    const LAYOUT: mev::ArgumentGroupLayout<'static> = mev::ArgumentGroupLayout {
-                        arguments: &[#(mev::ArgumentLayout {
+                impl #mev::for_macro::Arguments for #name {
+                    const LAYOUT: #mev::ArgumentGroupLayout<'static> = #mev::ArgumentGroupLayout {
+                        arguments: &[#(#mev::ArgumentLayout {
                             kind: #field_argument_impls::KIND,
                             size: #field_argument_impls::SIZE,
                             stages: #field_stages,
@@ -170,8 +161,8 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     type Update = #update_name;
 
                     #[inline(always)]
-                    fn template_entries() -> &'static [mev::for_macro::DescriptorUpdateTemplateEntry] {
-                        static ENTRIES: [mev::for_macro::DescriptorUpdateTemplateEntry; #fields_count] = #name::mev_generated_template_entries();
+                    fn template_entries() -> &'static [#mev::for_macro::DescriptorUpdateTemplateEntry] {
+                        static ENTRIES: [#mev::for_macro::DescriptorUpdateTemplateEntry; #fields_count] = #name::mev_generated_template_entries();
                         &ENTRIES
                     }
 
@@ -183,7 +174,7 @@ fn derive_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream>
                     }
 
                     #[inline(always)]
-                    fn add_refs(&self, refs: &mut mev::for_macro::Refs) {
+                    fn add_refs(&self, refs: &mut #mev::for_macro::Refs) {
                         #(#field_argument_impls::add_refs(&self.#field_names, refs);)*
                     }
                 }
