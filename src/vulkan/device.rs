@@ -33,12 +33,17 @@ use super::{
         DescriptorSetLayout, DescriptorSetLayoutDesc, PipelineLayout, PipelineLayoutDesc,
         WeakDescriptorSetLayout, WeakPipelineLayout,
     },
-    queue::PendingEpochs,
+    // queue::PendingEpochs,
     render_pipeline::RenderPipeline,
     sampler::WeakSampler,
     shader::Library,
     surface::Surface,
-    unexpected_error, Blas, ComputePipeline, Sampler, Tlas, Version,
+    unexpected_error,
+    Blas,
+    ComputePipeline,
+    Sampler,
+    Tlas,
+    Version,
 };
 
 impl gpu_alloc::MemoryDevice<(vk::DeviceMemory, usize)> for DeviceInner {
@@ -244,10 +249,6 @@ pub(super) struct DeviceInner {
     pipelines: Mutex<Slab<vk::Pipeline>>,
 
     allocator: Mutex<gpu_alloc::GpuAllocator<(vk::DeviceMemory, usize)>>,
-
-    /// Epochs of all queues.
-    /// Cleared when `wait_idle` is called.
-    epochs: Vec<Arc<PendingEpochs>>,
 
     // # Extensions
     push_descriptor: ash::khr::push_descriptor::Device,
@@ -550,7 +551,7 @@ impl Device {
         features: Features,
         properties: ash::vk::PhysicalDeviceProperties,
         allocator: gpu_alloc::GpuAllocator<(vk::DeviceMemory, usize)>,
-        epochs: Vec<Arc<PendingEpochs>>,
+        // epochs: Vec<Arc<PendingEpochs>>,
         push_descriptor: ash::khr::push_descriptor::Device,
         surface: Option<ash::khr::surface::Instance>,
         #[cfg(target_os = "windows")] win32_surface: Option<ash::khr::win32_surface::Instance>,
@@ -585,7 +586,7 @@ impl Device {
                 win32_surface,
                 swapchain,
                 swapchain_maintenance1,
-                epochs,
+                // epochs,
                 #[cfg(any(debug_assertions, feature = "debug"))]
                 debug_utils,
             }),
@@ -640,7 +641,9 @@ impl Device {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    pub(super) fn swapchain_maintenance1(&self) -> Option<&ash::ext::swapchain_maintenance1::Device> {
+    pub(super) fn swapchain_maintenance1(
+        &self,
+    ) -> Option<&ash::ext::swapchain_maintenance1::Device> {
         self.inner.swapchain_maintenance1.as_ref()
     }
 
@@ -902,10 +905,8 @@ impl Device {
 
     pub(super) fn new_fence(&self) -> Result<vk::Fence, OutOfMemory> {
         let result = unsafe {
-            self.ash().create_fence(
-                &vk::FenceCreateInfo::default(),
-                None,
-            )
+            self.ash()
+                .create_fence(&vk::FenceCreateInfo::default(), None)
         };
 
         result.map_err(|err| match err {
@@ -932,6 +933,20 @@ impl Device {
             Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => Err(OutOfMemory),
             Err(err) => Err(unexpected_error(err)),
         }
+    }
+
+    /// Wait for all operations on the device to complete.
+    pub(super) fn wait_idle(&self) -> Result<(), OutOfMemory> {
+        let result = unsafe { self.inner.device.device_wait_idle() };
+
+        let result = result.map_err(|err| match err {
+            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
+            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
+            _ => unexpected_error(err),
+        });
+
+        result
     }
 }
 
@@ -1604,26 +1619,6 @@ impl crate::traits::Device for Device {
     fn new_tlas(&self, desc: TlasDesc) -> Result<Tlas, OutOfMemory> {
         todo!()
     }
-
-    /// Wait for all operations on the device to complete.
-    fn wait_idle(&self) -> Result<(), OutOfMemory> {
-        let result = unsafe { self.inner.device.device_wait_idle() };
-
-        let result = result.map_err(|err| match err {
-            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
-            _ => unexpected_error(err),
-        });
-
-        self.inner
-            .epochs
-            .iter()
-            .for_each(|epochs| epochs.queue_is_idle());
-
-        result
-    }
-
 }
 
 fn memory_to_usage_flags(memory: Memory) -> gpu_alloc::UsageFlags {

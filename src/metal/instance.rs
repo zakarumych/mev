@@ -70,7 +70,7 @@ impl crate::traits::Instance for Instance {
         let device = metal::Device::system_default()
             .ok_or(CreateError(CreateErrorKind::FailedToCreateDevice))?;
 
-        let device = Device::new(device);
+        let device = Device::new(device, info.queues.len());
 
         let queues = (0..info.queues.len())
             .map(|_| Queue::new(device.clone(), device.metal().new_command_queue()))

@@ -14,7 +14,7 @@ use super::{
 /// Maximum number of pending epochs to keep in queue.
 /// Queue will wait for earliest epoch to be complete and reuse it
 /// when number of epochs exceeds this limit.
-/// 
+///
 /// The number is chosen to minimize waiting (ideally epoch would be already complete when it's recycled)
 /// and to minimize memory usage (epoch contains resources that are not released until it's complete).
 const MAX_EPOCHS: usize = 3;
@@ -163,27 +163,27 @@ impl Epoch {
     }
 }
 
-pub(super) struct PendingEpochs {
+struct PendingEpochs {
     array: Mutex<VecDeque<Epoch>>,
 }
 
 impl PendingEpochs {
-    pub fn new() -> Self {
+    fn new() -> Self {
         PendingEpochs {
             array: Mutex::new(VecDeque::new()),
         }
     }
 
-    pub fn push(&self, epoch: Epoch) {
-        self.array.lock().push_back(epoch);
+    fn push(&mut self, epoch: Epoch) {
+        self.array.get_mut().push_back(epoch);
     }
 
-    pub fn recycle(
-        &self,
+    fn recycle(
+        &mut self,
         device: &ash::Device,
         pools: &mut VecDeque<Pool>,
     ) -> Result<Option<Epoch>, DeviceError> {
-        let mut array = self.array.lock();
+        let mut array = self.array.get_mut();
         if array.len() < MAX_EPOCHS {
             return Ok(None);
         }
@@ -202,8 +202,8 @@ impl PendingEpochs {
         Ok(Some(unsafe { array.pop_front().unwrap_unchecked() }))
     }
 
-    pub fn destroy_all(&self, device: &ash::Device, pools: &mut VecDeque<Pool>) {
-        let mut array = self.array.lock();
+    fn destroy_all(&mut self, device: &ash::Device, pools: &mut VecDeque<Pool>) {
+        let mut array = self.array.get_mut();
         for e in array.iter_mut() {
             unsafe {
                 e.destroy(device, pools);
@@ -212,7 +212,7 @@ impl PendingEpochs {
     }
 
     /// Releases all resources but keeps the epochs.
-    pub fn queue_is_idle(&self) {
+    fn queue_is_idle(&self) {
         let mut array = self.array.lock();
         for epoch in array.iter_mut() {
             epoch.refs.clear();
@@ -255,7 +255,7 @@ pub struct Queue {
     /// Pending epochs that are waiting for completion.
     /// Epochs might be recycled when associated fence is signaled.
     /// Or if Device::wait_idle or Queue::wait_idle wait is called.
-    pending_epochs: Arc<PendingEpochs>,
+    pending_epochs: PendingEpochs,
 
     /// Temporary array for command buffers.
     command_buffers: Vec<CommandBuffer>,
@@ -298,13 +298,7 @@ impl fmt::Debug for Queue {
 }
 
 impl Queue {
-    pub(super) fn new(
-        device: Device,
-        handle: vk::Queue,
-        flags: QueueFlags,
-        family: u32,
-        pending_epochs: Arc<PendingEpochs>,
-    ) -> Self {
+    pub(super) fn new(device: Device, handle: vk::Queue, flags: QueueFlags, family: u32) -> Self {
         Queue {
             device,
             handle,
@@ -316,7 +310,7 @@ impl Queue {
             pools: VecDeque::new(),
             free_refs: Vec::new(),
             this_epoch: None,
-            pending_epochs,
+            pending_epochs: PendingEpochs::new(),
 
             command_buffers: Vec::new(),
             command_buffer_submit: Vec::new(),
@@ -376,7 +370,7 @@ impl Queue {
                 fn create_pool(
                     device: &ash::Device,
                     pools: &mut VecDeque<Pool>,
-                )  -> Result<(), OutOfMemory> {
+                ) -> Result<(), OutOfMemory> {
                     let pool = unsafe {
                         device.create_command_pool(
                             &vk::CommandPoolCreateInfo::default()
@@ -391,7 +385,7 @@ impl Queue {
                         free_cbufs: Vec::new(),
                         allocated: 0,
                     };
-                    
+
                     pools.push_back(pool);
                     Ok(())
                 }
@@ -418,7 +412,7 @@ impl Queue {
     /// - Or creates a new one.
     fn get_epoch<'a>(
         this_epoch: &'a mut Option<Epoch>,
-        pending_epochs: &PendingEpochs,
+        pending_epochs: &mut PendingEpochs,
         pools: &mut VecDeque<Pool>,
         free_refs: &mut Vec<Refs>,
         device: &Device,

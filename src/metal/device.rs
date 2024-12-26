@@ -10,6 +10,7 @@ use objc::{
     sel, sel_impl,
 };
 
+use parking_lot::Mutex;
 use raw_window_handle::{
     HasDisplayHandle, HasRawDisplayHandle, HasRawWindowHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle,
@@ -57,7 +58,11 @@ impl PartialEq for Device {
 impl Eq for Device {}
 
 impl Device {
-    pub(super) fn new(device: metal::Device) -> Self {
+    pub(super) fn new(device: metal::Device, queues: usize) -> Self {
+        Device { device }
+    }
+
+    pub(super) fn set_last_cbuf(device: metal::Device, queues: usize) -> Self {
         Device { device }
     }
 }
@@ -415,6 +420,10 @@ impl crate::traits::Device for Device {
         let tlas = self.device.new_acceleration_structure_with_size(size);
         Ok(Tlas::new(tlas))
     }
+
+    // fn wait_idle(&self) -> Result<(), OutOfMemory> {
+    //     Ok(())
+    // }
 }
 
 unsafe fn layer_from_view(view: *mut Object) -> metal::MetalLayer {

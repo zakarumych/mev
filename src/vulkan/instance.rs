@@ -16,10 +16,7 @@ use crate::generic::{
     LoadError, OutOfMemory,
 };
 
-use super::{
-    device::Device, from::*, handle_host_oom, queue::PendingEpochs, unexpected_error, Queue,
-    Version,
-};
+use super::{device::Device, from::*, handle_host_oom, unexpected_error, Queue, Version};
 
 macro_rules! extension_name {
     ($name:literal) => {
@@ -194,7 +191,9 @@ impl Instance {
                 enabled_extension_names.push(surface_extension.extension_name.as_ptr());
                 enabled_extension_names.push(platform_extension.extension_name.as_ptr());
 
-                if let Some(surface_maintenance1) = unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") } {
+                if let Some(surface_maintenance1) =
+                    unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") }
+                {
                     enabled_extension_names.push(surface_maintenance1.extension_name.as_ptr());
                 }
             }
@@ -641,9 +640,6 @@ impl crate::traits::Instance for Instance {
             .is_some()
             .then(|| ash::ext::debug_utils::Device::new(&self.instance, &device));
 
-        let epochs = std::iter::repeat_with(|| Arc::new(PendingEpochs::new()))
-            .take(desc.queues.len())
-            .collect::<Vec<_>>();
         let device = Device::new(
             self.guard.clone(),
             self.version,
@@ -657,7 +653,6 @@ impl crate::traits::Instance for Instance {
             desc.features,
             properties,
             allocator,
-            epochs.clone(),
             push_descriptor,
             self.surface.clone(),
             #[cfg(target_os = "windows")]
@@ -672,7 +667,7 @@ impl crate::traits::Instance for Instance {
         let mut queues = Vec::new();
         let mut family_counters = HashMap::new();
 
-        for (&family, epochs) in desc.queues.iter().zip(epochs) {
+        for &family in desc.queues {
             let counter = family_counters.entry(family).or_insert(0);
 
             let family_caps = &device_caps.families[family as usize];
@@ -684,7 +679,6 @@ impl crate::traits::Instance for Instance {
                 queue,
                 family_caps.queue_flags,
                 family,
-                epochs,
             ));
         }
 

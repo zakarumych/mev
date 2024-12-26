@@ -24,8 +24,9 @@ pub struct CommandBuffer {
 }
 
 impl CommandBuffer {
-    pub(super) fn commit(self) {
+    pub(super) fn commit(self) -> metal::CommandBuffer {
         self.buffer.commit();
+        self.buffer
     }
 }
 

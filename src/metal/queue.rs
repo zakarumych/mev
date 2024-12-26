@@ -9,6 +9,7 @@ use super::{CommandBuffer, CommandEncoder, Device, Frame};
 pub struct Queue {
     device: Device,
     queue: metal::CommandQueue,
+    last_cbuf: Option<metal::CommandBuffer>,
 }
 
 unsafe impl Send for Queue {}
@@ -25,7 +26,11 @@ impl fmt::Debug for Queue {
 
 impl Queue {
     pub(super) fn new(device: Device, queue: metal::CommandQueue) -> Self {
-        Queue { device, queue }
+        Queue {
+            device,
+            queue,
+            last_cbuf: None,
+        }
     }
 }
 
@@ -59,7 +64,15 @@ impl crate::traits::Queue for Queue {
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
-        command_buffers.into_iter().for_each(CommandBuffer::commit);
+        let last_cbuf = command_buffers
+            .into_iter()
+            .map(CommandBuffer::commit)
+            .last();
+
+        if let Some(last_cbuf) = last_cbuf {
+            self.last_cbuf = Some(last_cbuf);
+        }
+
         Ok(())
     }
 
@@ -72,4 +85,11 @@ impl crate::traits::Queue for Queue {
     }
 
     fn sync_frame(&mut self, _frame: &mut Frame, _before: PipelineStages) {}
+
+    fn wait_idle(&self) -> Result<(), OutOfMemory> {
+        if let Some(last_cbuf) = &self.last_cbuf {
+            last_cbuf.wait_until_completed();
+        }
+        Ok(())
+    }
 }
