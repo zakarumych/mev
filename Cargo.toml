@@ -53,17 +53,17 @@ version = "0.1.0"
 [workspace.dependencies]
 ahash = { version = "0.8" }
 ash = { version = "0.38", features = ["loaded"] }
-bitflags = "2.0"
+bitflags = "2.6"
 bytemuck = { version = "1.7", features = ["derive", "min_const_generics"] }
 codespan-reporting = "0.11"
 core-graphics-types = { version = "0.1" }
 foreign-types = { version = "0.5" }
 gpu-alloc = { version = "0.6" }
-hashbrown = { version = "0.14" }
+hashbrown = { version = "0.15" }
 hidden-trait = "0.1"
 libloading = "0.8"
-metal = { version = "0.28" }
-naga = { version = "0.20", features = ["spv-in", "wgsl-in", "glsl-in"] }
+metal = { version = "0.30" }
+naga = { version = "23.1", features = ["spv-in", "wgsl-in", "glsl-in"] }
 objc = { version = "0.2" }
 parking_lot = "0.12"
 proc-macro2 = "1"

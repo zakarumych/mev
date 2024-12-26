@@ -605,6 +605,8 @@ fn compile_shader(
         &options,
         &naga::back::msl::PipelineOptions {
             allow_and_force_point_size: false,
+            vertex_pulling_transform: true,
+            vertex_buffer_mappings: vec![],
         },
     )
     .map_err(ShaderCompileError::GenMsl)?;

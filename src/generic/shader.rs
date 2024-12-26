@@ -34,7 +34,7 @@ impl fmt::Display for ShaderStage {
 
 bitflags::bitflags! {
     /// Flags that describe the shader stages.
-    /// 
+    ///
     /// Each flag corresponds to one [`ShaderStage`].
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
     pub struct ShaderStages : u32 {
@@ -48,7 +48,7 @@ bitflags::bitflags! {
 }
 
 /// Shader language.
-/// 
+///
 /// Must be specified when loading shader source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderLanguage {
@@ -64,7 +64,7 @@ pub enum ShaderLanguage {
 
     /// GLSL (OpenGL Shading Language).
     /// Shader source code will be compiled to native format.
-    /// 
+    ///
     /// Requires specifying shader stage.
     Glsl { stage: ShaderStage },
 
@@ -186,7 +186,7 @@ pub(crate) enum ShaderCompileError {
     NonUtf8(std::str::Utf8Error),
     ParseSpirV(naga::front::spv::Error),
     ParseWgsl(naga::front::wgsl::ParseError),
-    ParseGlsl(naga::front::glsl::ParseError),
+    ParseGlsl(naga::front::glsl::ParseErrors),
     ValidationFailed,
 
     #[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
