@@ -748,11 +748,11 @@ impl Device {
         let mut set_layouts = self.inner.set_layouts.lock();
 
         match set_layouts.entry(desc) {
-            hashbrown::hash_map::Entry::Occupied(entry) => match entry.get().upgrade() {
+            hashbrown::hash_map::Entry::Occupied(mut entry) => match entry.get().upgrade() {
                 Some(set_layout) => Ok(set_layout.clone()),
                 None => {
                     let set_layout = self.new_set_layout_slow(entry.key().clone())?;
-                    entry.replace_entry(set_layout.downgrade());
+                    entry.insert(set_layout.downgrade());
                     Ok(set_layout)
                 }
             },
@@ -808,11 +808,11 @@ impl Device {
         let mut pipeline_layouts = self.inner.pipeline_layouts.lock();
 
         match pipeline_layouts.entry(desc) {
-            hashbrown::hash_map::Entry::Occupied(entry) => match entry.get().upgrade() {
+            hashbrown::hash_map::Entry::Occupied(mut entry) => match entry.get().upgrade() {
                 Some(pipeline_layout) => Ok(pipeline_layout.clone()),
                 None => {
                     let pipeline_layout = self.new_pipeline_layout_slow(entry.key().clone())?;
-                    entry.replace_entry(pipeline_layout.downgrade());
+                    entry.insert(pipeline_layout.downgrade());
                     Ok(pipeline_layout)
                 }
             },
@@ -1494,11 +1494,11 @@ impl crate::traits::Device for Device {
         let mut samplers = self.inner.samplers.lock();
         let len = samplers.len();
         match samplers.entry(desc) {
-            hashbrown::hash_map::Entry::Occupied(entry) => match entry.get().upgrade() {
+            hashbrown::hash_map::Entry::Occupied(mut entry) => match entry.get().upgrade() {
                 Some(sampler) => Ok(sampler),
                 None => {
                     let sampler = self.new_sampler_slow(len, desc)?;
-                    entry.replace_entry(sampler.downgrade());
+                    entry.insert(sampler.downgrade());
                     Ok(sampler)
                 }
             },
@@ -1649,6 +1649,12 @@ pub(crate) fn compile_shader(
             Some(source_code) => Some(naga::back::spv::DebugInfo {
                 source_code,
                 file_name: filename.unwrap_or("<nofile>").as_ref(),
+                language: match lang {
+                    ShaderLanguage::Wgsl => naga::back::spv::SourceLanguage::WGSL,
+                    ShaderLanguage::Glsl { .. } => naga::back::spv::SourceLanguage::GLSL,
+                    ShaderLanguage::Msl { .. } => naga::back::spv::SourceLanguage::Unknown,
+                    ShaderLanguage::SpirV => naga::back::spv::SourceLanguage::Unknown,
+                },
             }),
         },
     };
