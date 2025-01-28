@@ -94,6 +94,8 @@ impl Buffer {
     }
 }
 
+impl crate::traits::Resource for Buffer {}
+
 #[hidden_trait::expose]
 impl crate::traits::Buffer for Buffer {
     #[cfg_attr(feature = "inline-more", inline(always))]

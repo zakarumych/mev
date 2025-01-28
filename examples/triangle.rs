@@ -148,7 +148,7 @@ fn main() {
     let instance = mev::Instance::load().expect("Failed to init graphics");
 
     let (_device, mut queues) = instance
-        .create(mev::DeviceDesc {
+        .new_device(mev::DeviceDesc {
             idx: 0,
             queues: &[0],
             features: mev::Features::SURFACE,
@@ -175,4 +175,3 @@ pub struct TriangleConstants {
     pub width: u32,
     pub height: u32,
 }
-

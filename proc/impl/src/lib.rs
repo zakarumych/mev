@@ -15,6 +15,7 @@ mod r#match;
 
 mod metal;
 mod vulkan;
+mod webgl;
 
 pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
@@ -27,10 +28,15 @@ pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     };
+    let webgl_tokens = match webgl::arguments::derive(&input, mev) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    };
 
     quote::quote! {
         #mev::with_metal!{#metal_tokens}
         #mev::with_vulkan!{#vulkan_tokens}
+        #mev::with_webgl!{#webgl_tokens}
     }
 }
 

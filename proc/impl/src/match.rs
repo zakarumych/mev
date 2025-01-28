@@ -6,11 +6,13 @@ use syn::{
 
 proc_easy::easy_token!(metal);
 proc_easy::easy_token!(vulkan);
+proc_easy::easy_token!(webgl);
 
 proc_easy::easy_parse! {
     enum Pattern {
         Metal(metal),
         Vulkan(vulkan),
+        WebGL(webgl),
         Wildcard(syn::Token![_]),
     }
 }
@@ -37,6 +39,7 @@ pub fn match_backend(tokens: TokenStream, mev: &TokenStream) -> TokenStream {
         Ok(arms) => {
             let mut metal_matched = false;
             let mut vulkan_matched = false;
+            let mut webgl_matched = false;
             let mut wildcard_matched = false;
 
             let mut result = proc_macro2::TokenStream::new();
@@ -70,12 +73,26 @@ pub fn match_backend(tokens: TokenStream, mev: &TokenStream) -> TokenStream {
                             result.extend(quote::quote_spanned! { vulkan.span() => ::core::compile_error!("`vulkan` matched more than once");  });
                         }
                     }
+                    Pattern::WebGL(webgl) => {
+                        if !webgl_matched {
+                            webgl_matched = true;
+
+                            if !wildcard_matched {
+                                let body = &arm.body.0;
+                                result.extend(quote::quote_spanned! { body.span() => #mev::with_webgl!{ #body } });
+                            } else {
+                                result.extend(quote::quote_spanned! { webgl.span() => ::core::compile_error!("`webgl` matched after wildcard");  });
+                            }
+                        } else {
+                            result.extend(quote::quote_spanned! { webgl.span() => ::core::compile_error!("`webgl` matched more than once");  });
+                        }
+                    }
                     Pattern::Wildcard(wildcard) => {
                         if idx != arms.len() - 1 {
                             result.extend(quote::quote_spanned! { wildcard.span() => ::core::compile_error!("Wildcard pattern must appear last"); });
                         }
 
-                        if vulkan_matched && metal_matched {
+                        if wildcard_matched || (vulkan_matched && metal_matched && webgl_matched) {
                             result.extend(quote::quote_spanned! { wildcard.span() => ::core::compile_error!("Wildcard pattern is redundant"); });
                         }
 
@@ -88,6 +105,9 @@ pub fn match_backend(tokens: TokenStream, mev: &TokenStream) -> TokenStream {
                             }
                             if !metal_matched {
                                 result.extend(quote::quote_spanned! { body.span() => #mev::with_metal!{ #body } });
+                            }
+                            if !webgl_matched {
+                                result.extend(quote::quote_spanned! { body.span() => #mev::with_webgl!{ #body } });
                             }
                         }
                     }

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, fmt, sync::Arc};
+use std::{borrow::Cow, fmt, hash::{Hash, Hasher}, sync::Arc};
 
 use ash::vk;
 
@@ -35,6 +35,31 @@ impl Library {
         self.module
     }
 }
+
+impl PartialEq for Library {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module && Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl Eq for Library {}
+
+impl Hash for Library {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        Arc::as_ptr(&self.inner).hash(state);
+    }
+}
+
+impl fmt::Debug for Library {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Library")
+            .field("module", &self.module)
+            .finish()
+    }
+}
+
+impl crate::traits::Resource for Library {}
 
 #[hidden_trait::expose]
 impl crate::traits::Library for Library {

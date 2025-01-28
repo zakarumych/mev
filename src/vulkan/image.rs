@@ -260,6 +260,8 @@ impl Image {
     }
 }
 
+impl crate::traits::Resource for Image {}
+
 #[hidden_trait::expose]
 impl crate::traits::Image for Image {
     #[cfg_attr(feature = "inline-more", inline(always))]

@@ -461,13 +461,15 @@ impl Instance {
     }
 }
 
+impl crate::traits::Resource for Instance {}
+
 #[hidden_trait::expose]
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }
 
-    fn create(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
+    fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
         let physical_device = self.devices[desc.idx];
         let device_caps = &self.capabilities.devices[desc.idx];
 

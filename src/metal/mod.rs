@@ -23,7 +23,7 @@ pub use self::{
     compute_pipeline::ComputePipeline,
     device::Device,
     image::Image,
-    instance::Instance,
+    instance::{Instance, DeviceDesc},
     queue::Queue,
     render_pipeline::RenderPipeline,
     sampler::Sampler,

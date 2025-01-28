@@ -16,7 +16,11 @@ mod shader;
 mod stages;
 mod surface;
 
-use std::{error::Error, fmt, mem::{ManuallyDrop, MaybeUninit}};
+use std::{
+    error::Error,
+    fmt,
+    mem::{ManuallyDrop, MaybeUninit},
+};
 
 pub use self::{
     acst::{
@@ -35,7 +39,8 @@ pub use self::{
     format::{PixelFormat, VertexFormat},
     image::{ComponentSwizzle, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
     instance::{
-        Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, LoadError,
+        Capabilities, CreateError, CreateWithSurfaceError, DeviceCapabilities, DeviceDesc,
+        FamilyCapabilities, LoadError,
     },
     queue::QueueFlags,
     render::{AttachmentDesc, ClearColor, ClearDepthStencil, LoadOp, RenderPassDesc, StoreOp},
@@ -400,7 +405,10 @@ impl<T, const D: usize> Extent<T, D> {
     }
 }
 
-fn array_try_map<T, U, E, const N: usize>(array: [T; N], mut f: impl FnMut(T) -> Result<U, E>) -> Result<[U; N], E> {
+fn array_try_map<T, U, E, const N: usize>(
+    array: [T; N],
+    mut f: impl FnMut(T) -> Result<U, E>,
+) -> Result<[U; N], E> {
     struct PartiallyUsed<T, const N: usize> {
         array: [MaybeUninit<T>; N],
         used: usize,

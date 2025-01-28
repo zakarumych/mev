@@ -61,7 +61,7 @@ impl crate::traits::Instance for Instance {
         &self.capabilities
     }
 
-    fn create(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
+    fn new_device(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
         assert!(
             info.queues.iter().all(|&f| f == 0),
             "Only one queue family is supported"

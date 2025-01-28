@@ -4,28 +4,58 @@ use std::{
     ops::{Deref, Range},
 };
 
+use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc, BufferSlice,
         Capabilities, ComputePipelineDesc, CreateError, CreateLibraryError, CreatePipelineError,
-        DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc, ImageExtent, LibraryDesc,
-        Offset2, Offset3, OutOfMemory, PipelineStages, PixelFormat, RenderPassDesc,
-        RenderPipelineDesc, SamplerDesc, SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
+        CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
+        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, OutOfMemory, PipelineStages,
+        PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, SurfaceError,
+        TlasBuildDesc, TlasDesc, ViewDesc,
     },
-    ImageUsage, Shader,
+    with_metal,
 };
 
-pub trait Instance: Debug + Send + Sync + 'static {
+#[cfg(mev_backend = "metal")]
+pub trait Resource: Send + Sync + 'static {}
+
+#[cfg(mev_backend = "vulkan")]
+pub trait Resource: Send + Sync + 'static {}
+
+#[cfg(mev_backend = "webgl")]
+pub trait Resource: 'static {}
+
+pub trait Instance: Debug + Resource {
     fn capabilities(&self) -> &Capabilities;
-    fn create(
+
+    fn new_device(
         &self,
         info: DeviceDesc,
     ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), CreateError>;
+
+    fn new_device_with_surface(
+        &self,
+        info: DeviceDesc,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<
+        (
+            crate::backend::Device,
+            Vec<crate::backend::Queue>,
+            crate::backend::Surface,
+        ),
+        CreateWithSurfaceError,
+    > {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
+    }
 }
 
-pub trait Device: Clone + Debug + Eq + Send + Sync + 'static {
+pub trait Device: Clone + Debug + Eq + Resource {
     /// Create a new shader library.
     fn new_shader_library(
         &self,
@@ -70,7 +100,7 @@ pub trait Device: Clone + Debug + Eq + Send + Sync + 'static {
     fn new_tlas(&self, desc: TlasDesc) -> Result<crate::backend::Tlas, OutOfMemory>;
 }
 
-pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Send + Sync + 'static {
+pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     /// Get the device associated with this queue.
     fn device(&self) -> &crate::backend::Device;
 
@@ -249,7 +279,7 @@ pub trait Frame: Send + Sync + 'static {
     fn image(&self) -> &crate::backend::Image;
 }
 
-pub trait Image: Clone + Debug + Eq + Hash + Send + Sync + 'static {
+pub trait Image: Clone + Debug + Eq + Hash + Resource {
     /// Returns the pixel format of the image.
     fn format(&self) -> PixelFormat;
 
@@ -284,7 +314,7 @@ pub trait Image: Clone + Debug + Eq + Hash + Send + Sync + 'static {
     fn detached(&self) -> bool;
 }
 
-pub trait Buffer: Clone + Debug + Eq + Hash + Send + Sync + 'static {
+pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
     /// Returns the size of the buffer in bytes.
     fn size(&self) -> usize;
 
@@ -311,7 +341,7 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Send + Sync + 'static {
     unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]);
 }
 
-pub trait Library {
+pub trait Library: Clone + Debug + Eq + Hash + Resource {
     /// Returns shader entry point.
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a>;
 }

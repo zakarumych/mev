@@ -1,6 +1,10 @@
-# MEV is a GAPI
+# MEV
 
-that can use Metal et Vulkan GAPIs.
+[![docs.rs](https://img.shields.io/docsrs/mev?style=for-the-badge)](https://docs.rs/mev/)
+[![Crates.io Total Downloads](https://img.shields.io/crates/d/mev?style=for-the-badge)](https://crates.io/crates/mev)
+[![Discord](https://img.shields.io/discord/1270330377847832646?style=for-the-badge&logo=discord)](https://discord.com/channels/1270330377847832646/1318879687761465445)
+
+Mev is a GAPI that can use Metal et Vulkan GAPIs.
 
 With ergonomics in mind, MEV is designed to be:
 
