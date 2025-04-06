@@ -10,9 +10,11 @@ fn main() {
 
     if wasm32 {
         println!("cargo::rustc-cfg=mev_backend=\"webgl\"");
-    } else if windows || (unix && !(macos || ios)) {
+    } else if macos || ios {
+        println!("cargo::rustc-cfg=mev_backend=\"metal\"");
+    } else if windows || unix {
         println!("cargo::rustc-cfg=mev_backend=\"vulkan\"");
     } else {
-        println!("cargo::rustc-cfg=mev_backend=\"metal\"");
+        panic!("Only Windows, macOS, iOS, and Unix are currently supported");
     }
 }
