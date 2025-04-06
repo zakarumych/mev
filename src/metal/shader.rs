@@ -1,10 +1,10 @@
-use std::{borrow::Cow, fmt, sync::Arc};
+use std::{borrow::Cow, fmt, hash::Hash, sync::Arc};
 
 use hashbrown::HashMap;
 
 use crate::generic::{Shader, ShaderCompileError};
 
-#[derive(Clone, Copy, Debug, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct GroupBindings {
     pub bindings: [u8; 64],
 }
@@ -15,6 +15,7 @@ impl GroupBindings {
     };
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Bindings {
     pub groups: [GroupBindings; 16],
     pub push_constants: Option<u8>,
@@ -40,14 +41,37 @@ impl Bindings {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct EntryPointData {
     pub bindings: Arc<Bindings>,
     pub workgroup_size: [u32; 3],
     pub name: Result<String, naga::back::msl::EntryPointError>,
 }
 
-#[derive(Clone)]
+impl Hash for EntryPointData {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bindings.hash(state);
+        self.workgroup_size.hash(state);
+        self.name.as_ref().ok().hash(state);
+    }
+}
+
+impl PartialEq for EntryPointData {
+    fn eq(&self, other: &Self) -> bool {
+        if self.bindings != other.bindings {
+            return false;
+        }
+        if self.workgroup_size != other.workgroup_size {
+            return false;
+        }
+        match (&self.name, &other.name) {
+            (Ok(name1), Ok(name2)) => name1 == name2,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Library {
     library: metal::Library,
     entry_point_data: HashMap<String, EntryPointData>,
@@ -96,6 +120,8 @@ impl Library {
         Some(ep.workgroup_size)
     }
 }
+
+impl crate::traits::Resource for Library {}
 
 #[hidden_trait::expose]
 impl crate::traits::Library for Library {

@@ -55,6 +55,8 @@ impl fmt::Debug for Instance {
     }
 }
 
+impl crate::traits::Resource for Instance {}
+
 #[hidden_trait::expose]
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {

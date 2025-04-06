@@ -52,6 +52,8 @@ impl Image {
     }
 }
 
+impl crate::traits::Resource for Image {}
+
 #[hidden_trait::expose]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {

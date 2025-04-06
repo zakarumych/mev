@@ -74,6 +74,8 @@ impl Device {
     }
 }
 
+impl crate::traits::Resource for Device {}
+
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateLibraryError> {

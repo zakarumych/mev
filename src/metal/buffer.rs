@@ -49,6 +49,8 @@ impl PartialEq for Buffer {
 
 impl Eq for Buffer {}
 
+impl crate::traits::Resource for Buffer {}
+
 #[hidden_trait::expose]
 impl crate::traits::Buffer for Buffer {
     #[inline(always)]

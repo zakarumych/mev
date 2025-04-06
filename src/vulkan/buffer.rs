@@ -30,6 +30,8 @@ pub struct Buffer {
     inner: Arc<Inner>,
 }
 
+impl Resource for Buffer {}
+
 impl PartialEq for Buffer {
     fn eq(&self, other: &Self) -> bool {
         self.handle == other.handle && Arc::ptr_eq(&self.inner, &other.inner)
