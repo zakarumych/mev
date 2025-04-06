@@ -341,7 +341,7 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
     unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]);
 }
 
-pub trait Library: Clone + Debug + Eq + Hash + Resource {
+pub trait Library: Clone + Debug + Resource {
     /// Returns shader entry point.
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a>;
 }
