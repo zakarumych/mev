@@ -332,10 +332,14 @@ impl Surface {
             handle,
             images: swapchain_images,
             next,
-            fences: self.device.swapchain_maintenance1().is_some().then(|| SwachainFences {
-                array: SmallVec::new(),
-                next: 0,
-            }),
+            fences: self
+                .device
+                .swapchain_maintenance1()
+                .is_some()
+                .then(|| SwachainFences {
+                    array: SmallVec::new(),
+                    next: 0,
+                }),
         }));
         Ok(())
     }
@@ -369,7 +373,8 @@ impl Surface {
         while let Some(mut swapchain) = self.retired.pop_front() {
             match swapchain {
                 MaybeFakeSwapchain::Real(swapchain) => {
-                    let images_detached = swapchain.images.iter().all(|(image, _)| image.detached());
+                    let images_detached =
+                        swapchain.images.iter().all(|(image, _)| image.detached());
                     let mut can_destroy = false;
 
                     if images_detached {
