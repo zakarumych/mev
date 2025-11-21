@@ -44,7 +44,7 @@ wasm-bindgen = { workspace = true }
 naga = { workspace = true, features = ["glsl-out"] }
 
 [dev-dependencies]
-winit = "0.30"
+winit = "0.30.12"
 
 [workspace]
 resolver = "2"
@@ -57,33 +57,33 @@ license = "MIT OR Apache-2.0"
 version = "0.1.0"
 
 [workspace.dependencies]
-foldhash = { version = "0.1" }
-ash = { version = "0.38", features = ["loaded"] }
-bitflags = "2.6"
-bytemuck = { version = "1.7", features = ["derive", "min_const_generics"] }
-codespan-reporting = "0.11"
-core-graphics-types = { version = "0.1" }
+foldhash = { version = "0.2" }
+ash = { version = "0.38.0", features = ["loaded"] }
+bitflags = "2.10.0"
+bytemuck = { version = "1.24", features = ["derive", "min_const_generics"] }
+codespan-reporting = "0.13.1"
+core-graphics-types = { version = "0.2" }
 foreign-types = { version = "0.5" }
 gpu-alloc = { version = "0.6" }
-hashbrown = { version = "0.15" }
+hashbrown = { version = "0.16.1" }
 hidden-trait = "0.1"
-libloading = "0.8"
-metal = { version = "0.30" }
-naga = { version = "23.1", features = ["spv-in", "wgsl-in", "glsl-in"] }
+libloading = "0.9.0"
+metal = { version = "0.32.0" }
+naga = { version = "27.0.3", features = ["spv-in", "wgsl-in", "glsl-in"] }
 objc = { version = "0.2" }
-parking_lot = "0.12"
-proc-macro2 = "1"
-proc-easy = "0.3"
+parking_lot = "0.12.5"
+proc-macro2 = "1.0.103"
+proc-easy = "0.4.0"
 quote = "1"
 raw-window-handle = "0.6"
-slab = "0.4"
-smallvec = "1.6"
-syn = "2"
-tracing = "0.1"
+slab = "0.4.11"
+smallvec = "1.15.1"
+syn = "2.0.110"
+tracing = "0.1.41"
 
-js-sys = "0.3"
-web-sys = "0.3"
-wasm-bindgen = "0.2"
+js-sys = "0.3.82"
+web-sys = "0.3.82"
+wasm-bindgen = "0.2.105"
 
 
 [profile.dev.package.foldhash]

@@ -950,7 +950,6 @@ impl Device {
     }
 }
 
-
 impl crate::traits::Resource for Device {}
 
 #[hidden_trait::expose]
@@ -1643,10 +1642,13 @@ pub(crate) fn compile_shader(
     let options = naga::back::spv::Options {
         lang_version: (1, 3),
         flags: naga::back::spv::WriterFlags::ADJUST_COORDINATE_SPACE,
+        fake_missing_bindings: false,
         binding_map: naga::back::spv::BindingMap::default(),
         capabilities: None,
         bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
         zero_initialize_workgroup_memory: naga::back::spv::ZeroInitializeWorkgroupMemoryMode::None,
+        force_loop_bounding: false,
+        use_storage_input_output_16: true,
         debug_info: match source_code {
             None => None,
             Some(source_code) => Some(naga::back::spv::DebugInfo {
