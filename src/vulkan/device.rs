@@ -1642,7 +1642,7 @@ pub(crate) fn compile_shader(
     let options = naga::back::spv::Options {
         lang_version: (1, 3),
         flags: naga::back::spv::WriterFlags::ADJUST_COORDINATE_SPACE,
-        fake_missing_bindings: false,
+        fake_missing_bindings: true,
         binding_map: naga::back::spv::BindingMap::default(),
         capabilities: None,
         bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
