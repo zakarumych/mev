@@ -14,11 +14,15 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, Raw
 use slab::Slab;
 use smallvec::SmallVec;
 
-use crate::generic::{
-    parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, CreateLibraryError,
-    CreatePipelineError, Features, ImageDesc, ImageExtent, LibraryDesc, LibraryInput, Memory,
-    OutOfMemory, PrimitiveTopology, RenderPipelineDesc, SamplerDesc, ShaderCompileError,
-    ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
+use crate::{
+    backend::new_semaphore,
+    generic::{
+        parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
+        CreateLibraryError, CreatePipelineError, Features, ImageDesc, ImageExtent, LibraryDesc,
+        LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc, SamplerDesc,
+        ShaderCompileError, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode,
+        ViewDesc,
+    },
 };
 
 use super::{
@@ -1610,6 +1614,11 @@ impl crate::traits::Device for Device {
                 unreachable!("Unsupported window type for this platform")
             }
         }
+    }
+
+    fn new_fake_surface(&self, image: Image) -> Result<Surface, OutOfMemory> {
+        let semaphore = new_semaphore(self.ash())?;
+        Ok(Surface::fake(self.clone(), image, semaphore))
     }
 
     /// Create a new bottom-level acceleration structure.

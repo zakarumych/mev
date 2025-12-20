@@ -134,6 +134,15 @@ fn map_device_error(err: vk::Result) -> DeviceError {
     }
 }
 
+fn new_semaphore(device: &ash::Device) -> Result<vk::Semaphore, OutOfMemory> {
+    let result = unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) };
+    result.map_err(|err| match err {
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
+        _ => unexpected_error(err),
+    })
+}
+
 pub mod for_macro {
     pub use crate::generic::DeviceRepr;
 

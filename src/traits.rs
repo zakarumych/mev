@@ -93,6 +93,12 @@ pub trait Device: Clone + Debug + Eq + Resource {
         display: &impl HasDisplayHandle,
     ) -> Result<crate::backend::Surface, SurfaceError>;
 
+    /// Create a new fake surface associated with image.
+    fn new_fake_surface(
+        &self,
+        image: crate::backend::Image,
+    ) -> Result<crate::backend::Surface, OutOfMemory>;
+
     /// Create a new bottom-level acceleration structure.
     fn new_blas(&self, desc: BlasDesc) -> Result<crate::backend::Blas, OutOfMemory>;
 

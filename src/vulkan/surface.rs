@@ -5,10 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use ash::vk;
+use ash::vk::{self, Handle};
 use smallvec::SmallVec;
 
 use crate::{
+    backend::new_semaphore,
     generic::{Extent2, ImageExtent, OutOfMemory, PipelineStages, SurfaceError, Swizzle, ViewDesc},
     ImageDesc,
 };
@@ -159,9 +160,36 @@ impl Surface {
         }
     }
 
+    pub(super) fn fake(device: Device, image: Image, semaphore: vk::Semaphore) -> Self {
+        Surface {
+            device,
+            surface: vk::SurfaceKHR::null(),
+            current: Some(MaybeFakeSwapchain::Fake(FakeSwapchain {
+                image,
+                semaphore,
+                frame_idx: 0,
+            })),
+            retired: VecDeque::new(),
+            caps: vk::SurfaceCapabilitiesKHR::default(),
+            formats: Vec::new(),
+            modes: Vec::new(),
+            family_supports: Vec::new(),
+
+            preferred_format: vk::SurfaceFormatKHR::default(),
+            preferred_mode: vk::PresentModeKHR::default(),
+            preferred_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            bound_queue_family: None,
+
+            suboptimal_retire: SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN),
+            lost: false,
+        }
+    }
+
     // Initialize the swapchain.
     // Retires any old swapchain.
     fn init(&mut self) -> Result<(), SurfaceError> {
+        tracing::info!("Surface '{:?}' init", self.surface);
+
         self.handle_retired()?;
 
         if self.lost {
@@ -169,28 +197,33 @@ impl Surface {
         }
         self.suboptimal_retire = SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN);
 
-        let result = unsafe {
-            self.device
-                .surface()
-                .get_physical_device_surface_capabilities(
-                    self.device.physical_device(),
-                    self.surface,
-                )
-        };
+        if !self.surface.is_null() {
+            let result = unsafe {
+                self.device
+                    .surface()
+                    .get_physical_device_surface_capabilities(
+                        self.device.physical_device(),
+                        self.surface,
+                    )
+            };
 
-        self.caps = result.map_err(|err| match err {
-            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => SurfaceError::OutOfMemory,
-            vk::Result::ERROR_SURFACE_LOST_KHR => {
-                self.lost = true;
-                SurfaceError::SurfaceLost
-            }
-            _ => unexpected_error(err),
-        })?;
+            self.caps = result.map_err(|err| match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => SurfaceError::OutOfMemory,
+                vk::Result::ERROR_SURFACE_LOST_KHR => {
+                    self.lost = true;
+                    SurfaceError::SurfaceLost
+                }
+                _ => unexpected_error(err),
+            })?;
+        }
 
         let old = self.current.take();
 
-        if self.caps.current_extent.width == 0 || self.caps.current_extent.height == 0 {
+        if self.surface.is_null()
+            || self.caps.current_extent.width == 0
+            || self.caps.current_extent.height == 0
+        {
             match old {
                 None => {}
                 Some(MaybeFakeSwapchain::Real(swapchain)) => {
@@ -482,6 +515,7 @@ impl crate::traits::Surface for Surface {
                     let idx = match result {
                         Ok((idx, false)) => idx,
                         Ok((idx, true)) => {
+                            tracing::info!("Surface '{:?}' is suboptimal", self.surface);
                             if self.suboptimal_retire == SuboptimalRetire::Cooldown(0) {
                                 self.suboptimal_retire = SuboptimalRetire::Retire;
                             }
@@ -500,6 +534,7 @@ impl crate::traits::Surface for Surface {
                             return Err(SurfaceError::SurfaceLost);
                         }
                         Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                            tracing::info!("Surface '{:?}' is out of date", self.surface);
                             self.init()?;
                             continue;
                         }
@@ -568,8 +603,8 @@ impl crate::traits::Surface for Surface {
 }
 
 pub struct Frame {
-    pub(super) swapchain: vk::SwapchainKHR,
     pub(super) image: Image,
+    pub(super) swapchain: vk::SwapchainKHR,
     pub(super) idx: u32,
     pub(super) acquire: vk::Semaphore,
     pub(super) present: vk::Semaphore,
@@ -649,13 +684,4 @@ fn pick_mode(modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
         }
     }
     panic!("Can't pick present mode");
-}
-
-fn new_semaphore(device: &ash::Device) -> Result<vk::Semaphore, OutOfMemory> {
-    let result = unsafe { device.create_semaphore(&vk::SemaphoreCreateInfo::default(), None) };
-    result.map_err(|err| match err {
-        vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-        vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-        _ => unexpected_error(err),
-    })
 }

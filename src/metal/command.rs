@@ -172,7 +172,9 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 
     #[inline(always)]
     fn present(&mut self, frame: Frame, _after: PipelineStages) {
-        self.buffer.present_drawable(frame.drawable());
+        if let Some(drawable) = frame.drawable() {
+            self.buffer.present_drawable(drawable);
+        }
     }
 
     #[inline(always)]

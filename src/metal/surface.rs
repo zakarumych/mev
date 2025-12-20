@@ -105,14 +105,14 @@ impl crate::traits::Surface for Surface {
 }
 
 pub struct Frame {
-    drawable: metal::MetalDrawable,
     image: Image,
+    drawable: Option<metal::MetalDrawable>,
 }
 
 impl Frame {
     #[cfg_attr(feature = "inline-more", inline(always))]
-    pub(super) fn drawable(&self) -> &metal::MetalDrawableRef {
-        &self.drawable
+    pub(super) fn drawable(&self) -> Option<&metal::MetalDrawableRef> {
+        self.drawable.as_deref()
     }
 }
 

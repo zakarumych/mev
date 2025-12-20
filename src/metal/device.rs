@@ -407,6 +407,10 @@ impl crate::traits::Device for Device {
         }
     }
 
+    fn new_fake_surface(&self, image: Image) -> Result<Surface, OutOfMemory> {
+        todo!()
+    }
+
     fn new_blas(&self, desc: BlasDesc) -> Result<Blas, OutOfMemory> {
         let Ok(size) = u64::try_from(desc.size) else {
             return Err(OutOfMemory);
