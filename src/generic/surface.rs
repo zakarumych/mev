@@ -1,12 +1,13 @@
 use std::fmt;
 
-use crate::generic::OutOfMemory;
+use crate::generic::{DeviceError, OutOfMemory};
 
 /// Error that can occur when working with a surface.
 #[derive(Debug)]
 pub enum SurfaceError {
-    OutOfMemory,
     SurfaceLost,
+    OutOfMemory,
+    DeviceLost,
 }
 
 impl From<OutOfMemory> for SurfaceError {
@@ -16,12 +17,23 @@ impl From<OutOfMemory> for SurfaceError {
     }
 }
 
+impl From<DeviceError> for SurfaceError {
+    #[inline(always)]
+    fn from(err: DeviceError) -> Self {
+        match err {
+            DeviceError::OutOfMemory => SurfaceError::OutOfMemory,
+            DeviceError::DeviceLost => SurfaceError::DeviceLost,
+        }
+    }
+}
+
 impl fmt::Display for SurfaceError {
     #[inline(always)]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SurfaceError::OutOfMemory => fmt::Display::fmt(&OutOfMemory, f),
             SurfaceError::SurfaceLost => f.write_str("surface lost"),
+            SurfaceError::OutOfMemory => fmt::Display::fmt(&OutOfMemory, f),
+            SurfaceError::DeviceLost => f.write_str("device lost"),
         }
     }
 }

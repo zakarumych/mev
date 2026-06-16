@@ -1,8 +1,7 @@
 use std::{error::Error, fmt, sync::Arc};
 
 use ash::vk;
-
-use crate::generic::OutOfMemory;
+use ash::vk::Handle;
 
 use super::{device::WeakDevice, layout::PipelineLayout, shader::Library};
 
@@ -49,6 +48,25 @@ impl RenderPipeline {
         }
     }
 
+    /// Creates a null/invalid RenderPipeline for use when device OOM occurs.
+    pub(super) fn null() -> Self {
+        RenderPipeline {
+            handle: vk::Pipeline::null(),
+            layout: vk::PipelineLayout::null(),
+            inner: Arc::new(Inner {
+                owner: WeakDevice::null(),
+                layout: PipelineLayout::null(),
+                idx: 0,
+                vertex_library: Library::null(),
+                fragment_library: None,
+            }),
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.handle.is_null()
+    }
+
     pub(super) fn handle(&self) -> vk::Pipeline {
         self.handle
     }
@@ -60,21 +78,12 @@ impl RenderPipeline {
 
 #[derive(Debug)]
 pub enum CreatePipelineErrorKind {
-    OutOfMemory,
     InvalidShaderEntry,
-}
-
-impl From<OutOfMemory> for CreatePipelineErrorKind {
-    #[cfg_attr(feature = "inline-more", inline(always))]
-    fn from(_: OutOfMemory) -> Self {
-        CreatePipelineErrorKind::OutOfMemory
-    }
 }
 
 impl fmt::Display for CreatePipelineErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CreatePipelineErrorKind::OutOfMemory => fmt::Display::fmt(&OutOfMemory, f),
             CreatePipelineErrorKind::InvalidShaderEntry => write!(f, "invalid shader entry"),
         }
     }

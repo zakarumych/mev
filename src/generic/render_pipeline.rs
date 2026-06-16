@@ -309,9 +309,6 @@ pub struct RasterDesc<'a> {
 /// Error during render pipeline creation.
 #[derive(Debug)]
 pub enum CreatePipelineError {
-    /// Out of memory.
-    OutOfMemory,
-
     /// Invalid shader entry point.
     InvalidShaderEntry,
 
@@ -322,7 +319,6 @@ pub enum CreatePipelineError {
 impl fmt::Display for CreatePipelineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CreatePipelineError::OutOfMemory => write!(f, "Out of memory"),
             CreatePipelineError::InvalidShaderEntry => write!(f, "Invalid shader entry point"),
             CreatePipelineError::Failure(msg) => write!(f, "Failure: {}", msg),
         }

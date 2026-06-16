@@ -5,8 +5,8 @@ use std::{
     sync::Arc,
 };
 
-use ash::vk;
-use gpu_alloc::MemoryBlock;
+use ash::vk::{self, Handle};
+use gpu_alloc::{MemoryBlock, MemoryPropertyFlags};
 
 use crate::generic::{ArgumentKind, Automatic, BufferUsage, Storage, Uniform};
 
@@ -20,7 +20,7 @@ struct Inner {
     owner: WeakDevice,
     size: usize,
     usage: BufferUsage,
-    block: ManuallyDrop<MemoryBlock<(vk::DeviceMemory, usize)>>,
+    block: Option<MemoryBlock<(vk::DeviceMemory, usize)>>,
     idx: usize,
 }
 
@@ -55,8 +55,9 @@ impl fmt::Debug for Buffer {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        let block = unsafe { ManuallyDrop::take(&mut self.block) };
-        self.owner.drop_buffer(self.idx, block);
+        if let Some(block) = self.block.take() {
+            self.owner.drop_buffer(self.idx, block);
+        }
     }
 }
 
@@ -82,10 +83,28 @@ impl Buffer {
                 owner,
                 size,
                 usage,
-                block: ManuallyDrop::new(block),
+                block: Some(block),
                 idx,
             }),
         }
+    }
+
+    /// Creates a null/invalid Buffer for use when device OOM occurs.
+    pub(super) fn null(size: usize, usage: BufferUsage) -> Self {
+        Buffer {
+            handle: vk::Buffer::null(),
+            inner: Arc::new(Inner {
+                owner: WeakDevice::null(),
+                size,
+                usage,
+                block: None,
+                idx: 0,
+            }),
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.handle.is_null()
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
@@ -112,14 +131,22 @@ impl crate::traits::Buffer for Buffer {
     #[cfg_attr(feature = "inline-more", inline(always))]
     unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]) {
         let inner = Arc::get_mut(&mut self.inner).unwrap();
-        if let Some(device) = inner.owner.upgrade() {
-            unsafe {
-                let ptr = inner
-                    .block
-                    .map(device.inner(), offset as u64, data.len())
-                    .unwrap();
-                std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr(), data.len());
-            }
+
+        let Some(block) = &mut inner.block else {
+            return;
+        };
+
+        debug_assert!(block.props().contains(MemoryPropertyFlags::HOST_VISIBLE));
+
+        let Some(device) = inner.owner.upgrade() else {
+            return;
+        };
+
+        unsafe {
+            let ptr = block
+                .map(device.inner(), offset as u64, data.len())
+                .unwrap();
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr(), data.len());
         }
     }
 }

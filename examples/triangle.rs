@@ -97,7 +97,7 @@ impl TriangleApp {
 
         let pipeline = self.pipeline.as_ref().unwrap();
 
-        let mut encoder = self.queue.new_command_encoder().unwrap();
+        let mut encoder = self.queue.new_command_encoder();
         encoder.init_image(
             mev::PipelineStages::empty(),
             mev::PipelineStages::FRAGMENT_SHADER,
@@ -126,7 +126,7 @@ impl TriangleApp {
         self.queue
             .sync_frame(&mut frame, mev::PipelineStages::FRAGMENT_SHADER);
         encoder.present(frame, mev::PipelineStages::FRAGMENT_SHADER);
-        let cbuf = encoder.finish().unwrap();
+        let cbuf = encoder.finish();
 
         self.window.as_ref().unwrap().pre_present_notify();
         self.queue.submit([cbuf], true).unwrap();

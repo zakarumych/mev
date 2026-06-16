@@ -12,9 +12,9 @@ use crate::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc, BufferSlice,
         Capabilities, ComputePipelineDesc, CreateError, CreateLibraryError, CreatePipelineError,
         CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
-        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, OutOfMemory, PipelineStages,
-        PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, SurfaceError,
-        TlasBuildDesc, TlasDesc, ViewDesc,
+        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineStages, PixelFormat,
+        RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, SurfaceError, TlasBuildDesc,
+        TlasDesc, ViewDesc,
     },
     with_metal,
 };
@@ -75,16 +75,16 @@ pub trait Device: Clone + Debug + Eq + Resource {
     ) -> Result<crate::backend::RenderPipeline, CreatePipelineError>;
 
     /// Create a new buffer with uninitialized contents.
-    fn new_buffer(&self, desc: BufferDesc) -> Result<crate::backend::Buffer, OutOfMemory>;
+    fn new_buffer(&self, desc: BufferDesc) -> crate::backend::Buffer;
 
     /// Create a new buffer and initialize it with the given data.
-    fn new_buffer_init(&self, desc: BufferInitDesc) -> Result<crate::backend::Buffer, OutOfMemory>;
+    fn new_buffer_init(&self, desc: BufferInitDesc) -> crate::backend::Buffer;
 
     /// Create a new image.
-    fn new_image(&self, desc: ImageDesc) -> Result<crate::backend::Image, OutOfMemory>;
+    fn new_image(&self, desc: ImageDesc) -> crate::backend::Image;
 
     /// Create a new sampler.
-    fn new_sampler(&self, desc: SamplerDesc) -> Result<crate::backend::Sampler, OutOfMemory>;
+    fn new_sampler(&self, desc: SamplerDesc) -> crate::backend::Sampler;
 
     /// Create a new surface associated with given window.
     fn new_surface(
@@ -97,13 +97,13 @@ pub trait Device: Clone + Debug + Eq + Resource {
     fn new_fake_surface(
         &self,
         image: crate::backend::Image,
-    ) -> Result<crate::backend::Surface, OutOfMemory>;
+    ) -> Result<crate::backend::Surface, SurfaceError>;
 
     /// Create a new bottom-level acceleration structure.
-    fn new_blas(&self, desc: BlasDesc) -> Result<crate::backend::Blas, OutOfMemory>;
+    fn new_blas(&self, desc: BlasDesc) -> crate::backend::Blas;
 
     /// Create a new top-level acceleration structure.
-    fn new_tlas(&self, desc: TlasDesc) -> Result<crate::backend::Tlas, OutOfMemory>;
+    fn new_tlas(&self, desc: TlasDesc) -> crate::backend::Tlas;
 }
 
 pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
@@ -115,7 +115,7 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
 
     /// Create a new command encoder associated with this queue.
     /// The encoder must be submitted to the queue it was created from.
-    fn new_command_encoder(&mut self) -> Result<crate::backend::CommandEncoder, OutOfMemory>;
+    fn new_command_encoder(&mut self) -> crate::backend::CommandEncoder;
 
     /// Submit command buffers to the queue.
     ///
@@ -134,7 +134,7 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     fn sync_frame(&mut self, frame: &mut crate::backend::Frame, before: PipelineStages);
 
     /// Wait for all operations on the queue to complete.
-    fn wait_idle(&self) -> Result<(), OutOfMemory>;
+    fn wait_idle(&self) -> Result<(), DeviceError>;
 }
 
 pub trait SyncCommandEncoder {
@@ -162,7 +162,7 @@ pub trait CommandEncoder: SyncCommandEncoder {
     fn present(&mut self, frame: crate::backend::Frame, after: PipelineStages);
 
     /// Finishes encoding and returns the command buffer.
-    fn finish(self) -> Result<crate::backend::CommandBuffer, OutOfMemory>;
+    fn finish(self) -> crate::backend::CommandBuffer;
 
     /// Returns encoder for copy commands.
     fn copy(&mut self) -> crate::backend::CopyCommandEncoder<'_>;
@@ -302,11 +302,7 @@ pub trait Image: Clone + Debug + Eq + Hash + Resource {
     fn usage(&self) -> ImageUsage;
 
     /// Returns new image that is a view into this image.
-    fn view(
-        &self,
-        device: &crate::backend::Device,
-        desc: ViewDesc,
-    ) -> Result<crate::backend::Image, OutOfMemory>;
+    fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> crate::backend::Image;
 
     /// Returns `true` if the image is not shared,
     /// meaning that there are no other references to the image

@@ -73,6 +73,17 @@ impl Sampler {
         }
     }
 
+    /// Creates a null/invalid Sampler for use when device OOM occurs.
+    pub(super) fn null() -> Self {
+        Sampler {
+            handle: vk::Sampler::null(),
+            inner: Arc::new(Inner {
+                owner: WeakDevice::null(),
+                desc: SamplerDesc::default(),
+            }),
+        }
+    }
+
     #[cfg_attr(feature = "inline-more", inline(always))]
     pub(super) fn downgrade(&self) -> WeakSampler {
         WeakSampler {

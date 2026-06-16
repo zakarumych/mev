@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use ash::vk;
+use ash::vk::{self, Handle};
 use gpu_alloc::MemoryBlock;
 use hashbrown::{hash_map::Entry, HashMap};
 use parking_lot::Mutex;
@@ -205,8 +205,60 @@ impl Image {
         )
     }
 
+    /// Creates a null/invalid Image for use when device OOM occurs.
+    pub(super) fn null(
+        extent: ImageExtent,
+        format: PixelFormat,
+        usage: ImageUsage,
+        layers: u32,
+        levels: u32,
+    ) -> Self {
+        let desc = ViewDesc {
+            format,
+            base_layer: 0,
+            layers,
+            base_level: 0,
+            levels,
+            swizzle: Swizzle::IDENTITY,
+        };
+        Image {
+            handle: vk::Image::null(),
+            view: vk::ImageView::null(),
+            inner: Arc::new(Inner {
+                data: Arc::new(ImageData {
+                    owner: WeakDevice::null(),
+                    format,
+                    usage: ImageUsage::empty(),
+                    extent,
+                    layers,
+                    levels,
+                    flavor: Flavor::Swapchain,
+                    views: Mutex::new(hashbrown::HashMap::new()),
+                }),
+                desc,
+                extent,
+                usage: ImageUsage::empty(),
+                owner: WeakDevice::null(),
+            }),
+        }
+    }
+
     #[cfg_attr(feature = "inline-more", inline(always))]
-    pub(super) fn get_view(&self, device: &Device, desc: ViewDesc) -> Result<Image, OutOfMemory> {
+    pub(super) fn get_view(&self, device: &Device, desc: ViewDesc) -> Image {
+        if self.handle.is_null() || self.view.is_null() {
+            return Image {
+                handle: vk::Image::null(),
+                view: vk::ImageView::null(),
+                inner: Arc::new(Inner {
+                    data: self.inner.data.clone(),
+                    desc,
+                    extent: self.inner.extent,
+                    usage: self.inner.usage,
+                    owner: self.inner.owner.clone(),
+                }),
+            };
+        }
+
         let desc = ViewDesc {
             base_layer: desc.base_layer + self.inner.desc.base_layer,
             base_level: desc.base_level + self.inner.desc.base_level,
@@ -214,19 +266,33 @@ impl Image {
         };
 
         if self.inner.desc == desc {
-            return Ok(self.clone());
+            return self.clone();
         }
 
         let view = match self.inner.data.views.lock().entry(desc) {
             Entry::Occupied(entry) => entry.get().0,
             Entry::Vacant(entry) => {
-                let (view, idx) =
-                    device.new_image_view(self.handle, self.inner.extent.into_ash(), desc)?;
-                entry.insert((view, idx)).0
+                match device.new_image_view(self.handle, self.inner.extent.into_ash(), desc) {
+                    Ok((view, idx)) => entry.insert((view, idx)).0,
+                    Err(OutOfMemory) => {
+                        device.set_oom();
+                        return Image {
+                            handle: vk::Image::null(),
+                            view: vk::ImageView::null(),
+                            inner: Arc::new(Inner {
+                                data: self.inner.data.clone(),
+                                desc,
+                                extent: self.inner.extent,
+                                usage: self.inner.usage,
+                                owner: self.inner.owner.clone(),
+                            }),
+                        };
+                    }
+                }
             }
         };
 
-        Ok(Image {
+        Image {
             handle: self.handle,
             view,
             inner: Arc::new(Inner {
@@ -236,7 +302,7 @@ impl Image {
                 usage: self.inner.usage,
                 owner: self.inner.owner.clone(),
             }),
-        })
+        }
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
@@ -290,7 +356,7 @@ impl crate::traits::Image for Image {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    fn view(&self, device: &Device, desc: ViewDesc) -> Result<Image, OutOfMemory> {
+    fn view(&self, device: &Device, desc: ViewDesc) -> Image {
         self.get_view(device, desc)
     }
 

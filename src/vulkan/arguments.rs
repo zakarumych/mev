@@ -38,13 +38,20 @@ where
 
         let device = encoder.device();
 
+        if device.is_oom() {
+            encoder.set_invalid();
+            return;
+        }
+
         let Ok(template) = device.get_descriptor_update_template::<Self>(
             Self::template_entries(),
             ash::vk::PipelineBindPoint::GRAPHICS,
             layout,
             group,
         ) else {
-            panic!("Failed to create descriptor update template");
+            device.set_oom();
+            encoder.set_invalid();
+            return;
         };
 
         let update = self.update();
@@ -72,13 +79,20 @@ where
 
         let device = encoder.device();
 
+        if device.is_oom() {
+            encoder.set_invalid();
+            return;
+        }
+
         let Ok(template) = device.get_descriptor_update_template::<Self>(
             Self::template_entries(),
             ash::vk::PipelineBindPoint::COMPUTE,
             layout,
             group,
         ) else {
-            panic!("Failed to create descriptor update template");
+            device.set_oom();
+            encoder.set_invalid();
+            return;
         };
 
         let update = self.update();

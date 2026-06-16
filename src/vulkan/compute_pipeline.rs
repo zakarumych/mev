@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use ash::vk;
-
-use crate::generic::OutOfMemory;
+use ash::vk::Handle;
 
 use super::{device::WeakDevice, layout::PipelineLayout, shader::Library};
 
@@ -44,6 +43,24 @@ impl ComputePipeline {
                 shader_library,
             }),
         }
+    }
+
+    /// Creates a null/invalid ComputePipeline for use when device OOM occurs.
+    pub(super) fn null() -> Self {
+        ComputePipeline {
+            handle: vk::Pipeline::null(),
+            layout: vk::PipelineLayout::null(),
+            inner: Arc::new(Inner {
+                owner: WeakDevice::null(),
+                layout: PipelineLayout::null(),
+                idx: 0,
+                shader_library: Library::null(),
+            }),
+        }
+    }
+
+    pub fn is_null(&self) -> bool {
+        self.handle.is_null()
     }
 
     pub(super) fn handle(&self) -> vk::Pipeline {

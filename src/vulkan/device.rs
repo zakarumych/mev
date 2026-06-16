@@ -3,7 +3,10 @@ use std::{
     ffi, fmt,
     hash::{Hash, Hasher},
     ptr::NonNull,
-    sync::{Arc, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+    },
 };
 
 use ash::vk::{self, Handle};
@@ -18,10 +21,10 @@ use crate::{
     backend::new_semaphore,
     generic::{
         parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        CreateLibraryError, CreatePipelineError, Features, ImageDesc, ImageExtent, LibraryDesc,
-        LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc, SamplerDesc,
-        ShaderCompileError, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode,
-        ViewDesc,
+        CreateLibraryError, CreatePipelineError, DeviceError, Features, ImageDesc, ImageExtent,
+        LibraryDesc, LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc,
+        SamplerDesc, ShaderCompileError, ShaderLanguage, SurfaceError, Swizzle, TlasDesc,
+        VertexStepMode, ViewDesc,
     },
 };
 
@@ -241,6 +244,10 @@ pub(super) struct DeviceInner {
     features: Features,
     properties: ash::vk::PhysicalDeviceProperties,
 
+    /// Sticky OOM flag: set when any resource creation fails with device OOM.
+    /// Reported back on the next wait_idle / submit call.
+    oom: AtomicBool,
+
     memory: Mutex<Slab<vk::DeviceMemory>>,
     buffers: Mutex<Slab<vk::Buffer>>,
     images: Mutex<Slab<vk::Image>>,
@@ -353,6 +360,11 @@ pub(super) struct WeakDevice {
 }
 
 impl WeakDevice {
+    /// Creates a WeakDevice that will never upgrade (for null/OOM resources).
+    pub(super) fn null() -> Self {
+        WeakDevice { inner: Weak::new() }
+    }
+
     #[cfg_attr(feature = "inline-more", inline(always))]
     pub fn upgrade(&self) -> Option<Device> {
         self.inner.upgrade().map(|inner| Device { inner })
@@ -576,6 +588,7 @@ impl Device {
                 features,
                 properties,
                 memory: Mutex::new(Slab::with_capacity(64)),
+                oom: AtomicBool::new(false),
                 buffers: Mutex::new(Slab::with_capacity(1024)),
                 images: Mutex::new(Slab::with_capacity(1024)),
                 image_views: Mutex::new(Slab::with_capacity(1024)),
@@ -620,6 +633,17 @@ impl Device {
     #[cfg_attr(feature = "inline-more", inline(always))]
     pub(super) fn is_owner(&self, owned: &impl DeviceOwned) -> bool {
         self.is(owned.owner())
+    }
+
+    /// Sets the sticky out-of-device-memory flag.
+    #[cold]
+    pub(super) fn set_oom(&self) {
+        self.inner.oom.store(true, Ordering::Relaxed);
+    }
+
+    /// Returns true if the sticky OOM flag is set (without clearing it).
+    pub(super) fn is_oom(&self) -> bool {
+        self.inner.oom.load(Ordering::Relaxed)
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
@@ -679,9 +703,10 @@ impl Device {
     }
 
     #[cfg_attr(feature = "inline-more", inline(always))]
-    fn new_sampler_slow(&self, count: usize, desc: SamplerDesc) -> Result<Sampler, OutOfMemory> {
+    fn new_sampler_slow(&self, count: usize, desc: SamplerDesc) -> Sampler {
         if self.inner.properties.limits.max_sampler_allocation_count as usize <= count {
-            return Err(OutOfMemory);
+            self.set_oom();
+            return Sampler::null();
         }
 
         let result = unsafe {
@@ -700,13 +725,19 @@ impl Device {
             )
         };
 
-        let handle = result.map_err(|err| match err {
-            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            _ => unexpected_error(err),
-        })?;
+        let handle = match result {
+            Ok(handle) => handle,
+            Err(err) => match err {
+                ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.set_oom();
+                    return Sampler::null();
+                }
+                _ => unexpected_error(err),
+            },
+        };
 
-        Ok(Sampler::new(self.weak(), handle, desc))
+        Sampler::new(self.weak(), handle, desc)
     }
 
     fn new_set_layout_slow(
@@ -924,33 +955,31 @@ impl Device {
         match unsafe { self.ash().get_fence_status(fence) } {
             Ok(true) => Ok(true),
             Ok(false) => Ok(false),
-            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => Err(handle_host_oom()),
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
             Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => Err(OutOfMemory),
-            Err(err) => Err(unexpected_error(err)),
+            Err(err) => unexpected_error(err),
         }
     }
 
     pub(super) fn reset_fences(&self, fences: &[vk::Fence]) -> Result<(), OutOfMemory> {
         match unsafe { self.ash().reset_fences(fences) } {
             Ok(()) => Ok(()),
-            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => Err(handle_host_oom()),
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
             Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => Err(OutOfMemory),
-            Err(err) => Err(unexpected_error(err)),
+            Err(err) => unexpected_error(err),
         }
     }
 
     /// Wait for all operations on the device to complete.
-    pub(super) fn wait_idle(&self) -> Result<(), OutOfMemory> {
+    pub(super) fn wait_idle(&self) -> Result<(), DeviceError> {
         let result = unsafe { self.inner.device.device_wait_idle() };
 
-        let result = result.map_err(|err| match err {
+        result.map_err(|err| match err {
             ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
+            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
+            ash::vk::Result::ERROR_DEVICE_LOST => DeviceError::DeviceLost,
             _ => unexpected_error(err),
-        });
-
-        result
+        })
     }
 }
 
@@ -993,18 +1022,23 @@ impl crate::traits::Device for Device {
                         None,
                     )
                 };
-                let module = result.map_err(|err| match err {
-                    vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreateLibraryError::OutOfMemory,
-                    _ => unexpected_error(err),
-                })?;
 
-                let idx = self.inner.libraries.lock().insert(module);
+                match result {
+                    Ok(module) => {
+                        let idx = self.inner.libraries.lock().insert(module);
 
-                #[cfg(any(debug_assertions, feature = "debug"))]
-                self.set_object_name(module, desc.name);
+                        #[cfg(any(debug_assertions, feature = "debug"))]
+                        self.set_object_name(module, desc.name);
 
-                Ok(Library::new(self.weak(), module, idx))
+                        Ok(Library::new(self.weak(), module, idx))
+                    }
+                    Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                        self.set_oom();
+                        Ok(Library::null())
+                    }
+                    Err(result) => unexpected_error(result),
+                }
             }
         }
     }
@@ -1023,9 +1057,10 @@ impl crate::traits::Device for Device {
             constants: desc.constants,
         };
 
-        let layout = self
-            .new_pipeline_layout(layout_desc)
-            .map_err(|OutOfMemory| CreatePipelineError::OutOfMemory)?;
+        let Ok(layout) = self.new_pipeline_layout(layout_desc) else {
+            self.set_oom();
+            return Ok(ComputePipeline::null());
+        };
 
         let shader_name;
 
@@ -1049,11 +1084,14 @@ impl crate::traits::Device for Device {
             )
         };
 
-        let pipelines = result.map_err(|(_, err)| match err {
+        let Ok(pipelines) = result.map_err(|(_, err)| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError::OutOfMemory,
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => (),
             _ => unexpected_error(err),
-        })?;
+        }) else {
+            self.set_oom();
+            return Ok(ComputePipeline::null());
+        };
         let pipeline = pipelines[0];
 
         #[cfg(any(debug_assertions, feature = "debug"))]
@@ -1083,9 +1121,10 @@ impl crate::traits::Device for Device {
             constants: desc.constants,
         };
 
-        let layout = self
-            .new_pipeline_layout(layout_desc)
-            .map_err(|OutOfMemory| CreatePipelineError::OutOfMemory)?;
+        let Ok(layout) = self.new_pipeline_layout(layout_desc) else {
+            self.set_oom();
+            return Ok(RenderPipeline::null());
+        };
 
         let vertex_attributes = desc
             .vertex_attributes
@@ -1268,11 +1307,14 @@ impl crate::traits::Device for Device {
             )
         };
 
-        let pipelines = result.map_err(|(_, err)| match err {
+        let Ok(pipelines) = result.map_err(|(_, err)| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError::OutOfMemory,
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => (),
             _ => unexpected_error(err),
-        })?;
+        }) else {
+            self.set_oom();
+            return Ok(RenderPipeline::null());
+        };
         let pipeline = pipelines[0];
 
         #[cfg(any(debug_assertions, feature = "debug"))]
@@ -1290,28 +1332,38 @@ impl crate::traits::Device for Device {
         ))
     }
 
-    fn new_buffer(&self, desc: BufferDesc) -> Result<Buffer, OutOfMemory> {
-        let size = u64::try_from(desc.size).map_err(|_| OutOfMemory)?;
+    fn new_buffer(&self, desc: BufferDesc) -> Buffer {
+        let Ok(size) = u64::try_from(desc.size) else {
+            self.set_oom();
+            return Buffer::null(desc.size, desc.usage);
+        };
 
-        let buffer = unsafe {
-            self.inner.device.create_buffer(
+        let result = unsafe {
+            self.ash().create_buffer(
                 &vk::BufferCreateInfo::default()
                     .size(size)
                     .sharing_mode(vk::SharingMode::EXCLUSIVE)
                     .usage(desc.usage.into_ash()),
                 None,
             )
-        }
-        .map_err(|err| match err {
-            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            err => unexpected_error(err),
-        })?;
+        };
 
-        let requirements = unsafe { self.inner.device.get_buffer_memory_requirements(buffer) };
+        let buffer = match result {
+            Ok(buffer) => buffer,
+            Err(err) => match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.set_oom();
+                    return Buffer::null(desc.size, desc.usage);
+                }
+                _ => unexpected_error(err),
+            },
+        };
+
+        let requirements = unsafe { self.ash().get_buffer_memory_requirements(buffer) };
         let align_mask = requirements.alignment - 1;
 
-        let block = unsafe {
+        let result = unsafe {
             self.inner.allocator.lock().alloc(
                 &*self.inner,
                 gpu_alloc::Request {
@@ -1321,17 +1373,22 @@ impl crate::traits::Device for Device {
                     memory_types: requirements.memory_type_bits,
                 },
             )
-        }
-        .map_err(|err| match err {
-            gpu_alloc::AllocationError::OutOfDeviceMemory => OutOfMemory,
-            gpu_alloc::AllocationError::OutOfHostMemory => handle_host_oom(),
-            gpu_alloc::AllocationError::NoCompatibleMemoryTypes => OutOfMemory,
-            gpu_alloc::AllocationError::TooManyObjects => OutOfMemory,
-        })?;
+        };
+
+        let block = match result {
+            Ok(block) => block,
+            Err(gpu_alloc::AllocationError::OutOfHostMemory) => handle_host_oom(),
+            _ => {
+                self.set_oom();
+                unsafe {
+                    self.ash().destroy_buffer(buffer, None);
+                }
+                return Buffer::null(desc.size, desc.usage);
+            }
+        };
 
         let result = unsafe {
-            self.inner
-                .device
+            self.ash()
                 .bind_buffer_memory(buffer, block.memory().0, block.offset())
         };
 
@@ -1342,8 +1399,7 @@ impl crate::traits::Device for Device {
 
                 let idx = self.inner.buffers.lock().insert(buffer);
 
-                let buffer = Buffer::new(self.weak(), buffer, desc.size, desc.usage, block, idx);
-                Ok(buffer)
+                Buffer::new(self.weak(), buffer, desc.size, desc.usage, block, idx)
             }
             Err(err) => {
                 unsafe {
@@ -1354,14 +1410,17 @@ impl crate::traits::Device for Device {
 
                 match err {
                     vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => Err(OutOfMemory),
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                        self.set_oom();
+                        Buffer::null(desc.size, desc.usage)
+                    }
                     _ => unexpected_error(err),
                 }
             }
         }
     }
 
-    fn new_buffer_init(&self, desc: BufferInitDesc<'_>) -> Result<Buffer, OutOfMemory> {
+    fn new_buffer_init(&self, desc: BufferInitDesc<'_>) -> Buffer {
         assert!(!matches!(desc.memory, Memory::Device));
 
         let mut buffer = self.new_buffer(BufferDesc {
@@ -1369,18 +1428,18 @@ impl crate::traits::Device for Device {
             usage: desc.usage,
             memory: desc.memory,
             name: desc.name,
-        })?;
+        });
 
         // Safety: Buffer is not user anywhere
         // and created with HOST_VISIBLE flag.
         unsafe {
             buffer.write_unchecked(0, desc.data);
         }
-        Ok(buffer)
+        buffer
     }
 
-    fn new_image(&self, desc: ImageDesc) -> Result<Image, OutOfMemory> {
-        let image = unsafe {
+    fn new_image(&self, desc: ImageDesc) -> Image {
+        let result = unsafe {
             self.inner.device.create_image(
                 &vk::ImageCreateInfo::default()
                     .image_type(desc.extent.into_ash())
@@ -1394,12 +1453,25 @@ impl crate::traits::Device for Device {
                     .initial_layout(vk::ImageLayout::UNDEFINED),
                 None,
             )
-        }
-        .map_err(|err| match err {
-            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            err => unexpected_error(err),
-        })?;
+        };
+
+        let image = match result {
+            Ok(image) => image,
+            Err(err) => match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.set_oom();
+                    return Image::null(
+                        desc.extent,
+                        desc.format,
+                        desc.usage,
+                        desc.layers,
+                        desc.levels,
+                    );
+                }
+                _ => unexpected_error(err),
+            },
+        };
 
         let requirements = unsafe { self.inner.device.get_image_memory_requirements(image) };
         let align_mask = requirements.alignment - 1;
@@ -1423,10 +1495,17 @@ impl crate::traits::Device for Device {
                     self.inner.device.destroy_image(image, None);
                 }
                 match err {
-                    gpu_alloc::AllocationError::OutOfDeviceMemory => return Err(OutOfMemory),
                     gpu_alloc::AllocationError::OutOfHostMemory => handle_host_oom(),
-                    gpu_alloc::AllocationError::NoCompatibleMemoryTypes => return Err(OutOfMemory),
-                    gpu_alloc::AllocationError::TooManyObjects => return Err(OutOfMemory),
+                    _ => {
+                        self.set_oom();
+                        return Image::null(
+                            desc.extent,
+                            desc.format,
+                            desc.usage,
+                            desc.layers,
+                            desc.levels,
+                        );
+                    }
                 }
             }
         };
@@ -1445,7 +1524,16 @@ impl crate::traits::Device for Device {
 
             match err {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => return Err(OutOfMemory),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.set_oom();
+                    return Image::null(
+                        desc.extent,
+                        desc.format,
+                        desc.usage,
+                        desc.layers,
+                        desc.levels,
+                    );
+                }
                 _ => unexpected_error(err),
             }
         }
@@ -1471,7 +1559,14 @@ impl crate::traits::Device for Device {
                     self.inner.allocator.lock().dealloc(&*self.inner, block);
                 }
 
-                return Err(OutOfMemory);
+                self.set_oom();
+                return Image::null(
+                    desc.extent,
+                    desc.format,
+                    desc.usage,
+                    desc.layers,
+                    desc.levels,
+                );
             }
         };
 
@@ -1480,7 +1575,7 @@ impl crate::traits::Device for Device {
 
         let idx = self.inner.images.lock().insert(image);
 
-        let image = Image::new(
+        Image::new(
             self.weak(),
             image,
             view,
@@ -1492,26 +1587,25 @@ impl crate::traits::Device for Device {
             desc.levels,
             block,
             idx,
-        );
-        return Ok(image);
+        )
     }
 
-    fn new_sampler(&self, desc: SamplerDesc) -> Result<Sampler, OutOfMemory> {
+    fn new_sampler(&self, desc: SamplerDesc) -> Sampler {
         let mut samplers = self.inner.samplers.lock();
         let len = samplers.len();
         match samplers.entry(desc) {
             hashbrown::hash_map::Entry::Occupied(mut entry) => match entry.get().upgrade() {
-                Some(sampler) => Ok(sampler),
+                Some(sampler) => sampler,
                 None => {
-                    let sampler = self.new_sampler_slow(len, desc)?;
+                    let sampler = self.new_sampler_slow(len, desc);
                     entry.insert(sampler.downgrade());
-                    Ok(sampler)
+                    sampler
                 }
             },
             hashbrown::hash_map::Entry::Vacant(entry) => {
-                let sampler = self.new_sampler_slow(len, desc)?;
+                let sampler = self.new_sampler_slow(len, desc);
                 entry.insert(sampler.downgrade());
-                Ok(sampler)
+                sampler
             }
         }
     }
@@ -1616,18 +1710,18 @@ impl crate::traits::Device for Device {
         }
     }
 
-    fn new_fake_surface(&self, image: Image) -> Result<Surface, OutOfMemory> {
+    fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {
         let semaphore = new_semaphore(self.ash())?;
         Ok(Surface::fake(self.clone(), image, semaphore))
     }
 
     /// Create a new bottom-level acceleration structure.
-    fn new_blas(&self, desc: BlasDesc) -> Result<Blas, OutOfMemory> {
+    fn new_blas(&self, desc: BlasDesc) -> Blas {
         todo!()
     }
 
     /// Create a new top-level acceleration structure.
-    fn new_tlas(&self, desc: TlasDesc) -> Result<Tlas, OutOfMemory> {
+    fn new_tlas(&self, desc: TlasDesc) -> Tlas {
         todo!()
     }
 }

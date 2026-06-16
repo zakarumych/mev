@@ -7,7 +7,7 @@ use codespan_reporting::{
 };
 use naga::FastHashMap;
 
-use crate::{backend::Library, generic::OutOfMemory};
+use crate::backend::Library;
 
 /// Shader stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -156,18 +156,8 @@ pub struct Shader<'a> {
 /// Error that can occur during library creation.
 #[derive(Debug)]
 pub enum CreateLibraryError {
-    /// Out of memory.
-    OutOfMemory,
-
     /// Shader compilation error.
     CompileError(ShaderCompileError),
-}
-
-impl From<OutOfMemory> for CreateLibraryError {
-    #[inline(always)]
-    fn from(_: OutOfMemory) -> Self {
-        CreateLibraryError::OutOfMemory
-    }
 }
 
 impl From<ShaderCompileError> for CreateLibraryError {
@@ -180,7 +170,6 @@ impl From<ShaderCompileError> for CreateLibraryError {
 impl fmt::Display for CreateLibraryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CreateLibraryError::OutOfMemory => fmt::Display::fmt(&OutOfMemory, f),
             CreateLibraryError::CompileError(err) => fmt::Display::fmt(err, f),
         }
     }

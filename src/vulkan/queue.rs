@@ -468,21 +468,35 @@ impl crate::traits::Queue for Queue {
 
     /// Create a new command encoder associated with this queue.
     /// The encoder must be submitted to the queue it was created from.
-    fn new_command_encoder(&mut self) -> Result<CommandEncoder, OutOfMemory> {
+    fn new_command_encoder(&mut self) -> CommandEncoder {
         let device = self.device.ash();
-        Self::refresh_pools(&mut self.pools, device)?;
-        let pool = Self::get_pool(&mut self.pools, device)?;
+        let pool_result = Self::refresh_pools(&mut self.pools, device)
+            .and_then(|_| Self::get_pool(&mut self.pools, device).map(|p| p as *mut Pool));
+
+        let pool = match pool_result {
+            Ok(pool) => unsafe { &mut *pool },
+            Err(_) => {
+                self.device.set_oom();
+                return CommandEncoder::poisoned(self.device.clone());
+            }
+        };
 
         let device = self.device.ash();
 
-        let handle = pool.allocate(device)?;
+        let handle = match pool.allocate(device) {
+            Ok(h) => h,
+            Err(_) => {
+                self.device.set_oom();
+                return CommandEncoder::poisoned(self.device.clone());
+            }
+        };
 
-        Ok(CommandEncoder::new(
+        CommandEncoder::new(
             self.device.clone(),
             handle,
             pool.pool,
             self.free_refs.pop().unwrap_or_else(Refs::new),
-        ))
+        )
     }
 
     /// Submit command buffers to the queue.
@@ -518,8 +532,13 @@ impl crate::traits::Queue for Queue {
 
         // Add handle to list of command buffers to submit.
         // Collect frames to present and command buffers into the cache array.
+        let mut any_invalid = false;
         for mut cbuf in command_buffers {
-            self.command_buffer_submit.push(cbuf.handle);
+            if !cbuf.invalid {
+                self.command_buffer_submit.push(cbuf.handle);
+            } else {
+                any_invalid = true;
+            }
 
             for frame in &cbuf.present {
                 if frame.is_real() {
@@ -685,17 +704,21 @@ impl crate::traits::Queue for Queue {
         frame.synced = true;
     }
 
-    fn wait_idle(&self) -> Result<(), OutOfMemory> {
+    fn wait_idle(&self) -> Result<(), DeviceError> {
         let result = unsafe { self.device.ash().queue_wait_idle(self.handle) };
 
         let result = result.map_err(|err| match err {
             ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => OutOfMemory,
-            ash::vk::Result::ERROR_DEVICE_LOST => unimplemented!("Device lost"),
+            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
+            ash::vk::Result::ERROR_DEVICE_LOST => DeviceError::DeviceLost,
             _ => unexpected_error(err),
         });
 
         self.pending_epochs.queue_is_idle();
+
+        if result.is_ok() && self.device.is_oom() {
+            return Err(DeviceError::OutOfMemory);
+        }
 
         result
     }

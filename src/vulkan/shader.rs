@@ -1,4 +1,9 @@
-use std::{borrow::Cow, fmt, hash::{Hash, Hasher}, sync::Arc};
+use std::{
+    borrow::Cow,
+    fmt,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use ash::vk;
 
@@ -28,6 +33,17 @@ impl Library {
         Library {
             module,
             inner: Arc::new(LibraryInner { idx, owner }),
+        }
+    }
+
+    /// Creates a null/invalid Library for use when device OOM occurs.
+    pub(super) fn null() -> Self {
+        Library {
+            module: vk::ShaderModule::null(),
+            inner: Arc::new(LibraryInner {
+                idx: 0,
+                owner: WeakDevice::null(),
+            }),
         }
     }
 

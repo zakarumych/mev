@@ -198,4 +198,20 @@ impl PipelineLayout {
     {
         &self.inner.templates
     }
+
+    /// Creates a null/invalid PipelineLayout for use when device OOM occurs.
+    pub(super) fn null() -> Self {
+        PipelineLayout {
+            handle: ash::vk::PipelineLayout::null(),
+            inner: Arc::new(PipelineLayoutInner {
+                owner: WeakDevice::null(),
+                desc: PipelineLayoutDesc {
+                    groups: Vec::new(),
+                    constants: 0,
+                },
+                templates: Mutex::new(HashMap::new()),
+                set_layouts: Vec::new(),
+            }),
+        }
+    }
 }

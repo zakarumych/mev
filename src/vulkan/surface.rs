@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use crate::{
     backend::new_semaphore,
     generic::{Extent2, ImageExtent, OutOfMemory, PipelineStages, SurfaceError, Swizzle, ViewDesc},
-    ImageDesc,
+    DeviceError, ImageDesc,
 };
 
 use super::{
@@ -247,7 +247,7 @@ impl Surface {
                 layers: 1,
                 levels: 1,
                 name: "fake-swapchain-image",
-            })?;
+            });
 
             let semaphore = new_semaphore(self.device.ash())?;
 
@@ -377,7 +377,7 @@ impl Surface {
         Ok(())
     }
 
-    fn handle_retired(&mut self) -> Result<(), OutOfMemory> {
+    fn handle_retired(&mut self) -> Result<(), DeviceError> {
         self.clear_retired(true)?;
 
         if self.retired.len() >= 8 {
@@ -387,7 +387,7 @@ impl Surface {
         Ok(())
     }
 
-    fn force_clear_retired(&mut self) -> Result<(), OutOfMemory> {
+    fn force_clear_retired(&mut self) -> Result<(), DeviceError> {
         self.device.wait_idle()?;
 
         self.clear_retired(false)?;
@@ -400,7 +400,7 @@ impl Surface {
         Ok(())
     }
 
-    fn clear_retired(&mut self, mut do_wait: bool) -> Result<(), OutOfMemory> {
+    fn clear_retired(&mut self, mut do_wait: bool) -> Result<(), DeviceError> {
         let device = self.device.ash();
 
         while let Some(mut swapchain) = self.retired.pop_front() {
