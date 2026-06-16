@@ -101,11 +101,11 @@ pub struct ShaderSource<'a> {
 /// Convenience macro to include shader source code from a file during compilation.
 #[macro_export]
 macro_rules! include_shader_source {
-    ($filename:literal as $lang:expr) => {
+    ($lang:tt $filename:expr) => {
         $crate::for_macro::ShaderSource {
             code: std::borrow::Cow::Borrowed(std::include_bytes!($filename)),
             filename: std::option::Option::Some($filename),
-            language: $lang,
+            language: $crate::ShaderLanguage::$lang,
         }
     };
 }
@@ -118,11 +118,18 @@ pub enum LibraryInput<'a> {
     Source(ShaderSource<'a>),
 }
 
+impl<'a> From<ShaderSource<'a>> for LibraryInput<'a> {
+    #[inline(always)]
+    fn from(source: ShaderSource<'a>) -> Self {
+        LibraryInput::Source(source)
+    }
+}
+
 /// Convenience macro to include shader library input from a source code file during compilation.
 #[macro_export]
 macro_rules! include_library {
-    ($filename:literal as $lang:expr) => {
-        $crate::for_macro::LibraryInput::Source($crate::include_shader_source!($filename as $lang))
+    ($lang:tt $filename:expr) => {
+        $crate::for_macro::LibraryInput::Source($crate::include_shader_source!($lang $filename))
     };
 }
 

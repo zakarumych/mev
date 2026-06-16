@@ -58,9 +58,7 @@ impl TriangleApp {
                 .queue
                 .new_shader_library(mev::LibraryDesc {
                     name: "main",
-                    input: mev::include_library!(
-                        "shaders/triangle.wgsl" as mev::ShaderLanguage::Wgsl
-                    ),
+                    input: mev::include_library!(Wgsl "shaders/triangle.wgsl"),
                 })
                 .unwrap();
 

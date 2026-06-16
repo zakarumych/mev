@@ -128,16 +128,14 @@ impl crate::traits::Device for Device {
             .shader
             .library
             .get_function(&desc.shader.entry)
-            .ok_or_else(|| CreatePipelineError(CreatePipelineErrorKind::InvalidShaderEntry))?;
+            .ok_or_else(|| CreatePipelineError::InvalidShaderEntry)?;
 
         mdesc.set_compute_function(Some(&compute_function));
 
         let pipeline = self
             .device
             .new_compute_pipeline_state(&mdesc)
-            .map_err(|err| {
-                CreatePipelineError(CreatePipelineErrorKind::FailedToBuildPipeline(err))
-            })?;
+            .map_err(|err| CreatePipelineError::Failure(err))?;
 
         Ok(ComputePipeline::new(
             pipeline,

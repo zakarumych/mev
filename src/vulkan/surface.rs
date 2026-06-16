@@ -134,7 +134,7 @@ impl Surface {
         let preferred_format = pick_format(&formats);
         let preferred_mode = pick_mode(&modes);
 
-        tracing::info!(
+        tracing::debug!(
             "New surface preferred format: '{:?}' and mode: '{:?}'",
             preferred_format,
             preferred_mode
@@ -188,7 +188,7 @@ impl Surface {
     // Initialize the swapchain.
     // Retires any old swapchain.
     fn init(&mut self) -> Result<(), SurfaceError> {
-        tracing::info!("Surface '{:?}' init", self.surface);
+        tracing::debug!("Surface '{:?}' init", self.surface);
 
         self.handle_retired()?;
 
@@ -515,7 +515,7 @@ impl crate::traits::Surface for Surface {
                     let idx = match result {
                         Ok((idx, false)) => idx,
                         Ok((idx, true)) => {
-                            tracing::info!("Surface '{:?}' is suboptimal", self.surface);
+                            tracing::debug!("Surface '{:?}' is suboptimal", self.surface);
                             if self.suboptimal_retire == SuboptimalRetire::Cooldown(0) {
                                 self.suboptimal_retire = SuboptimalRetire::Retire;
                             }
@@ -534,7 +534,7 @@ impl crate::traits::Surface for Surface {
                             return Err(SurfaceError::SurfaceLost);
                         }
                         Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                            tracing::info!("Surface '{:?}' is out of date", self.surface);
+                            tracing::debug!("Surface '{:?}' is out of date", self.surface);
                             self.init()?;
                             continue;
                         }

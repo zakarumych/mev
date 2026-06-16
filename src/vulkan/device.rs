@@ -1025,7 +1025,7 @@ impl crate::traits::Device for Device {
 
         let layout = self
             .new_pipeline_layout(layout_desc)
-            .map_err(|err| CreatePipelineError(err.into()))?;
+            .map_err(|OutOfMemory| CreatePipelineError::OutOfMemory)?;
 
         let shader_name;
 
@@ -1051,7 +1051,7 @@ impl crate::traits::Device for Device {
 
         let pipelines = result.map_err(|(_, err)| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError(OutOfMemory.into()),
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError::OutOfMemory,
             _ => unexpected_error(err),
         })?;
         let pipeline = pipelines[0];
@@ -1085,7 +1085,7 @@ impl crate::traits::Device for Device {
 
         let layout = self
             .new_pipeline_layout(layout_desc)
-            .map_err(|err| CreatePipelineError(err.into()))?;
+            .map_err(|OutOfMemory| CreatePipelineError::OutOfMemory)?;
 
         let vertex_attributes = desc
             .vertex_attributes
@@ -1270,7 +1270,7 @@ impl crate::traits::Device for Device {
 
         let pipelines = result.map_err(|(_, err)| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError(OutOfMemory.into()),
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreatePipelineError::OutOfMemory,
             _ => unexpected_error(err),
         })?;
         let pipeline = pipelines[0];

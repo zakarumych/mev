@@ -1,5 +1,3 @@
-
-
 /// Format of the pixel.
 ///
 /// It specifies channels, channel bits and data type.
@@ -232,6 +230,42 @@ pub enum PixelFormat {
 
     /// 32-bit floating-point depth and 8-bit unsigned stencil channels.
     D32FloatS8Uint,
+
+    /// BC1 compressed format with RGB channels and unsigned normalized data.
+    Bc1RgbUnorm,
+
+    /// BC1 compressed format with RGB channels and unsigned normalized data in sRGB color space.
+    Bc1RgbSrgb,
+
+    /// BC1 compressed format with RGBA channels and unsigned normalized data.
+    Bc1RgbaUnorm,
+
+    /// BC1 compressed format with RGBA channels and unsigned normalized data in sRGB color space.
+    Bc1RgbaSrgb,
+
+    /// BC2 compressed format with RGBA channels and unsigned normalized data.
+    Bc2Unorm,
+
+    /// BC2 compressed format with RGBA channels and unsigned normalized data in sRGB color space.
+    Bc2Srgb,
+
+    /// BC3 compressed format with RGBA channels and unsigned normalized data.
+    Bc3Unorm,
+
+    /// BC3 compressed format with RGBA channels and unsigned normalized data in sRGB color space.
+    Bc3Srgb,
+
+    /// BC4 compressed format with red channel and unsigned normalized data.
+    Bc4Unorm,
+
+    /// BC4 compressed format with red channel and signed normalized data.
+    Bc4Snorm,
+
+    /// BC5 compressed format with red and green channels and unsigned normalized data.
+    Bc5Unorm,
+
+    /// BC5 compressed format with red and green channels and signed normalized data.
+    Bc5Snorm,
 }
 
 impl PixelFormat {
@@ -307,7 +341,19 @@ impl PixelFormat {
             | PixelFormat::Bgra8Snorm
             | PixelFormat::Bgra8Uint
             | PixelFormat::Bgra8Sint
-            | PixelFormat::Bgra8Srgb => true,
+            | PixelFormat::Bgra8Srgb
+            | PixelFormat::Bc1RgbUnorm
+            | PixelFormat::Bc1RgbSrgb
+            | PixelFormat::Bc1RgbaUnorm
+            | PixelFormat::Bc1RgbaSrgb
+            | PixelFormat::Bc2Unorm
+            | PixelFormat::Bc2Srgb
+            | PixelFormat::Bc3Unorm
+            | PixelFormat::Bc3Srgb
+            | PixelFormat::Bc4Unorm
+            | PixelFormat::Bc4Snorm
+            | PixelFormat::Bc5Unorm
+            | PixelFormat::Bc5Snorm => true,
             PixelFormat::D16Unorm
             | PixelFormat::D32Float
             | PixelFormat::S8Uint
@@ -389,7 +435,19 @@ impl PixelFormat {
             | PixelFormat::Bgra8Srgb
             | PixelFormat::Bgra8Snorm
             | PixelFormat::Bgra8Uint
-            | PixelFormat::Bgra8Sint => false,
+            | PixelFormat::Bgra8Sint
+            | PixelFormat::Bc1RgbUnorm
+            | PixelFormat::Bc1RgbSrgb
+            | PixelFormat::Bc1RgbaUnorm
+            | PixelFormat::Bc1RgbaSrgb
+            | PixelFormat::Bc2Unorm
+            | PixelFormat::Bc2Srgb
+            | PixelFormat::Bc3Unorm
+            | PixelFormat::Bc3Srgb
+            | PixelFormat::Bc4Unorm
+            | PixelFormat::Bc4Snorm
+            | PixelFormat::Bc5Unorm
+            | PixelFormat::Bc5Snorm => false,
             PixelFormat::S8Uint => false,
             PixelFormat::D16Unorm
             | PixelFormat::D32Float
@@ -471,7 +529,19 @@ impl PixelFormat {
             | PixelFormat::Bgra8Srgb
             | PixelFormat::Bgra8Snorm
             | PixelFormat::Bgra8Uint
-            | PixelFormat::Bgra8Sint => false,
+            | PixelFormat::Bgra8Sint
+            | PixelFormat::Bc1RgbUnorm
+            | PixelFormat::Bc1RgbSrgb
+            | PixelFormat::Bc1RgbaUnorm
+            | PixelFormat::Bc1RgbaSrgb
+            | PixelFormat::Bc2Unorm
+            | PixelFormat::Bc2Srgb
+            | PixelFormat::Bc3Unorm
+            | PixelFormat::Bc3Srgb
+            | PixelFormat::Bc4Unorm
+            | PixelFormat::Bc4Snorm
+            | PixelFormat::Bc5Unorm
+            | PixelFormat::Bc5Snorm => false,
             PixelFormat::D16Unorm | PixelFormat::D32Float => false,
             PixelFormat::S8Uint
             | PixelFormat::D16UnormS8Uint
@@ -559,6 +629,14 @@ impl PixelFormat {
             PixelFormat::D16UnormS8Uint => 3,
             PixelFormat::D24UnormS8Uint => 4,
             PixelFormat::D32FloatS8Uint => 5,
+            PixelFormat::Bc1RgbUnorm
+            | PixelFormat::Bc1RgbSrgb
+            | PixelFormat::Bc1RgbaUnorm
+            | PixelFormat::Bc1RgbaSrgb => 8,
+            PixelFormat::Bc2Unorm | PixelFormat::Bc2Srgb => 16,
+            PixelFormat::Bc3Unorm | PixelFormat::Bc3Srgb => 16,
+            PixelFormat::Bc4Unorm | PixelFormat::Bc4Snorm => 8,
+            PixelFormat::Bc5Unorm | PixelFormat::Bc5Snorm => 16,
         }
     }
 
@@ -577,7 +655,7 @@ impl PixelFormat {
 }
 
 /// Format of the vertex attribute.
-/// 
+///
 /// It specifies the data type and number of components.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VertexFormat {
