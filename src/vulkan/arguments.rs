@@ -30,7 +30,7 @@ where
 {
     const LAYOUT: ArgumentGroupLayout<'static> = T::LAYOUT;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn bind_render(&self, group: u32, encoder: &mut RenderCommandEncoder) {
         let Some(layout) = encoder.current_layout() else {
             panic!("Argument binding requires a pipeline to be bound to the encoder");
@@ -38,8 +38,7 @@ where
 
         let device = encoder.device();
 
-        if device.is_oom() {
-            encoder.set_invalid();
+        if device.get_error().is_err() {
             return;
         }
 
@@ -50,7 +49,6 @@ where
             group,
         ) else {
             device.set_oom();
-            encoder.set_invalid();
             return;
         };
 
@@ -71,7 +69,7 @@ where
         self.add_refs(encoder.refs_mut());
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn bind_compute(&self, group: u32, encoder: &mut ComputeCommandEncoder) {
         let Some(layout) = encoder.current_layout() else {
             panic!("Argument binding requires a pipeline to be bound to the encoder");
@@ -79,8 +77,7 @@ where
 
         let device = encoder.device();
 
-        if device.is_oom() {
-            encoder.set_invalid();
+        if device.get_error().is_err() {
             return;
         }
 
@@ -91,7 +88,6 @@ where
             group,
         ) else {
             device.set_oom();
-            encoder.set_invalid();
             return;
         };
 

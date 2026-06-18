@@ -269,7 +269,7 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_color(&self) -> bool {
         match self {
             PixelFormat::R8Unorm
@@ -363,7 +363,7 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_depth(&self) -> bool {
         match self {
             PixelFormat::R8Unorm
@@ -457,7 +457,7 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_stencil(&self) -> bool {
         match self {
             PixelFormat::R8Unorm
@@ -550,7 +550,7 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     pub fn size(&self) -> usize {
         match self {
             PixelFormat::R8Unorm
@@ -640,7 +640,7 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     pub fn is_srgb(&self) -> bool {
         match self {
             PixelFormat::R8Srgb

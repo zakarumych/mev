@@ -1,7 +1,7 @@
 use web_sys::WebGl2RenderingContext as GL;
 
-use crate::generic::{ArgumentKind, Automatic, Storage, Uniform};
 use super::arguments::ArgumentsField;
+use crate::generic::{ArgumentKind, Automatic, Storage, Uniform};
 
 use std::{
     fmt,
@@ -20,11 +20,15 @@ pub struct Buffer {
 
 impl Buffer {
     pub(super) fn new(buffer: WebGlBuffer, size: usize, context: GL) -> Self {
-        Buffer { buffer, size, context }
+        Buffer {
+            buffer,
+            size,
+            context,
+        }
     }
 
     pub(super) fn webgl(&self) -> &WebGlBuffer {
-        &self.buffer 
+        &self.buffer
     }
 }
 
@@ -39,7 +43,10 @@ impl fmt::Debug for Buffer {
 
 impl Hash for Buffer {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.buffer.clone().unchecked_into::<js_sys::Object>().hash(state);
+        self.buffer
+            .clone()
+            .unchecked_into::<js_sys::Object>()
+            .hash(state);
     }
 }
 
@@ -58,13 +65,13 @@ impl crate::traits::Buffer for Buffer {
         self.size
     }
 
-    #[inline(always)] 
+    #[inline(always)]
     fn detached(&self) -> bool {
         // WebGL buffers are always attached
         false
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]) {
         // Ensure write fits within buffer bounds
         if offset + data.len() > self.size {
@@ -73,11 +80,7 @@ impl crate::traits::Buffer for Buffer {
 
         // In WebGL we need to bind the buffer before writing
         GL.bind_buffer(GL::ARRAY_BUFFER, Some(&self.buffer));
-        GL.buffer_sub_data_with_i32_and_u8_array(
-            GL::ARRAY_BUFFER,
-            offset as i32,
-            data
-        );
+        GL.buffer_sub_data_with_i32_and_u8_array(GL::ARRAY_BUFFER, offset as i32, data);
     }
 }
 
@@ -85,7 +88,7 @@ impl crate::traits::Buffer for Buffer {
 impl ArgumentsField<Automatic> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
     const SIZE: usize = 1;
-    
+
     fn bind_vertex(&self, slot: u32, gl: &GL) {
         gl.bind_buffer_base(GL::UNIFORM_BUFFER, slot, Some(&self.buffer));
     }
@@ -100,7 +103,7 @@ impl ArgumentsField<Uniform> for Buffer {
     const SIZE: usize = 1;
 
     fn bind_vertex(&self, slot: u32, gl: &GL) {
-        gl.bind_buffer_base(GL::UNIFORM_BUFFER, slot, Some(&self.buffer)); 
+        gl.bind_buffer_base(GL::UNIFORM_BUFFER, slot, Some(&self.buffer));
     }
 
     fn bind_fragment(&self, slot: u32, gl: &GL) {
@@ -129,15 +132,15 @@ impl Buffer {
             GL::ARRAY_BUFFER,
             0,
             &mut data,
-            0
+            0,
         );
         data
     }
-    
+
     pub fn options() -> BufferOptions {
         BufferOptions {
             storage_mode: StorageMode::Shared,
-            resource_options: ResourceOptions::default() 
+            resource_options: ResourceOptions::default(),
         }
     }
 }

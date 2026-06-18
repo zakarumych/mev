@@ -67,7 +67,7 @@ pub struct SamplerDesc {
 }
 
 impl PartialEq for SamplerDesc {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.min_filter == other.min_filter
             && self.mag_filter == other.mag_filter
@@ -87,7 +87,7 @@ impl PartialEq for SamplerDesc {
 impl Eq for SamplerDesc {}
 
 impl Hash for SamplerDesc {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.min_filter.hash(state);
         self.mag_filter.hash(state);
@@ -101,6 +101,7 @@ impl Hash for SamplerDesc {
 }
 
 impl SamplerDesc {
+    #[inline]
     pub const fn new() -> Self {
         SamplerDesc {
             min_filter: Filter::Nearest,
@@ -116,6 +117,7 @@ impl SamplerDesc {
 }
 
 impl Default for SamplerDesc {
+    #[inline(always)]
     fn default() -> Self {
         SamplerDesc::new()
     }

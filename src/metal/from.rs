@@ -35,7 +35,7 @@ impl<T, U> IntoMetal<U> for T
 where
     U: MetalFrom<T>,
 {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn into_metal(self) -> U {
         U::metal_from(self)
     }
@@ -44,7 +44,7 @@ where
 pub trait TryFromMetal<T>: Sized {
     fn try_from_metal(t: T) -> Option<Self>;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_from_metal(t: T) -> Self {
         Self::try_from_metal(t).expect("Failed to convert from metal")
     }
@@ -53,7 +53,7 @@ pub trait TryFromMetal<T>: Sized {
 pub trait TryMetalInto<T>: Sized {
     fn try_metal_into(self) -> Option<T>;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_metal_into(self) -> T {
         self.try_metal_into().expect("Failed to convert from metal")
     }
@@ -63,12 +63,12 @@ impl<T, U> TryMetalInto<U> for T
 where
     U: TryFromMetal<T>,
 {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn try_metal_into(self) -> Option<U> {
         U::try_from_metal(self)
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_metal_into(self) -> U {
         U::expect_from_metal(self)
     }
@@ -77,7 +77,7 @@ where
 pub trait TryMetalFrom<T>: Sized {
     fn try_metal_from(t: T) -> Option<Self>;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_metal_from(t: T) -> Self {
         Self::try_metal_from(t).expect("Failed to convert to metal")
     }
@@ -86,7 +86,7 @@ pub trait TryMetalFrom<T>: Sized {
 pub trait TryIntoMetal<T>: Sized {
     fn try_into_metal(self) -> Option<T>;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_into_metal(self) -> T {
         self.try_into_metal().expect("Failed to convert to metal")
     }
@@ -96,19 +96,19 @@ impl<T, U> TryIntoMetal<U> for T
 where
     U: TryMetalFrom<T>,
 {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn try_into_metal(self) -> Option<U> {
         U::try_metal_from(self)
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn expect_into_metal(self) -> U {
         U::expect_metal_from(self)
     }
 }
 
 impl TryMetalFrom<PixelFormat> for metal::MTLPixelFormat {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn try_metal_from(t: PixelFormat) -> Option<Self> {
         Some(match t {
             PixelFormat::R8Unorm => metal::MTLPixelFormat::R8Unorm,
@@ -193,7 +193,7 @@ impl TryMetalFrom<PixelFormat> for metal::MTLPixelFormat {
 }
 
 impl TryFromMetal<metal::MTLPixelFormat> for PixelFormat {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn try_from_metal(t: metal::MTLPixelFormat) -> Option<Self> {
         Some(match t {
             metal::MTLPixelFormat::R8Unorm => PixelFormat::R8Unorm,
@@ -277,7 +277,7 @@ impl TryFromMetal<metal::MTLPixelFormat> for PixelFormat {
 }
 
 impl TryMetalFrom<VertexFormat> for metal::MTLVertexFormat {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn try_metal_from(format: VertexFormat) -> Option<Self> {
         Some(match format {
             VertexFormat::Uint8 => metal::MTLVertexFormat::UChar,
@@ -342,7 +342,7 @@ impl TryMetalFrom<VertexFormat> for metal::MTLVertexFormat {
 }
 
 impl TryMetalFrom<VertexFormat> for metal::MTLAttributeFormat {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn try_metal_from(format: VertexFormat) -> Option<Self> {
         Some(match format {
             VertexFormat::Uint8 => metal::MTLAttributeFormat::UChar,
@@ -407,7 +407,7 @@ impl TryMetalFrom<VertexFormat> for metal::MTLAttributeFormat {
 }
 
 impl MetalFrom<PrimitiveTopology> for metal::MTLPrimitiveTopologyClass {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn metal_from(t: PrimitiveTopology) -> Self {
         match t {
             PrimitiveTopology::Point => metal::MTLPrimitiveTopologyClass::Point,
@@ -418,7 +418,7 @@ impl MetalFrom<PrimitiveTopology> for metal::MTLPrimitiveTopologyClass {
 }
 
 impl MetalFrom<PrimitiveTopology> for metal::MTLPrimitiveType {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: PrimitiveTopology) -> Self {
         match t {
             PrimitiveTopology::Point => metal::MTLPrimitiveType::Point,
@@ -429,7 +429,7 @@ impl MetalFrom<PrimitiveTopology> for metal::MTLPrimitiveType {
 }
 
 impl MetalFrom<BlendOp> for metal::MTLBlendOperation {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: BlendOp) -> Self {
         match t {
             BlendOp::Add => metal::MTLBlendOperation::Add,
@@ -442,7 +442,7 @@ impl MetalFrom<BlendOp> for metal::MTLBlendOperation {
 }
 
 impl MetalFrom<BlendFactor> for metal::MTLBlendFactor {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: BlendFactor) -> Self {
         match t {
             BlendFactor::Zero => metal::MTLBlendFactor::Zero,
@@ -463,7 +463,7 @@ impl MetalFrom<BlendFactor> for metal::MTLBlendFactor {
 }
 
 impl MetalFrom<CompareFunction> for metal::MTLCompareFunction {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: CompareFunction) -> Self {
         match t {
             CompareFunction::Never => metal::MTLCompareFunction::Never,
@@ -479,7 +479,7 @@ impl MetalFrom<CompareFunction> for metal::MTLCompareFunction {
 }
 
 impl MetalFrom<WriteMask> for metal::MTLColorWriteMask {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: WriteMask) -> Self {
         let mut mask = metal::MTLColorWriteMask::empty();
         if t.contains(WriteMask::RED) {
@@ -499,7 +499,7 @@ impl MetalFrom<WriteMask> for metal::MTLColorWriteMask {
 }
 
 impl MetalFrom<ImageUsage> for metal::MTLTextureUsage {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(t: ImageUsage) -> Self {
         let mut mask = metal::MTLTextureUsage::empty();
         if t.contains(ImageUsage::SAMPLED) {
@@ -522,7 +522,7 @@ impl MetalFrom<ImageUsage> for metal::MTLTextureUsage {
 }
 
 impl FromMetal<metal::MTLTextureUsage> for ImageUsage {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn from_metal(t: metal::MTLTextureUsage) -> Self {
         let mut mask = ImageUsage::empty();
         if t.contains(metal::MTLTextureUsage::ShaderRead) {
@@ -563,7 +563,7 @@ impl FromMetal<metal::MTLTextureUsage> for ImageUsage {
 // }
 
 impl MetalFrom<Filter> for MTLSamplerMinMagFilter {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(filter: Filter) -> Self {
         match filter {
             Filter::Nearest => MTLSamplerMinMagFilter::Nearest,
@@ -573,7 +573,7 @@ impl MetalFrom<Filter> for MTLSamplerMinMagFilter {
 }
 
 impl MetalFrom<MipMapMode> for MTLSamplerMipFilter {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(mode: MipMapMode) -> Self {
         match mode {
             MipMapMode::Nearest => MTLSamplerMipFilter::Nearest,
@@ -583,7 +583,7 @@ impl MetalFrom<MipMapMode> for MTLSamplerMipFilter {
 }
 
 impl MetalFrom<AddressMode> for MTLSamplerAddressMode {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn metal_from(mode: AddressMode) -> Self {
         match mode {
             AddressMode::ClampToEdge => MTLSamplerAddressMode::ClampToEdge,

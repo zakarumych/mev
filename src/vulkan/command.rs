@@ -6,8 +6,7 @@ use smallvec::SmallVec;
 
 use crate::generic::{
     Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent2,
-    Extent3, LoadOp, Offset2, Offset3, OutOfMemory, PipelineStages, RenderPassDesc, StoreOp,
-    TlasBuildDesc,
+    Extent3, LoadOp, Offset2, Offset3, PipelineStages, RenderPassDesc, StoreOp, TlasBuildDesc,
 };
 
 use super::{
@@ -21,9 +20,6 @@ pub struct CommandBuffer {
     pub(super) pool: vk::CommandPool,
     pub(super) present: SmallVec<[Frame; 2]>,
     pub(super) refs: Refs,
-    /// True if this command buffer was recorded in an invalid state.
-    /// submit() will do a present-only submission and return DeviceError::OutOfMemory.
-    pub(super) invalid: bool,
 }
 
 pub struct CommandEncoder {
@@ -32,8 +28,6 @@ pub struct CommandEncoder {
     pool: vk::CommandPool,
     present: SmallVec<[Frame; 2]>,
     refs: Refs,
-    /// True when the encoder is in an invalid state — all commands are no-ops.
-    invalid: bool,
 }
 
 impl CommandEncoder {
@@ -43,47 +37,34 @@ impl CommandEncoder {
         pool: vk::CommandPool,
         refs: Refs,
     ) -> Self {
-        let invalid = device.is_oom();
         CommandEncoder {
             device,
             handle,
             pool,
             present: SmallVec::new(),
             refs,
-            invalid,
         }
     }
 
-    /// Creates a poisoned encoder for use when command pool allocation fails.
-    pub(super) fn poisoned(device: Device) -> Self {
+    /// Creates a null encoder for use when command pool allocation fails.
+    pub(super) fn null(device: Device) -> Self {
         CommandEncoder {
             device,
             handle: vk::CommandBuffer::null(),
             pool: vk::CommandPool::null(),
             present: SmallVec::new(),
             refs: Refs::new(),
-            invalid: true,
         }
-    }
-
-    /// Returns true if the encoder is in OOM state, caching the result.
-    #[inline(always)]
-    fn check_oom(&mut self) -> bool {
-        if !self.invalid && self.device.is_oom() {
-            self.invalid = true;
-        }
-        self.invalid
     }
 }
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
         barrier(&self.device, self.handle, after, before);
     }
-
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
@@ -92,10 +73,10 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::CommandEncoder for CommandEncoder {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn present(&mut self, frame: Frame, after: PipelineStages) {
         // Always collect present frames even in OOM state so swapchain images are released.
-        if !self.check_oom() {
+        if !self.handle.is_null() {
             unsafe {
                 self.device.ash().cmd_pipeline_barrier(
                     self.handle,
@@ -124,79 +105,63 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         self.present.push(frame);
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn finish(self) -> CommandBuffer {
-        let invalid = if self.invalid {
-            // Encoder was in OOM state; handle may be null (pool alloc failed).
-            // If we have a real handle, end_command_buffer to leave it in valid state.
-            if !self.handle.is_null() {
-                let _ = unsafe { self.device.ash().end_command_buffer(self.handle) };
-            }
-            true
-        } else {
+        if !self.handle.is_null() {
             let result = unsafe { self.device.ash().end_command_buffer(self.handle) };
             match result {
-                Ok(()) => false,
+                Ok(()) => {}
                 Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                 Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                    tracing::error!("Out of device memory ending command buffer");
                     self.device.set_oom();
-                    true
                 }
                 Err(err) => unexpected_error(err),
             }
-        };
+        }
 
         CommandBuffer {
             handle: self.handle,
             pool: self.pool,
             present: self.present,
             refs: self.refs,
-            invalid,
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn copy(&mut self) -> CopyCommandEncoder<'_> {
         CopyCommandEncoder {
             device: self.device.clone(),
             handle: self.handle,
             refs: &mut self.refs,
-            invalid: self.invalid,
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn acceleration_structure(&mut self) -> AccelerationStructureCommandEncoder<'_> {
-        let invalid = self.check_oom();
         AccelerationStructureCommandEncoder {
             device: self.device.clone(),
             handle: self.handle,
             refs: &mut self.refs,
-            invalid,
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn compute(&mut self) -> ComputeCommandEncoder<'_> {
-        let invalid = self.check_oom();
         ComputeCommandEncoder {
             device: self.device.clone(),
             handle: self.handle,
             refs: &mut self.refs,
             current_layout: None,
-            invalid,
         }
     }
 
     fn render(&mut self, desc: RenderPassDesc) -> RenderCommandEncoder<'_> {
-        if self.check_oom() {
+        if self.handle.is_null() {
             return RenderCommandEncoder {
                 device: self.device.clone(),
                 handle: self.handle,
                 current_layout: None,
                 refs: &mut self.refs,
-                invalid: true,
             };
         }
 
@@ -318,7 +283,6 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             handle: self.handle,
             current_layout: None,
             refs: &mut self.refs,
-            invalid: false,
         }
     }
 }
@@ -328,48 +292,43 @@ pub struct ComputeCommandEncoder<'a> {
     handle: vk::CommandBuffer,
     refs: &'a mut Refs,
     current_layout: Option<PipelineLayout>,
-    invalid: bool,
 }
 
 impl ComputeCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn handle(&self) -> vk::CommandBuffer {
         self.handle
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn device(&self) -> &Device {
         &self.device
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn current_layout(&self) -> Option<&PipelineLayout> {
         self.current_layout.as_ref()
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn refs_mut(&mut self) -> &mut Refs {
         &mut self.refs
-    }
-
-    pub(super) fn set_invalid(&mut self) {
-        self.invalid = true;
     }
 }
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
-        if self.invalid {
+        if !self.handle.is_null() {
             return;
         }
         barrier(&self.device, self.handle, after, before);
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
-        if self.invalid || image.handle().is_null() {
+        if self.handle.is_null() {
             return;
         }
         image_barrier(&self.device, self.handle, after, before, image);
@@ -379,10 +338,9 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_pipeline(&mut self, pipeline: &ComputePipeline) {
-        if self.invalid || pipeline.is_null() {
-            self.invalid = true;
+        if self.handle.is_null() || pipeline.is_null() {
             return;
         }
         unsafe {
@@ -396,17 +354,17 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         self.refs.add_compute_pipeline(pipeline.clone());
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn with_arguments(&mut self, group: u32, arguments: &impl Arguments) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         arguments.bind_compute(group, self);
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_constants(&mut self, constants: &impl DeviceRepr) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         let Some(layout) = self.current_layout.as_ref() else {
@@ -426,9 +384,9 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn dispatch(&mut self, groups: Extent3) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         unsafe {
@@ -447,39 +405,34 @@ pub struct RenderCommandEncoder<'a> {
     handle: vk::CommandBuffer,
     refs: &'a mut Refs,
     current_layout: Option<PipelineLayout>,
-    invalid: bool,
 }
 
 impl RenderCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn handle(&self) -> vk::CommandBuffer {
         self.handle
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn device(&self) -> &Device {
         &self.device
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn current_layout(&self) -> Option<&PipelineLayout> {
         self.current_layout.as_ref()
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline(always)]
     pub(super) fn refs_mut(&mut self) -> &mut Refs {
         &mut self.refs
-    }
-
-    pub(super) fn set_invalid(&mut self) {
-        self.invalid = true;
     }
 }
 
 impl Drop for RenderCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn drop(&mut self) {
-        if !self.invalid {
+        if !self.handle.is_null() {
             unsafe { self.device.ash().cmd_end_rendering(self.handle) }
         }
     }
@@ -487,10 +440,9 @@ impl Drop for RenderCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_pipeline(&mut self, pipeline: &RenderPipeline) {
-        if self.invalid || pipeline.is_null() {
-            self.invalid = true;
+        if self.handle.is_null() || pipeline.is_null() {
             return;
         }
         unsafe {
@@ -504,9 +456,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         self.refs.add_render_pipeline(pipeline.clone());
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_viewport(&mut self, offset: Offset3<f32>, extent: Extent3<f32>) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         unsafe {
@@ -524,9 +476,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_scissor(&mut self, offset: Offset2<i32>, extent: Extent2<u32>) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         unsafe {
@@ -546,17 +498,17 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn with_arguments(&mut self, group: u32, arguments: &impl Arguments) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         arguments.bind_render(group, self);
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn with_constants(&mut self, constants: &impl DeviceRepr) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         let Some(layout) = self.current_layout.as_ref() else {
@@ -576,9 +528,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn bind_vertex_buffers(&mut self, start: u32, slices: &[impl AsBufferSlice]) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         let mut handles = smallvec::SmallVec::<[_; 8]>::with_capacity(slices.len());
@@ -597,9 +549,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn bind_index_buffer(&mut self, slice: impl AsBufferSlice) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         let slice: crate::generic::BufferSlice = slice.as_buffer_slice();
@@ -614,9 +566,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         self.refs.add_buffer(slice.buffer.clone());
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         unsafe {
@@ -630,9 +582,9 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         unsafe {
@@ -652,22 +604,21 @@ pub struct CopyCommandEncoder<'a> {
     device: Device,
     handle: vk::CommandBuffer,
     refs: &'a mut Refs,
-    invalid: bool,
 }
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
-        if self.invalid {
+        if self.handle.is_null() {
             return;
         }
         barrier(&self.device, self.handle, after, before);
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
-        if self.invalid || image.handle().is_null() {
+        if self.handle.is_null() || image.handle().is_null() {
             return;
         }
         image_barrier(&self.device, self.handle, after, before, image);
@@ -677,27 +628,53 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
+    fn copy_buffer_to_buffer(
+        &mut self,
+        src: &Buffer,
+        src_offset: usize,
+        dst: &Buffer,
+        dst_offset: usize,
+        size: usize,
+    ) {
+        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
+            return;
+        }
+
+        self.refs.add_buffer(src.clone());
+        self.refs.add_buffer(dst.clone());
+
+        unsafe {
+            self.device.ash().cmd_copy_buffer(
+                self.handle,
+                src.handle(),
+                dst.handle(),
+                &[vk::BufferCopy {
+                    src_offset: src_offset as u64,
+                    dst_offset: dst_offset as u64,
+                    size: size as u64,
+                }],
+            )
+        }
+    }
+
+    #[cfg_attr(feature = "inline-more", inline)]
     fn copy_buffer_to_image(
         &mut self,
         src: &Buffer,
-        start: usize,
+        src_offset: usize,
         bytes_per_line: usize,
         bytes_per_plane: usize,
         dst: &Image,
-        offset: Offset3<u32>,
+        dst_offset: Offset3<u32>,
         extent: Extent3<u32>,
         layers: Range<u32>,
         level: u32,
     ) {
-        if src.handle().is_null() || dst.handle().is_null() {
-            self.invalid = true;
+        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
             return;
         }
 
-        if self.invalid {
-            return;
-        }
         let texel_size = dst.format().size();
         debug_assert_eq!(bytes_per_line % texel_size, 0);
         debug_assert_eq!(bytes_per_plane % texel_size, 0);
@@ -714,7 +691,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 dst.handle(),
                 ash::vk::ImageLayout::GENERAL,
                 &[vk::BufferImageCopy {
-                    buffer_offset: start as u64,
+                    buffer_offset: src_offset as u64,
                     buffer_row_length: texel_per_line as u32,
                     buffer_image_height: texel_per_plane as u32,
                     image_subresource: vk::ImageSubresourceLayers {
@@ -724,9 +701,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                         layer_count: layers.end - layers.start,
                     },
                     image_offset: vk::Offset3D {
-                        x: offset.x() as i32,
-                        y: offset.y() as i32,
-                        z: offset.z() as i32,
+                        x: dst_offset.x() as i32,
+                        y: dst_offset.y() as i32,
+                        z: dst_offset.z() as i32,
                     },
                     image_extent: vk::Extent3D {
                         width: extent.width(),
@@ -738,7 +715,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn copy_image_region(
         &mut self,
         src: &Image,
@@ -752,12 +729,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         extent: Extent3<u32>,
         layers: u32,
     ) {
-        if src.handle().is_null() || dst.handle().is_null() {
-            self.invalid = true;
-            return;
-        }
-
-        if self.invalid {
+        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
             return;
         }
 
@@ -773,7 +745,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 &[vk::ImageCopy {
                     src_subresource: vk::ImageSubresourceLayers {
                         aspect_mask: format_aspect(src.format()),
-                        mip_level: src.base_level(),
+                        mip_level: src.base_level() + src_level,
                         base_array_layer: src.base_layer() + src_base_layer,
                         layer_count: layers,
                     },
@@ -784,7 +756,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                     },
                     dst_subresource: vk::ImageSubresourceLayers {
                         aspect_mask: format_aspect(dst.format()),
-                        mip_level: dst.base_level(),
+                        mip_level: dst.base_level() + dst_level,
                         base_array_layer: dst.base_layer() + dst_base_layer,
                         layer_count: layers,
                     },
@@ -803,13 +775,11 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
-        if self.invalid {
-            return;
-        }
         let slice = slice.as_buffer_slice();
-        if slice.buffer.is_null() {
+
+        if self.handle.is_null() || slice.buffer.handle().is_null() {
             return;
         }
 
@@ -828,19 +798,18 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
-        if self.invalid {
+        let slice = slice.as_buffer_slice();
+
+        if self.handle.is_null() || slice.buffer.handle().is_null() {
             return;
         }
+
         if data.is_empty() {
             return;
         }
 
-        let slice = slice.as_buffer_slice();
-        if slice.buffer.is_null() {
-            return;
-        }
         assert!(slice.size >= data.len());
 
         self.refs.add_buffer(slice.buffer.clone());
@@ -873,13 +842,13 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
         self.write_buffer_slice(slice, bytemuck::bytes_of(data))
     }
 
     /// Writes data to the buffer.
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
@@ -889,7 +858,6 @@ pub struct AccelerationStructureCommandEncoder<'a> {
     device: Device,
     handle: vk::CommandBuffer,
     refs: &'a mut Refs,
-    invalid: bool,
 }
 
 #[hidden_trait::expose]
@@ -905,7 +873,7 @@ impl crate::traits::AccelerationStructureCommandEncoder
     }
 }
 
-#[cfg_attr(feature = "inline-more", inline(always))]
+#[cfg_attr(feature = "inline-more", inline)]
 fn barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,
@@ -927,7 +895,7 @@ fn barrier(
     }
 }
 
-#[cfg_attr(feature = "inline-more", inline(always))]
+#[cfg_attr(feature = "inline-more", inline)]
 fn image_barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,

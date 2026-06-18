@@ -32,7 +32,10 @@ pub use self::{
         ArgumentGroupLayout, ArgumentKind, ArgumentLayout, Arguments, ArgumentsField, Automatic,
         /*Constant,*/ Sampled, Storage, Uniform,
     },
-    buffer::{AsBufferSlice, BufferDesc, BufferInitDesc, BufferSlice, BufferUsage, Memory},
+    buffer::{
+        AsBufferSlice, BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut,
+        BufferSlice, BufferUsage, Memory,
+    },
     compute_pipeline::ComputePipelineDesc,
     data::*,
     feature::Features,

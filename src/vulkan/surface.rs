@@ -1,22 +1,17 @@
-use std::{
-    collections::VecDeque,
-    fmt,
-    ops::Deref,
-    time::{Duration, Instant},
-};
+use std::{collections::VecDeque, ops::Deref};
 
 use ash::vk::{self, Handle};
 use smallvec::SmallVec;
 
 use crate::{
     backend::new_semaphore,
-    generic::{Extent2, ImageExtent, OutOfMemory, PipelineStages, SurfaceError, Swizzle, ViewDesc},
+    generic::{Extent2, ImageExtent, SurfaceError, Swizzle, ViewDesc},
     DeviceError, ImageDesc,
 };
 
 use super::{
     from::{AshInto, TryAshInto},
-    handle_host_oom, unexpected_error, Device, Image, Queue,
+    handle_host_oom, unexpected_error, Device, Image,
 };
 
 const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
@@ -207,15 +202,20 @@ impl Surface {
                     )
             };
 
-            self.caps = result.map_err(|err| match err {
-                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => SurfaceError::OutOfMemory,
-                vk::Result::ERROR_SURFACE_LOST_KHR => {
-                    self.lost = true;
-                    SurfaceError::SurfaceLost
+            self.caps = match result {
+                Ok(caps) => caps,
+                Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                    self.device.set_oom();
+                    return Err(SurfaceError::OutOfMemory);
                 }
-                _ => unexpected_error(err),
-            })?;
+                Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                    self.lost = true;
+                    self.device.set_lost();
+                    return Err(SurfaceError::SurfaceLost);
+                }
+                Err(err) => unexpected_error(err),
+            };
         }
 
         let old = self.current.take();
@@ -296,30 +296,43 @@ impl Surface {
             self.retired.push_back(old);
         }
 
-        let handle = result.map_err(|err| match err {
-            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => SurfaceError::OutOfMemory,
-            vk::Result::ERROR_DEVICE_LOST | vk::Result::ERROR_SURFACE_LOST_KHR => {
-                self.lost = true;
-                SurfaceError::SurfaceLost
+        let handle = match result {
+            Ok(handle) => handle,
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.device.set_oom();
+                return Err(SurfaceError::OutOfMemory);
             }
-            vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR => {
+            Err(vk::Result::ERROR_DEVICE_LOST) => {
+                self.lost = true;
+                self.device.set_lost();
+                return Err(SurfaceError::SurfaceLost);
+            }
+            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                self.lost = true;
+                return Err(SurfaceError::SurfaceLost);
+            }
+            Err(vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR) => {
                 panic!("Native window is already in use.");
             }
-            vk::Result::ERROR_INITIALIZATION_FAILED => {
+            Err(vk::Result::ERROR_INITIALIZATION_FAILED) => {
                 panic!("Failed to create swapchain due to some implementation-specific reasons");
             }
-            _ => unexpected_error(err),
-        })?;
+            Err(err) => unexpected_error(err),
+        };
 
         let next = new_semaphore(self.device.ash())?;
 
         let result = unsafe { self.device.swapchain().get_swapchain_images(handle) };
-        let images = result.map_err(|err| match err {
-            vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => SurfaceError::OutOfMemory,
-            _ => unexpected_error(err),
-        })?;
+        let images = match result {
+            Ok(images) => images,
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.device.set_oom();
+                return Err(SurfaceError::OutOfMemory);
+            }
+            Err(err) => unexpected_error(err),
+        };
 
         let pixel_format = self.preferred_format.format.try_ash_into().unwrap();
         let usage = self.preferred_usage.ash_into();
@@ -403,7 +416,7 @@ impl Surface {
     fn clear_retired(&mut self, mut do_wait: bool) -> Result<(), DeviceError> {
         let device = self.device.ash();
 
-        while let Some(mut swapchain) = self.retired.pop_front() {
+        while let Some(swapchain) = self.retired.pop_front() {
             match swapchain {
                 MaybeFakeSwapchain::Real(swapchain) => {
                     let images_detached =
@@ -523,11 +536,16 @@ impl crate::traits::Surface for Surface {
                         }
                         Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                         Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                            return Err(SurfaceError::OutOfMemory)
+                            self.device.set_oom();
+                            return Err(SurfaceError::OutOfMemory);
+                        }
+                        Err(vk::Result::ERROR_DEVICE_LOST) => {
+                            self.lost = true;
+                            self.device.set_lost();
+                            return Err(SurfaceError::DeviceLost);
                         }
                         Err(
-                            vk::Result::ERROR_DEVICE_LOST
-                            | vk::Result::ERROR_SURFACE_LOST_KHR
+                            vk::Result::ERROR_SURFACE_LOST_KHR
                             | vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT,
                         ) => {
                             self.lost = true;

@@ -3,13 +3,11 @@ use std::{
     convert::identity,
     ffi::{c_void, CStr},
     fmt,
-    mem::transmute,
     sync::Arc,
 };
 
 use ash::*;
 use hashbrown::HashMap;
-use khr::get_physical_device_properties2;
 
 use crate::generic::{
     Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features,
@@ -532,7 +530,7 @@ impl crate::traits::Instance for Instance {
                 .get_physical_device_memory_properties(physical_device)
         };
 
-        let allocator = gpu_alloc::GpuAllocator::<(vk::DeviceMemory, usize)>::new(
+        let allocator = gpu_alloc::GpuAllocator::<_>::new(
             gpu_alloc::Config::i_am_prototyping(),
             gpu_alloc::DeviceProperties {
                 max_memory_allocation_count: properties.limits.max_memory_allocation_count,

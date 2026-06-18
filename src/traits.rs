@@ -4,19 +4,18 @@ use std::{
     ops::{Deref, Range},
 };
 
-use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
     generic::{
-        Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc, BufferSlice,
+        Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
         Capabilities, ComputePipelineDesc, CreateError, CreateLibraryError, CreatePipelineError,
         CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
         ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineStages, PixelFormat,
         RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, SurfaceError, TlasBuildDesc,
         TlasDesc, ViewDesc,
     },
-    with_metal,
+    BufferMappedRange, BufferMappedRangeMut,
 };
 
 #[cfg(mev_backend = "metal")]
@@ -125,11 +124,6 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 
-    /// Drop command buffers without submitting them to the queue.
-    fn drop_command_buffer<I>(&mut self, command_buffers: I)
-    where
-        I: IntoIterator<Item = crate::backend::CommandBuffer>;
-
     /// Synchronize the access to the frame resources.
     fn sync_frame(&mut self, frame: &mut crate::backend::Frame, before: PipelineStages);
 
@@ -203,15 +197,25 @@ pub trait CopyCommandEncoder: SyncCommandEncoder {
     /// Writes data to the buffer.
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]);
 
+    /// Copies bytes from src buffer to dst buffer.
+    fn copy_buffer_to_buffer(
+        &mut self,
+        src: &crate::backend::Buffer,
+        src_offset: usize,
+        dst: &crate::backend::Buffer,
+        dst_offset: usize,
+        size: usize,
+    );
+
     /// Copies pixels from src image to dst image.
     fn copy_buffer_to_image(
         &mut self,
         src: &crate::backend::Buffer,
-        start: usize,
+        src_offset: usize,
         bytes_per_line: usize,
         bytes_per_plane: usize,
         dst: &crate::backend::Image,
-        offset: Offset3<u32>,
+        dst_offset: Offset3<u32>,
         extent: Extent3<u32>,
         layers: Range<u32>,
         level: u32,
@@ -317,30 +321,62 @@ pub trait Image: Clone + Debug + Eq + Hash + Resource {
 }
 
 pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
-    /// Returns the size of the buffer in bytes.
+    /// Returns the buffer size in bytes.
     fn size(&self) -> usize;
+
+    /// Returns the buffer usage.
+    fn usage(&self) -> crate::generic::BufferUsage;
+
+    /// Returns the name of the buffer.
+    fn name(&self) -> &str;
 
     /// Returns `true` if the buffer is not shared,
     /// meaning that there are no other references to the buffer
     /// including references that tracks that GPU may be using the buffer.
     ///
-    /// If this method returns `true` then it is safe to write to the buffer
-    /// from host and use in any way.
-    ///
-    /// If old content is not needed then no synchronization is required.
-    /// Otherwise memory barrier with is required.
+    /// If this method returns `true` then it is safe to write to or read from the buffer from host.
     fn detached(&self) -> bool;
 
-    /// Write data to the buffer.
+    /// Maps the buffer region for host access.
     ///
-    /// # Safety
+    /// Requires that the buffer was created with `Memory::Shared`, `Memory::Upload` or `Memory::Download`.
+    /// The buffer must be in detached state - the [`detached`](Buffer::detached) must return `true`.
+    /// This function should be called only once at a time, and [`unmap`](Buffer::unmap) should be called after the mapping is no longer needed.
+    fn map(&mut self, range: Range<usize>) -> Result<(), DeviceError>;
+
+    /// Unmaps the buffer.
     ///
-    /// Calling this function is unsafe because
-    /// Other threads or GPU may access the same buffer region.
+    /// This is no-op for persistently mapped buffers.
+    /// This function should be called only after [`map`](Buffer::map) finishes successfully.
+    fn unmap(&mut self);
+
+    /// Return an inmutable slice of the mapped buffer region.
     ///
-    /// Use [`CommandEncoder::write_buffer`] to update
-    /// buffer in a bit safer way.
-    unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]);
+    /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
+    fn read_mapped_range(
+        &mut self,
+        range: Range<usize>,
+    ) -> Result<BufferMappedRange<'_>, DeviceError>;
+
+    /// Return a mutable slice of the mapped buffer region.
+    ///
+    /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
+    fn write_mapped_range(
+        &mut self,
+        range: Range<usize>,
+    ) -> Result<BufferMappedRangeMut<'_>, DeviceError>;
+
+    /// Writes data to the buffer at the given offset.
+    ///
+    /// This function will map and unmap the buffer, so it is not suitable for frequent writes.
+    /// For frequent writes, use `map` and `write_mapped_range` instead.
+    fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), DeviceError>;
+
+    /// Reads data from the buffer at the given offset.
+    ///
+    /// This function will map and unmap the buffer, so it is not suitable for frequent reads.
+    /// For frequent reads, use `map` and `read_mapped_range` instead.
+    fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError>;
 }
 
 pub trait Library: Clone + Debug + Resource {

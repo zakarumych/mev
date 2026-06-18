@@ -1,8 +1,7 @@
-use std::{collections::VecDeque, fmt, ops::Deref, sync::Arc};
+use std::{collections::VecDeque, fmt, ops::Deref};
 
-use ash::{ext::swapchain_maintenance1, prelude::VkResult, vk};
+use ash::vk;
 use parking_lot::Mutex;
-use smallvec::SmallVec;
 
 use crate::generic::{DeviceError, OutOfMemory, PipelineStages, QueueFlags};
 
@@ -183,12 +182,12 @@ impl PendingEpochs {
         device: &ash::Device,
         pools: &mut VecDeque<Pool>,
     ) -> Result<Option<Epoch>, DeviceError> {
-        let mut array = self.array.get_mut();
+        let array = self.array.get_mut();
         if array.len() < MAX_EPOCHS {
             return Ok(None);
         }
 
-        /// Can't create new epoch, must wait for the earliest one to complete.
+        // Can't create new epoch, must wait for the earliest one to complete.
         unsafe {
             let front_epoch = array.front_mut().unwrap_unchecked();
 
@@ -203,7 +202,7 @@ impl PendingEpochs {
     }
 
     fn destroy_all(&mut self, device: &ash::Device, pools: &mut VecDeque<Pool>) {
-        let mut array = self.array.get_mut();
+        let array = self.array.get_mut();
         for e in array.iter_mut() {
             unsafe {
                 e.destroy(device, pools);
@@ -345,7 +344,7 @@ impl Queue {
                 }
                 .map_err(map_oom)?;
 
-                /// Place the pool to the back of the queue where it will be used in `get_pool`.
+                // Place the pool to the back of the queue where it will be used in `get_pool`.
                 let reset_pool = unsafe { pools.pop_front().unwrap_unchecked() };
                 pools.push_back(reset_pool);
             }
@@ -414,7 +413,6 @@ impl Queue {
         this_epoch: &'a mut Option<Epoch>,
         pending_epochs: &mut PendingEpochs,
         pools: &mut VecDeque<Pool>,
-        free_refs: &mut Vec<Refs>,
         device: &Device,
     ) -> Result<&'a mut Epoch, DeviceError> {
         if let Some(epoch) = this_epoch {
@@ -427,7 +425,7 @@ impl Queue {
                 return Ok(this_epoch.get_or_insert(epoch));
             }
             None => {
-                /// Create a new epoch fence.
+                // Create a new epoch fence.
                 let fence = device.new_fence()?;
 
                 // Always inserts since this_epoch is None.
@@ -475,9 +473,9 @@ impl crate::traits::Queue for Queue {
 
         let pool = match pool_result {
             Ok(pool) => unsafe { &mut *pool },
-            Err(_) => {
+            Err(OutOfMemory) => {
                 self.device.set_oom();
-                return CommandEncoder::poisoned(self.device.clone());
+                return CommandEncoder::null(self.device.clone());
             }
         };
 
@@ -485,9 +483,9 @@ impl crate::traits::Queue for Queue {
 
         let handle = match pool.allocate(device) {
             Ok(h) => h,
-            Err(_) => {
+            Err(OutOfMemory) => {
                 self.device.set_oom();
-                return CommandEncoder::poisoned(self.device.clone());
+                return CommandEncoder::null(self.device.clone());
             }
         };
 
@@ -507,6 +505,8 @@ impl crate::traits::Queue for Queue {
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
+        let mut device_error = self.device.get_error();
+
         debug_assert!(self.command_buffer_submit.is_empty());
         debug_assert!(self.command_buffers.is_empty());
 
@@ -515,30 +515,10 @@ impl crate::traits::Queue for Queue {
         let present_swapchains_len = self.present_swapchains.len();
         let present_indices_len = self.present_indices.len();
 
-        let epoch = match Self::get_epoch(
-            &mut self.this_epoch,
-            &mut self.pending_epochs,
-            &mut self.pools,
-            &mut self.free_refs,
-            &self.device,
-        ) {
-            Ok(epoch) => epoch,
-            Err(DeviceError::OutOfMemory) => {
-                self.drop_command_buffer(command_buffers);
-                return Err(DeviceError::OutOfMemory);
-            }
-            Err(DeviceError::DeviceLost) => return Err(DeviceError::DeviceLost),
-        };
-
         // Add handle to list of command buffers to submit.
         // Collect frames to present and command buffers into the cache array.
-        let mut any_invalid = false;
-        for mut cbuf in command_buffers {
-            if !cbuf.invalid {
-                self.command_buffer_submit.push(cbuf.handle);
-            } else {
-                any_invalid = true;
-            }
+        for cbuf in command_buffers {
+            self.command_buffer_submit.push(cbuf.handle);
 
             for frame in &cbuf.present {
                 if frame.is_real() {
@@ -555,75 +535,99 @@ impl crate::traits::Queue for Queue {
             self.command_buffers.push(cbuf);
         }
 
-        let fence = if check_point {
-            epoch.fence
-        } else {
-            ash::vk::Fence::null()
-        };
+        if device_error.is_ok() {
+            match Self::get_epoch(
+                &mut self.this_epoch,
+                &mut self.pending_epochs,
+                &mut self.pools,
+                &self.device,
+            ) {
+                Ok(epoch) => {
+                    let fence = if check_point {
+                        epoch.fence
+                    } else {
+                        ash::vk::Fence::null()
+                    };
 
-        let result = unsafe {
-            self.device.ash().queue_submit(
-                self.handle,
-                &[vk::SubmitInfo::default()
-                    .wait_semaphores(&self.wait_semaphores)
-                    .wait_dst_stage_mask(&self.wait_stages)
-                    .signal_semaphores(&self.signal_semaphores)
-                    .command_buffers(&self.command_buffer_submit)],
-                fence,
-            )
-        };
+                    let result = unsafe {
+                        self.device.ash().queue_submit(
+                            self.handle,
+                            &[vk::SubmitInfo::default()
+                                .wait_semaphores(&self.wait_semaphores)
+                                .wait_dst_stage_mask(&self.wait_stages)
+                                .signal_semaphores(&self.signal_semaphores)
+                                .command_buffers(&self.command_buffer_submit)],
+                            fence,
+                        )
+                    };
 
-        self.command_buffer_submit.clear();
+                    self.command_buffer_submit.clear();
 
-        match result {
-            Ok(()) => {}
-            Err(err) => {
-                self.signal_semaphores.truncate(signal_semaphores_len);
-                self.present_semaphores.truncate(present_semaphores_len);
-                self.present_swapchains.truncate(present_swapchains_len);
-                self.present_indices.truncate(present_indices_len);
+                    match result {
+                        Ok(()) => {}
+                        Err(err) => {
+                            self.signal_semaphores.truncate(signal_semaphores_len);
+                            self.present_semaphores.truncate(present_semaphores_len);
+                            self.present_swapchains.truncate(present_swapchains_len);
+                            self.present_indices.truncate(present_indices_len);
 
-                match err {
-                    vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
-                        self.command_buffers.clear();
-                        handle_host_oom()
-                    }
-                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
-                        // Attempt to reclaim some resources.
-                        for mut cbuf in self.command_buffers.drain(..) {
-                            cbuf.refs.clear();
-                            self.free_refs.push(cbuf.refs);
+                            match err {
+                                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                                    self.device.set_oom();
+                                    device_error = Err(DeviceError::OutOfMemory);
 
-                            unsafe {
-                                deallocate_cbuf(cbuf.handle, cbuf.pool, &mut self.pools);
+                                    // Attempt to reclaim some resources.
+                                    for mut cbuf in self.command_buffers.drain(..) {
+                                        cbuf.refs.clear();
+                                        self.free_refs.push(cbuf.refs);
+
+                                        unsafe {
+                                            deallocate_cbuf(
+                                                cbuf.handle,
+                                                cbuf.pool,
+                                                &mut self.pools,
+                                            );
+                                        }
+                                    }
+                                }
+                                vk::Result::ERROR_DEVICE_LOST => {
+                                    self.device.set_lost();
+                                    device_error = Err(DeviceError::DeviceLost);
+
+                                    // Nothing can be done now.
+                                    self.command_buffers.clear();
+                                }
+                                _ => unexpected_error(err),
                             }
                         }
-                        return Err(DeviceError::OutOfMemory);
                     }
-                    vk::Result::ERROR_DEVICE_LOST => {
-                        // Nothing can be done now.
-                        self.command_buffers.clear();
-                        return Err(DeviceError::DeviceLost);
+
+                    // Drain refs from command buffers and add them to the epoch
+                    // when submitting was successful.
+                    for cbuf in self.command_buffers.drain(..) {
+                        epoch.refs.push(cbuf.refs);
+                        epoch.cbufs.push((cbuf.handle, cbuf.pool));
                     }
-                    _ => unexpected_error(err),
+
+                    self.wait_semaphores.clear();
+                    self.wait_stages.clear();
+                    self.signal_semaphores.clear();
+
+                    if check_point {
+                        unsafe {
+                            self.next_epoch();
+                        }
+                    }
                 }
-            }
-        }
-
-        // Drain refs from command buffers and add them to the epoch
-        // when submitting was successful.
-        for cbuf in self.command_buffers.drain(..) {
-            epoch.refs.push(cbuf.refs);
-            epoch.cbufs.push((cbuf.handle, cbuf.pool));
-        }
-
-        self.wait_semaphores.clear();
-        self.wait_stages.clear();
-        self.signal_semaphores.clear();
-
-        if check_point {
-            unsafe {
-                self.next_epoch();
+                Err(DeviceError::OutOfMemory) => {
+                    self.device.set_oom();
+                    device_error = Err(DeviceError::OutOfMemory);
+                }
+                Err(DeviceError::DeviceLost) => {
+                    self.device.set_lost();
+                    device_error = Err(DeviceError::DeviceLost);
+                }
             }
         }
 
@@ -638,7 +642,7 @@ impl crate::traits::Queue for Queue {
                 .image_indices(&self.present_indices);
 
             let mut present_fence = vk::SwapchainPresentFenceInfoEXT::default();
-            if let Some(swapchain_maintenance1) = self.device.swapchain_maintenance1() {
+            if let Some(_swapchain_maintenance1) = self.device.swapchain_maintenance1() {
                 present_fence = present_fence.fences(&self.present_fences);
                 present_info = present_info.push_next(&mut present_fence);
             }
@@ -658,9 +662,15 @@ impl crate::traits::Queue for Queue {
                 }
                 Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                 Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                    return Err(DeviceError::OutOfMemory)
+                    self.device.set_oom();
+                    if device_error.is_ok() {
+                        device_error = Err(DeviceError::OutOfMemory);
+                    }
                 }
-                Err(vk::Result::ERROR_DEVICE_LOST) => return Err(DeviceError::DeviceLost),
+                Err(vk::Result::ERROR_DEVICE_LOST) => {
+                    self.device.set_lost();
+                    device_error = Err(DeviceError::DeviceLost);
+                }
                 Err(
                     vk::Result::ERROR_OUT_OF_DATE_KHR
                     | vk::Result::ERROR_SURFACE_LOST_KHR
@@ -675,22 +685,8 @@ impl crate::traits::Queue for Queue {
                 Err(err) => unexpected_error(err),
             };
         }
-        Ok(())
-    }
 
-    /// Drop command buffers without submitting them to the queue.
-    fn drop_command_buffer<I>(&mut self, command_buffers: I)
-    where
-        I: IntoIterator<Item = CommandBuffer>,
-    {
-        for mut cbuf in command_buffers {
-            cbuf.refs.clear();
-            self.free_refs.push(cbuf.refs);
-
-            unsafe {
-                deallocate_cbuf(cbuf.handle, cbuf.pool, &mut self.pools);
-            }
-        }
+        device_error
     }
 
     /// Synchronize the access to the frame resources.
@@ -707,19 +703,22 @@ impl crate::traits::Queue for Queue {
     fn wait_idle(&self) -> Result<(), DeviceError> {
         let result = unsafe { self.device.ash().queue_wait_idle(self.handle) };
 
-        let result = result.map_err(|err| match err {
-            ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
-            ash::vk::Result::ERROR_DEVICE_LOST => DeviceError::DeviceLost,
-            _ => unexpected_error(err),
-        });
+        let result = match result {
+            Ok(()) => Ok(()),
+            Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.device.set_oom();
+                Err(DeviceError::OutOfMemory)
+            }
+            Err(ash::vk::Result::ERROR_DEVICE_LOST) => {
+                self.device.set_lost();
+                Err(DeviceError::DeviceLost)
+            }
+            Err(err) => unexpected_error(err),
+        };
 
         self.pending_epochs.queue_is_idle();
 
-        if result.is_ok() && self.device.is_oom() {
-            return Err(DeviceError::OutOfMemory);
-        }
-
-        result
+        result.and_then(|_| self.device.get_error())
     }
 }

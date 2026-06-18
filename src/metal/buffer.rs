@@ -68,7 +68,7 @@ impl crate::traits::Buffer for Buffer {
         count == 1
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]) {
         let length = self.buffer.length();
         let fits = match (u64::try_from(offset), u64::try_from(data.len())) {

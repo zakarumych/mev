@@ -25,7 +25,7 @@ impl Default for ComponentSwizzle {
 }
 
 /// Image swizzle for each component.
-/// 
+///
 /// It is used to remap components of an image in image views.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Swizzle {
@@ -66,7 +66,7 @@ impl Swizzle {
 impl Mul for Swizzle {
     type Output = Self;
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[inline]
     fn mul(self, rhs: Self) -> Self {
         use ComponentSwizzle::*;
 
@@ -90,7 +90,7 @@ impl Mul for Swizzle {
 }
 
 /// Extent of the image.
-/// 
+///
 /// It can be 1D, 2D or 3D.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ImageExtent {
@@ -111,7 +111,7 @@ impl ImageExtent {
     }
 
     /// Returns the height of the image.
-    /// 
+    ///
     /// If the image is 1D, it returns 1.
     #[inline(always)]
     pub fn height(&self) -> u32 {
@@ -123,7 +123,7 @@ impl ImageExtent {
     }
 
     /// Returns the depth of the image.
-    /// 
+    ///
     /// If the image is 1D or 2D, it returns 1.
     #[inline(always)]
     pub fn depth(&self) -> u32 {
@@ -135,9 +135,9 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent1`, expecting 1D image.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the image is not 1D.
     #[inline(always)]
     pub fn expect_1d(self) -> Extent1<u32> {
@@ -148,9 +148,9 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent2`, expecting 2D image.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the image is not 2D.
     #[inline(always)]
     pub fn expect_2d(self) -> Extent2<u32> {
@@ -161,9 +161,9 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent3`, expecting 3D image.
-    /// 
+    ///
     /// # Panics
-    /// 
+    ///
     /// Panics if the image is not 3D.
     #[inline(always)]
     pub fn expect_3d(self) -> Extent3<u32> {
@@ -174,7 +174,7 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent1` from any image extent.
-    /// 
+    ///
     /// Ignores height if the image is 2D or 3D.
     /// Ignores depth if the image is 3D.
     #[inline(always)]
@@ -187,7 +187,7 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent2` from any image extent.
-    /// 
+    ///
     /// Uses 1 for height if the image is 1D.
     /// Ignores depth is the image is 3D.
     #[inline(always)]
@@ -200,7 +200,7 @@ impl ImageExtent {
     }
 
     /// Convert into `Extent3` from any image extent.
-    /// 
+    ///
     /// Uses 1 for height if the image is 1D.
     /// Uses 1 for depth if the image is 1D or 2D.
     #[inline(always)]
@@ -266,7 +266,7 @@ impl From<Extent3> for ImageExtent {
 
 bitflags::bitflags! {
     /// Image usage flags.
-    /// 
+    ///
     /// Image can only be used according to usage flags specified during creation.
     /// When creating a buffer, choose all flags that apply.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

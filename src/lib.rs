@@ -1,6 +1,6 @@
 //! Tiny graphics crate made for nothing but fun.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![allow(warnings)]
+// #![allow(warnings)]
 
 mod generic;
 mod traits;

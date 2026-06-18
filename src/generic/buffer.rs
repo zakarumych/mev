@@ -1,13 +1,14 @@
 use std::{
-    borrow::Cow,
-    ops::{Index, Range, RangeFrom, RangeFull, RangeTo},
+    mem::ManuallyDrop,
+    ops::{Range, RangeFrom, RangeFull, RangeTo},
+    ptr::NonNull,
 };
 
 use crate::backend::Buffer;
 
 bitflags::bitflags! {
     /// Buffer usage flags.
-    /// 
+    ///
     /// Buffer can only be used according to usage flags specified during creation.
     /// When creating a buffer, choose all flags that apply.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -19,7 +20,7 @@ bitflags::bitflags! {
         /// Buffer can be used as a destination for transfer operations.
         /// i.e. it will be copied to.
         const TRANSFER_DST = 0x0000_0002;
-        
+
         /// Buffer can be used as a uniform buffer in shader arguments.
         const UNIFORM = 0x0000_0004;
 
@@ -47,22 +48,22 @@ pub enum Memory {
 
     /// Memory is allocated so that it can be accessed by the host.
     /// It can be used directly in shaders, but it is slower than device memory.
-    /// 
+    ///
     /// Note that memory access must be synchronized between the host and the device.
     Shared,
 
     /// Memory is allocated on the device and can be accessed by the host.
-    /// 
+    ///
     /// It is designated for upload operations.
-    /// 
+    ///
     /// Typical use case is staging memory to copy data from host to device memory.
     /// e.g. Host memory -> Staging buffer -> Device buffer.
     Upload,
 
     /// Memory is allocated on the device and can be accessed by the host.
-    /// 
+    ///
     /// It is designated for download operations.
-    /// 
+    ///
     /// Typical use case is staging memory to copy data from device to host memory.
     /// e.g. Device buffer -> Staging buffer -> Host memory.
     Download,
@@ -139,6 +140,109 @@ impl BufferIndex for RangeFull {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         0..size
+    }
+}
+
+pub struct BufferMappedRange<'a> {
+    buffer: &'a mut Buffer,
+    ptr: NonNull<u8>,
+    offset: usize,
+    size: usize,
+}
+
+impl<'a> BufferMappedRange<'a> {
+    pub(crate) fn new(
+        buffer: &'a mut Buffer,
+        ptr: NonNull<u8>,
+        offset: usize,
+        size: usize,
+    ) -> Self {
+        BufferMappedRange {
+            buffer,
+            ptr,
+            offset,
+            size,
+        }
+    }
+
+    pub fn read(&self, offset: usize, data: &mut [u8]) {
+        assert!(offset + data.len() <= self.size);
+
+        unsafe {
+            let src = self.ptr.as_ptr().add(offset);
+            std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), data.len());
+        }
+    }
+}
+
+impl<'a> AsRef<[u8]> for BufferMappedRange<'a> {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.size) }
+    }
+}
+pub struct BufferMappedRangeMut<'a> {
+    buffer: &'a mut Buffer,
+    ptr: NonNull<u8>,
+    offset: usize,
+    size: usize,
+}
+
+impl<'a> BufferMappedRangeMut<'a> {
+    pub(crate) fn new(
+        buffer: &'a mut Buffer,
+        ptr: NonNull<u8>,
+        offset: usize,
+        size: usize,
+    ) -> Self {
+        BufferMappedRangeMut {
+            buffer,
+            ptr,
+            offset,
+            size,
+        }
+    }
+
+    pub fn read(&self, offset: usize, data: &mut [u8]) {
+        assert!(offset + data.len() <= self.size);
+
+        unsafe {
+            let src = self.ptr.as_ptr().add(offset);
+            std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), data.len());
+        }
+    }
+
+    pub fn write(&mut self, offset: usize, data: &[u8]) {
+        assert!(offset + data.len() <= self.size);
+
+        unsafe {
+            let dst = self.ptr.as_ptr().add(offset);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+        }
+    }
+
+    pub fn flush(&mut self) -> Result<(), crate::generic::DeviceError> {
+        let offset = self.offset;
+        let size = self.size;
+        let mut me = ManuallyDrop::new(self);
+        me.buffer.flush_range(offset, size)
+    }
+}
+
+impl<'a> Drop for BufferMappedRangeMut<'a> {
+    fn drop(&mut self) {
+        let _ = self.buffer.flush_range(self.offset, self.size);
+    }
+}
+
+impl<'a> AsRef<[u8]> for BufferMappedRangeMut<'a> {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.size) }
+    }
+}
+
+impl<'a> AsMut<[u8]> for BufferMappedRangeMut<'a> {
+    fn as_mut(&mut self) -> &mut [u8] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u8, self.size) }
     }
 }
 

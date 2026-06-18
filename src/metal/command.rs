@@ -209,7 +209,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn copy_buffer_to_image(
         &mut self,
         src: &Buffer,
@@ -247,7 +247,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn copy_image_region(
         &mut self,
         src: &Image,
@@ -313,7 +313,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
         let slice = slice.as_buffer_slice();
 
@@ -327,7 +327,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
         if data.is_empty() {
             return;
@@ -353,13 +353,13 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
         self.write_buffer_slice(slice, bytemuck::bytes_of(data))
     }
 
     /// Writes data to the buffer.
-    #[cfg_attr(feature = "inline-more", inline(always))]
+    #[cfg_attr(feature = "inline-more", inline)]
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }

@@ -8,6 +8,7 @@ version.workspace = true
 description = "Metal Et Vulkan abstraction"
 
 [features]
+debug = []
 inline-more = []
 
 [dependencies]
@@ -64,7 +65,8 @@ bytemuck = { version = "1.24", features = ["derive", "min_const_generics"] }
 codespan-reporting = "0.13.1"
 core-graphics-types = { version = "0.2" }
 foreign-types = { version = "0.5" }
-gpu-alloc = { version = "0.6" }
+#gpu-alloc = { version = "0.6" }
+gpu-alloc = { version = "0.6", path = "../gpu-alloc/gpu-alloc" }
 hashbrown = { version = "0.16.1" }
 hidden-trait = "0.1"
 libloading = "0.9.0"
@@ -100,3 +102,6 @@ opt-level = 3
 
 [[example]]
 name = "triangle"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mev_backend, values("vulkan", "metal", "webgl"))'] }
