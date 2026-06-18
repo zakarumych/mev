@@ -21,10 +21,9 @@ use crate::{
     backend::new_semaphore,
     generic::{
         parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        CreateLibraryError, CreatePipelineError, DeviceError, Features, ImageDesc, LibraryDesc,
-        LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc, SamplerDesc,
-        ShaderCompileError, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode,
-        ViewDesc,
+        CreatePipelineError, CreateShaderLibraryError, DeviceError, Features, ImageDesc,
+        LibraryDesc, LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc,
+        SamplerDesc, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
     },
 };
 
@@ -248,6 +247,7 @@ impl ErrorState {
     const DEVICE_OUT_OF_MEMORY_FLAG: u16 = 0x01;
     const DEVICE_LOST_FLAG: u16 = 0x02;
 
+    #[inline]
     fn new() -> Self {
         ErrorState {
             state_flags: AtomicU16::new(0),
@@ -256,6 +256,7 @@ impl ErrorState {
 
     /// Whenever the device runs out of memory, this function should be called to set the sticky OOM flag.
     #[cold]
+    #[inline]
     fn set_oom(&self) {
         self.state_flags
             .fetch_or(Self::DEVICE_OUT_OF_MEMORY_FLAG, Ordering::Relaxed);
@@ -263,25 +264,35 @@ impl ErrorState {
 
     /// Whenever the device is lost, this function should be called to set the sticky device lost flag.
     #[cold]
+    #[inline]
     fn set_lost(&self) {
         self.state_flags
             .fetch_or(Self::DEVICE_LOST_FLAG, Ordering::Relaxed);
     }
 
+    #[inline]
     fn is_oom(&self) -> bool {
         (self.state_flags.load(Ordering::Relaxed) & Self::DEVICE_OUT_OF_MEMORY_FLAG)
             == Self::DEVICE_OUT_OF_MEMORY_FLAG
     }
 
+    #[inline]
     fn is_lost(&self) -> bool {
         (self.state_flags.load(Ordering::Relaxed) & Self::DEVICE_LOST_FLAG)
             == Self::DEVICE_LOST_FLAG
     }
 
+    #[inline]
     fn is_empty(&self) -> bool {
         self.state_flags.load(Ordering::Relaxed) == 0
     }
 
+    #[inline]
+    fn is_some(&self) -> bool {
+        self.state_flags.load(Ordering::Relaxed) != 0
+    }
+
+    #[inline]
     fn get_error(&self) -> Result<(), DeviceError> {
         let flags = self.state_flags.load(Ordering::Relaxed);
         if (flags & Self::DEVICE_LOST_FLAG) == Self::DEVICE_LOST_FLAG {
@@ -1086,7 +1097,7 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
-    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateLibraryError> {
+    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateShaderLibraryError> {
         let me = &*self.inner;
         match desc.input {
             LibraryInput::Source(source) => {
@@ -1147,6 +1158,10 @@ impl crate::traits::Device for Device {
         &self,
         desc: ComputePipelineDesc,
     ) -> Result<ComputePipeline, CreatePipelineError> {
+        if self.inner.error_state.is_some() {
+            return Ok(ComputePipeline::null());
+        }
+
         let layout_desc = PipelineLayoutDesc {
             groups: desc
                 .arguments
@@ -1213,6 +1228,10 @@ impl crate::traits::Device for Device {
         &self,
         desc: RenderPipelineDesc,
     ) -> Result<RenderPipeline, CreatePipelineError> {
+        if self.inner.error_state.is_some() {
+            return Ok(RenderPipeline::null());
+        }
+
         let layout_desc = PipelineLayoutDesc {
             groups: desc
                 .arguments
@@ -1435,6 +1454,10 @@ impl crate::traits::Device for Device {
     }
 
     fn new_buffer(&self, desc: BufferDesc) -> Buffer {
+        if self.inner.error_state.is_some() {
+            return Buffer::null(desc.size, desc.usage, desc.name.into());
+        }
+
         let Ok(size) = u64::try_from(desc.size) else {
             self.set_oom();
             return Buffer::null(desc.size, desc.usage, desc.name.into());
@@ -1531,6 +1554,10 @@ impl crate::traits::Device for Device {
     }
 
     fn new_buffer_init(&self, desc: BufferInitDesc<'_>) -> Buffer {
+        if self.inner.error_state.is_some() {
+            return Buffer::null(desc.data.len(), desc.usage, desc.name.into());
+        }
+
         assert!(matches!(
             desc.memory,
             Memory::Shared | Memory::Upload | Memory::Download
@@ -1549,6 +1576,16 @@ impl crate::traits::Device for Device {
     }
 
     fn new_image(&self, desc: ImageDesc) -> Image {
+        if self.inner.error_state.is_some() {
+            return Image::null(
+                desc.extent,
+                desc.format,
+                desc.usage,
+                desc.layers,
+                desc.levels,
+            );
+        }
+
         let result = unsafe {
             self.inner.device.create_image(
                 &vk::ImageCreateInfo::default()
@@ -1701,6 +1738,10 @@ impl crate::traits::Device for Device {
     }
 
     fn new_sampler(&self, desc: SamplerDesc) -> Sampler {
+        if self.inner.error_state.is_some() {
+            return Sampler::null();
+        }
+
         let mut samplers = self.inner.samplers.lock();
         let len = samplers.len();
         match samplers.entry(desc) {
@@ -1725,6 +1766,10 @@ impl crate::traits::Device for Device {
         window: &impl HasWindowHandle,
         display: &impl HasDisplayHandle,
     ) -> Result<Surface, SurfaceError> {
+        let me = &*self.inner;
+
+        me.error_state.get_error()?;
+
         let me = &*self.inner;
         assert!(
             me.features.contains(Features::SURFACE),
@@ -1841,6 +1886,8 @@ impl crate::traits::Device for Device {
     }
 
     fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {
+        self.inner.error_state.get_error()?;
+
         let semaphore = new_semaphore(self.ash())?;
         Ok(Surface::fake(self.clone(), image, semaphore))
     }
@@ -1869,7 +1916,7 @@ pub(crate) fn compile_shader(
     code: &[u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<Box<[u32]>, ShaderCompileError> {
+) -> Result<Box<[u32]>, CreateShaderLibraryError> {
     let (module, info, source_code) = parse_shader(code, filename, lang)?;
 
     let options = naga::back::spv::Options {
@@ -1899,7 +1946,7 @@ pub(crate) fn compile_shader(
 
     let words = naga::back::spv::write_vec(&module, &info, &options, None)
         .map(|vec| vec.into())
-        .map_err(ShaderCompileError::GenSpirV)?;
+        .map_err(CreateShaderLibraryError::GenSpirV)?;
 
     Ok(words)
 }

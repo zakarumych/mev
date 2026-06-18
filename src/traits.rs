@@ -9,11 +9,11 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use crate::{
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
-        Capabilities, ComputePipelineDesc, CreateError, CreateLibraryError, CreatePipelineError,
-        CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
-        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineStages, PixelFormat,
-        RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, SurfaceError, TlasBuildDesc,
-        TlasDesc, ViewDesc,
+        Capabilities, ComputePipelineDesc, CreateError, CreatePipelineError,
+        CreateShaderLibraryError, CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr,
+        Extent2, Extent3, ImageDesc, ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3,
+        PipelineStages, PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader,
+        SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
     },
     BufferMappedRange, BufferMappedRangeMut,
 };
@@ -59,7 +59,7 @@ pub trait Device: Clone + Debug + Eq + Resource {
     fn new_shader_library(
         &self,
         desc: LibraryDesc,
-    ) -> Result<crate::backend::Library, CreateLibraryError>;
+    ) -> Result<crate::backend::Library, CreateShaderLibraryError>;
 
     /// Create a new compute pipeline.
     fn new_compute_pipeline(

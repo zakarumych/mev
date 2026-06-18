@@ -153,32 +153,8 @@ pub struct Shader<'a> {
     pub entry: Cow<'a, str>,
 }
 
-/// Error that can occur during library creation.
 #[derive(Debug)]
-pub enum CreateLibraryError {
-    /// Shader compilation error.
-    CompileError(ShaderCompileError),
-}
-
-impl From<ShaderCompileError> for CreateLibraryError {
-    #[inline(always)]
-    fn from(err: ShaderCompileError) -> Self {
-        CreateLibraryError::CompileError(err)
-    }
-}
-
-impl fmt::Display for CreateLibraryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateLibraryError::CompileError(err) => fmt::Display::fmt(err, f),
-        }
-    }
-}
-
-impl Error for CreateLibraryError {}
-
-#[derive(Debug)]
-pub(crate) enum ShaderCompileError {
+pub enum CreateShaderLibraryError {
     NonUtf8(std::str::Utf8Error),
     ParseSpirV(naga::front::spv::Error),
     ParseWgsl(naga::front::wgsl::ParseError),
@@ -192,18 +168,18 @@ pub(crate) enum ShaderCompileError {
     GenMsl(naga::back::msl::Error),
 }
 
-impl fmt::Display for ShaderCompileError {
+impl fmt::Display for CreateShaderLibraryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ShaderCompileError::NonUtf8(err) => write!(f, "non-utf8: {}", err),
-            ShaderCompileError::ParseSpirV(err) => write!(f, "parse SPIR-V: {}", err),
-            ShaderCompileError::ParseWgsl(err) => write!(f, "parse WGSL: {}", err),
-            ShaderCompileError::ParseGlsl(err) => write!(f, "parse GLSL: {}", err),
-            ShaderCompileError::ValidationFailed => write!(f, "validation failed"),
+            CreateShaderLibraryError::NonUtf8(err) => write!(f, "non-utf8: {}", err),
+            CreateShaderLibraryError::ParseSpirV(err) => write!(f, "parse SPIR-V: {}", err),
+            CreateShaderLibraryError::ParseWgsl(err) => write!(f, "parse WGSL: {}", err),
+            CreateShaderLibraryError::ParseGlsl(err) => write!(f, "parse GLSL: {}", err),
+            CreateShaderLibraryError::ValidationFailed => write!(f, "validation failed"),
             #[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
-            ShaderCompileError::GenSpirV(err) => write!(f, "generate SPIR-V: {}", err),
+            CreateShaderLibraryError::GenSpirV(err) => write!(f, "generate SPIR-V: {}", err),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            ShaderCompileError::GenMsl(err) => write!(f, "generate MSL: {}", err),
+            CreateShaderLibraryError::GenMsl(err) => write!(f, "generate MSL: {}", err),
         }
     }
 }
@@ -212,23 +188,23 @@ pub(crate) fn parse_shader<'a>(
     code: &'a [u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<(naga::Module, naga::valid::ModuleInfo, Option<&'a str>), ShaderCompileError> {
+) -> Result<(naga::Module, naga::valid::ModuleInfo, Option<&'a str>), CreateShaderLibraryError> {
     let mut source_code = None;
     let module = match lang {
         ShaderLanguage::SpirV => {
             naga::front::spv::parse_u8_slice(code, &naga::front::spv::Options::default())
-                .map_err(ShaderCompileError::ParseSpirV)?
+                .map_err(CreateShaderLibraryError::ParseSpirV)?
         }
         ShaderLanguage::Msl => {
             unimplemented!("Compilation from MSL is not supported")
         }
         ShaderLanguage::Wgsl => {
-            let code = std::str::from_utf8(code).map_err(ShaderCompileError::NonUtf8)?;
+            let code = std::str::from_utf8(code).map_err(CreateShaderLibraryError::NonUtf8)?;
             source_code = Some(code);
-            naga::front::wgsl::parse_str(code).map_err(ShaderCompileError::ParseWgsl)?
+            naga::front::wgsl::parse_str(code).map_err(CreateShaderLibraryError::ParseWgsl)?
         }
         ShaderLanguage::Glsl { stage } => {
-            let code = std::str::from_utf8(code).map_err(ShaderCompileError::NonUtf8)?;
+            let code = std::str::from_utf8(code).map_err(CreateShaderLibraryError::NonUtf8)?;
             source_code = Some(code);
             naga::front::glsl::Frontend::default()
                 .parse(
@@ -242,7 +218,7 @@ pub(crate) fn parse_shader<'a>(
                     },
                     code,
                 )
-                .map_err(ShaderCompileError::ParseGlsl)?
+                .map_err(CreateShaderLibraryError::ParseGlsl)?
         }
     };
 
@@ -259,7 +235,7 @@ pub(crate) fn parse_shader<'a>(
                         .map(|source| (filename, source))
                 }),
             );
-            ShaderCompileError::ValidationFailed
+            CreateShaderLibraryError::ValidationFailed
         })?;
 
     Ok((module, info, source_code))
@@ -283,7 +259,8 @@ fn emit_annotated_error<E: std::error::Error>(
                 .collect(),
         );
 
-        term::emit(&mut writer, &config, &files, &diagnostic).expect("cannot write error");
+        term::emit_to_io_write(&mut writer, &config, &files, &diagnostic)
+            .expect("cannot write error");
 
         if let Ok(s) = std::str::from_utf8(writer.as_slice()) {
             tracing::event!(

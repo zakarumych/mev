@@ -289,7 +289,7 @@ impl BufferSlice<'_> {
 impl Buffer {
     /// Returns buffer slice with given range.
     #[inline(always)]
-    pub fn slice<R>(&self, range: R) -> BufferSlice
+    pub fn slice<R>(&self, range: R) -> BufferSlice<'_>
     where
         R: BufferIndex,
     {
@@ -303,7 +303,7 @@ impl Buffer {
 
     /// Splits buffer into two ranges, from start to `at` and from `at` to end.
     #[inline(always)]
-    pub fn split_at(&self, at: usize) -> (BufferSlice, BufferSlice) {
+    pub fn split_at(&self, at: usize) -> (BufferSlice<'_>, BufferSlice<'_>) {
         let size = self.size();
         debug_assert!(at <= size);
         let at = at.min(size);
@@ -376,19 +376,19 @@ impl<'a> From<&'a Buffer> for BufferSlice<'a> {
 /// Trait to generalize over types that can be converted to buffer slice.
 /// This is a buffer slice itself, a buffer and references.
 pub trait AsBufferSlice {
-    fn as_buffer_slice(&self) -> BufferSlice;
+    fn as_buffer_slice(&self) -> BufferSlice<'_>;
 }
 
 impl AsBufferSlice for BufferSlice<'_> {
     #[inline(always)]
-    fn as_buffer_slice(&self) -> BufferSlice {
+    fn as_buffer_slice(&self) -> BufferSlice<'_> {
         *self
     }
 }
 
 impl AsBufferSlice for Buffer {
     #[inline(always)]
-    fn as_buffer_slice(&self) -> BufferSlice {
+    fn as_buffer_slice(&self) -> BufferSlice<'_> {
         BufferSlice {
             offset: 0,
             size: self.size(),
@@ -402,7 +402,7 @@ where
     B: AsBufferSlice,
 {
     #[inline(always)]
-    fn as_buffer_slice(&self) -> BufferSlice {
+    fn as_buffer_slice(&self) -> BufferSlice<'_> {
         (*self).as_buffer_slice()
     }
 }

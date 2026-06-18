@@ -54,17 +54,14 @@ pub use self::{
     },
     sampler::{AddressMode, Filter, MipMapMode, SamplerDesc},
     shader::{
-        CreateLibraryError, LibraryDesc, LibraryInput, Shader, ShaderLanguage, ShaderSource,
+        CreateShaderLibraryError, LibraryDesc, LibraryInput, Shader, ShaderLanguage, ShaderSource,
         ShaderStage, ShaderStages,
     },
     stages::{PipelineStage, PipelineStages},
     surface::SurfaceError,
 };
 
-pub(crate) use self::{
-    arguments::ArgumentsSealed,
-    shader::{parse_shader, ShaderCompileError},
-};
+pub(crate) use self::{arguments::ArgumentsSealed, shader::parse_shader};
 
 /// Error that can happen when device's memory is exhausted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

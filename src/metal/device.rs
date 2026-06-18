@@ -20,7 +20,7 @@ use crate::{
     generic::{
         parse_shader, ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
         CreateLibraryError, CreatePipelineError, ImageDesc, ImageExtent, LibraryDesc, LibraryInput,
-        Memory, OutOfMemory, RenderPipelineDesc, SamplerDesc, ShaderCompileError, ShaderLanguage,
+        Memory, OutOfMemory, RenderPipelineDesc, SamplerDesc, CreateShaderLibraryError, ShaderLanguage,
         SurfaceError, TlasDesc, VertexStepMode,
     },
     Extent3,
@@ -87,7 +87,7 @@ impl crate::traits::Device for Device {
                 match source.language {
                     ShaderLanguage::Msl => {
                         let source = std::str::from_utf8(&*source.code).map_err(|err| {
-                            CreateLibraryError::CompileError(ShaderCompileError::NonUtf8(err))
+                            CreateLibraryError::CompileError(CreateShaderLibraryError::NonUtf8(err))
                         })?;
 
                         let library = self
@@ -480,7 +480,7 @@ fn compile_shader(
     code: &[u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<CompiledMetalShader, ShaderCompileError> {
+) -> Result<CompiledMetalShader, CreateShaderLibraryError> {
     let (module, info, _source_code) = parse_shader(code, filename, lang)?;
 
     let mut options = naga::back::msl::Options {
@@ -613,7 +613,7 @@ fn compile_shader(
             vertex_buffer_mappings: vec![],
         },
     )
-    .map_err(ShaderCompileError::GenMsl)?;
+    .map_err(CreateShaderLibraryError::GenMsl)?;
 
     // eprintln!("{}", code);
     // eprintln!("{:?}", translation.entry_point_names);
