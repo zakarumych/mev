@@ -342,7 +342,9 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
     /// Requires that the buffer was created with `Memory::Shared`, `Memory::Upload` or `Memory::Download`.
     /// The buffer must be in detached state - the [`detached`](Buffer::detached) must return `true`.
     /// This function should be called only once at a time, and [`unmap`](Buffer::unmap) should be called after the mapping is no longer needed.
-    fn map(&mut self, range: Range<usize>) -> Result<(), DeviceError>;
+    fn map<R>(&mut self, range: R) -> Result<(), DeviceError>
+    where
+        R: crate::generic::BufferRange;
 
     /// Unmaps the buffer.
     ///
@@ -353,18 +355,16 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
     /// Return an inmutable slice of the mapped buffer region.
     ///
     /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
-    fn read_mapped_range(
-        &mut self,
-        range: Range<usize>,
-    ) -> Result<BufferMappedRange<'_>, DeviceError>;
+    fn read_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRange<'_>, DeviceError>
+    where
+        R: crate::generic::BufferRange;
 
     /// Return a mutable slice of the mapped buffer region.
     ///
     /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
-    fn write_mapped_range(
-        &mut self,
-        range: Range<usize>,
-    ) -> Result<BufferMappedRangeMut<'_>, DeviceError>;
+    fn write_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
+    where
+        R: crate::generic::BufferRange;
 
     /// Writes data to the buffer at the given offset.
     ///

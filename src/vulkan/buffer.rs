@@ -200,7 +200,12 @@ impl crate::traits::Buffer for Buffer {
     ///
     /// This is no-op for persistently mapped buffers.
     /// Buffers created with [`Memory::Upload`](crate::generic::Memory::Upload) or [`Memory::Download`](crate::generic::Memory::Download) are persistently mapped.
-    fn map(&mut self, range: Range<usize>) -> Result<(), DeviceError> {
+    fn map<R>(&mut self, range: R) -> Result<(), DeviceError>
+    where
+        R: crate::generic::BufferRange,
+    {
+        let range = range.range(self.size());
+
         let inner = Arc::get_mut(&mut self.inner).expect("Buffer must be detached to write to it");
 
         let Some(block) = &mut inner.block else {
@@ -269,10 +274,12 @@ impl crate::traits::Buffer for Buffer {
         }
     }
 
-    fn read_mapped_range(
-        &mut self,
-        range: Range<usize>,
-    ) -> Result<BufferMappedRange<'_>, DeviceError> {
+    fn read_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRange<'_>, DeviceError>
+    where
+        R: crate::generic::BufferRange,
+    {
+        let range = range.range(self.size());
+
         assert!(
             range.start <= range.end,
             "Range start must be less than or equal to range end"
@@ -335,10 +342,12 @@ impl crate::traits::Buffer for Buffer {
         ))
     }
 
-    fn write_mapped_range(
-        &mut self,
-        range: Range<usize>,
-    ) -> Result<BufferMappedRangeMut<'_>, DeviceError> {
+    fn write_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
+    where
+        R: crate::generic::BufferRange,
+    {
+        let range = range.range(self.size());
+
         assert!(
             range.start <= range.end,
             "Range start must be less than or equal to range end"

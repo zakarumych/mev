@@ -103,12 +103,12 @@ pub struct BufferInitDesc<'a> {
 
 /// Trait for types that can be used to index a buffer to get a slice of it.
 /// It is implemented for different range types over `usize`.
-pub trait BufferIndex {
+pub trait BufferRange {
     /// Returns range for given buffer size.
     fn range(self, size: usize) -> Range<usize>;
 }
 
-impl BufferIndex for Range<usize> {
+impl BufferRange for Range<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         debug_assert!(self.end <= size, "buffer range out of bounds");
@@ -118,7 +118,7 @@ impl BufferIndex for Range<usize> {
     }
 }
 
-impl BufferIndex for RangeFrom<usize> {
+impl BufferRange for RangeFrom<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         debug_assert!(self.start <= size, "buffer range out of bounds");
@@ -127,7 +127,7 @@ impl BufferIndex for RangeFrom<usize> {
     }
 }
 
-impl BufferIndex for RangeTo<usize> {
+impl BufferRange for RangeTo<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         debug_assert!(self.end <= size, "buffer range out of bounds");
@@ -136,7 +136,7 @@ impl BufferIndex for RangeTo<usize> {
     }
 }
 
-impl BufferIndex for RangeFull {
+impl BufferRange for RangeFull {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         0..size
@@ -291,7 +291,7 @@ impl Buffer {
     #[inline(always)]
     pub fn slice<R>(&self, range: R) -> BufferSlice<'_>
     where
-        R: BufferIndex,
+        R: BufferRange,
     {
         let range = range.range(self.size());
         BufferSlice {
@@ -328,7 +328,7 @@ impl<'a> BufferSlice<'a> {
     #[inline(always)]
     pub fn slice<R>(self, range: R) -> BufferSlice<'a>
     where
-        R: BufferIndex,
+        R: BufferRange,
     {
         let range = range.range(self.size);
         BufferSlice {
