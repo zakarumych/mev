@@ -35,38 +35,17 @@ bitflags::bitflags! {
 
         /// Buffer can be used as a indirect buffer in indirect draw calls.
         const INDIRECT = 0x0000_0040;
+
+        /// Buffer can be read by the host (CPU) using map operations.
+        const HOST_READ = 0x0001_0000;
+
+        /// Buffer can be written by the host (CPU) using map operations.
+        const HOST_WRITE = 0x0002_0000;
+
+        /// Buffer is transient and will be used for a short time and then discarded.
+        /// This is a hint to the backend that it can optimize memory usage for this buffer.
+        const TRANSIENT = 0x0100_0000;
     }
-}
-
-/// Specifies what memory type should be allocated for the buffer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Memory {
-    /// Memory is allocated on the device.
-    /// This memory is fastest to access by the device,
-    /// but may not be accessible by the host.
-    Device,
-
-    /// Memory is allocated so that it can be accessed by the host.
-    /// It can be used directly in shaders, but it is slower than device memory.
-    ///
-    /// Note that memory access must be synchronized between the host and the device.
-    Shared,
-
-    /// Memory is allocated on the device and can be accessed by the host.
-    ///
-    /// It is designated for upload operations.
-    ///
-    /// Typical use case is staging memory to copy data from host to device memory.
-    /// e.g. Host memory -> Staging buffer -> Device buffer.
-    Upload,
-
-    /// Memory is allocated on the device and can be accessed by the host.
-    ///
-    /// It is designated for download operations.
-    ///
-    /// Typical use case is staging memory to copy data from device to host memory.
-    /// e.g. Device buffer -> Staging buffer -> Host memory.
-    Download,
 }
 
 /// Description used for buffer creation.
@@ -77,9 +56,6 @@ pub struct BufferDesc<'a> {
 
     /// Buffer usage flags.
     pub usage: BufferUsage,
-
-    /// Buffer memory type.
-    pub memory: Memory,
 
     /// Buffer debug name.
     pub name: &'a str,
@@ -93,9 +69,6 @@ pub struct BufferInitDesc<'a> {
 
     /// Buffer usage flags.
     pub usage: BufferUsage,
-
-    /// Buffer memory type.
-    pub memory: Memory,
 
     /// Buffer debug name.
     pub name: &'a str,

@@ -20,11 +20,12 @@ use smallvec::SmallVec;
 use crate::{
     backend::new_semaphore,
     generic::{
-        parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        PipelineError, ShaderLibraryError, DeviceError, Features, ImageDesc,
-        LibraryDesc, LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc,
-        SamplerDesc, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
+        parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError,
+        Features, ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
+        PrimitiveTopology, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError,
+        SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
     },
+    BufferUsage,
 };
 
 use super::{
@@ -1494,7 +1495,7 @@ impl crate::traits::Device for Device {
                 gpu_alloc::Request {
                     size: requirements.size,
                     align_mask,
-                    usage: memory_to_usage_flags(desc.memory),
+                    usage: map_usage_flags(desc.usage),
                     memory_types: requirements.memory_type_bits,
                 },
             )
@@ -1558,15 +1559,9 @@ impl crate::traits::Device for Device {
             return Buffer::null(desc.data.len(), desc.usage, desc.name.into());
         }
 
-        assert!(matches!(
-            desc.memory,
-            Memory::Shared | Memory::Upload | Memory::Download
-        ));
-
         let mut buffer = self.new_buffer(BufferDesc {
             size: desc.data.len(),
-            usage: desc.usage,
-            memory: desc.memory,
+            usage: desc.usage | BufferUsage::HOST_WRITE,
             name: desc.name,
         });
 
@@ -1629,7 +1624,7 @@ impl crate::traits::Device for Device {
                 gpu_alloc::Request {
                     size: requirements.size,
                     align_mask,
-                    usage: memory_to_usage_flags(Memory::Device),
+                    usage: gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS,
                     memory_types: requirements.memory_type_bits,
                 },
             )
@@ -1903,13 +1898,26 @@ impl crate::traits::Device for Device {
     }
 }
 
-fn memory_to_usage_flags(memory: Memory) -> gpu_alloc::UsageFlags {
-    match memory {
-        Memory::Device => gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS,
-        Memory::Shared => gpu_alloc::UsageFlags::HOST_ACCESS,
-        Memory::Upload => gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::UPLOAD,
-        Memory::Download => gpu_alloc::UsageFlags::HOST_ACCESS | gpu_alloc::UsageFlags::DOWNLOAD,
+fn map_usage_flags(usage: BufferUsage) -> gpu_alloc::UsageFlags {
+    let mut flags = gpu_alloc::UsageFlags::empty();
+
+    if usage.intersects(BufferUsage::HOST_READ | BufferUsage::HOST_WRITE) {
+        flags |= gpu_alloc::UsageFlags::HOST_ACCESS;
     }
+
+    if usage.contains(BufferUsage::HOST_READ) {
+        flags |= gpu_alloc::UsageFlags::DOWNLOAD;
+    }
+
+    if usage.contains(BufferUsage::HOST_WRITE) {
+        flags |= gpu_alloc::UsageFlags::UPLOAD;
+    }
+
+    if usage.contains(BufferUsage::TRANSIENT) {
+        flags |= gpu_alloc::UsageFlags::TRANSIENT;
+    }
+
+    flags
 }
 
 pub(crate) fn compile_shader(

@@ -34,7 +34,7 @@ pub use self::{
     },
     buffer::{
         AsBufferSlice, BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut,
-        BufferRange, BufferSlice, BufferUsage, Memory,
+        BufferRange, BufferSlice, BufferUsage,
     },
     compute_pipeline::ComputePipelineDesc,
     data::*,
