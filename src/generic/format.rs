@@ -1,3 +1,5 @@
+use crate::Extent2;
+
 /// Format of the pixel.
 ///
 /// It specifies channels, channel bits and data type.
@@ -269,9 +271,9 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn is_color(&self) -> bool {
-        match self {
+        match *self {
             PixelFormat::R8Unorm
             | PixelFormat::R8Snorm
             | PixelFormat::R8Uint
@@ -363,9 +365,9 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn is_depth(&self) -> bool {
-        match self {
+        match *self {
             PixelFormat::R8Unorm
             | PixelFormat::R8Srgb
             | PixelFormat::R8Snorm
@@ -457,9 +459,9 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn is_stencil(&self) -> bool {
-        match self {
+        match *self {
             PixelFormat::R8Unorm
             | PixelFormat::R8Srgb
             | PixelFormat::R8Snorm
@@ -550,9 +552,9 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
-    pub fn size(&self) -> usize {
-        match self {
+    #[inline]
+    pub fn block_size(&self) -> usize {
+        match *self {
             PixelFormat::R8Unorm
             | PixelFormat::R8Snorm
             | PixelFormat::R8Uint
@@ -640,9 +642,9 @@ impl PixelFormat {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn is_srgb(&self) -> bool {
-        match self {
+        match *self {
             PixelFormat::R8Srgb
             | PixelFormat::Rg8Srgb
             | PixelFormat::Rgb8Srgb
@@ -650,6 +652,25 @@ impl PixelFormat {
             | PixelFormat::Bgr8Srgb
             | PixelFormat::Bgra8Srgb => true,
             _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn block_extent(&self) -> Extent2 {
+        match *self {
+            PixelFormat::Bc1RgbUnorm
+            | PixelFormat::Bc1RgbSrgb
+            | PixelFormat::Bc1RgbaUnorm
+            | PixelFormat::Bc1RgbaSrgb
+            | PixelFormat::Bc2Unorm
+            | PixelFormat::Bc2Srgb
+            | PixelFormat::Bc3Unorm
+            | PixelFormat::Bc3Srgb
+            | PixelFormat::Bc4Unorm
+            | PixelFormat::Bc4Snorm
+            | PixelFormat::Bc5Unorm
+            | PixelFormat::Bc5Snorm => Extent2::new(4, 4),
+            _ => Extent2::new(1, 1),
         }
     }
 }

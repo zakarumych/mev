@@ -31,11 +31,6 @@ pub use self::{
     surface::{Frame, Surface},
 };
 
-pub(crate) use self::{
-    instance::{CreateErrorKind, LoadErrorKind},
-    render_pipeline::CreatePipelineErrorKind,
-};
-
 // Minimize functions size by offloading panic to a separate function.
 #[cold]
 #[inline]

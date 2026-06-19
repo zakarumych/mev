@@ -51,22 +51,3 @@ impl RenderPipeline {
         self.vertex_buffers_count
     }
 }
-
-#[derive(Debug)]
-pub enum CreatePipelineErrorKind {
-    InvalidShaderEntry,
-    FailedToBuildPipeline(String),
-}
-
-impl fmt::Display for CreatePipelineErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreatePipelineErrorKind::InvalidShaderEntry => {
-                write!(f, "Invalid shader entry point")
-            }
-            CreatePipelineErrorKind::FailedToBuildPipeline(err) => {
-                write!(f, "Failed to build pipeline: {}", err)
-            }
-        }
-    }
-}

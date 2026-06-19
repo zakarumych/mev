@@ -1,35 +1,17 @@
 use std::{convert::Infallible, fmt};
 
 use crate::generic::{
-    Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features,
-    LoadError, QueueFlags,
+    Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, QueueFlags,
 };
 
 use super::{Device, Queue};
-
-pub(crate) type LoadErrorKind = Infallible;
-
-#[derive(Debug)]
-pub(crate) enum CreateErrorKind {
-    FailedToCreateDevice,
-}
-
-impl fmt::Display for CreateErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateErrorKind::FailedToCreateDevice => {
-                write!(f, "failed to create device")
-            }
-        }
-    }
-}
 
 pub struct Instance {
     capabilities: Capabilities,
 }
 
 impl Instance {
-    pub fn load() -> Result<Self, LoadError>
+    pub fn load() -> Result<Self, DeviceError>
     where
         Self: Sized,
     {
@@ -63,14 +45,13 @@ impl crate::traits::Instance for Instance {
         &self.capabilities
     }
 
-    fn new_device(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
+    fn new_device(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
         assert!(
             info.queues.iter().all(|&f| f == 0),
             "Only one queue family is supported"
         );
 
-        let device = metal::Device::system_default()
-            .ok_or(CreateError(CreateErrorKind::FailedToCreateDevice))?;
+        let device = metal::Device::system_default().ok_or(DeviceError::DeviceLost)?;
 
         let device = Device::new(device, info.queues.len());
 

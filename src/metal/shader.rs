@@ -2,7 +2,7 @@ use std::{borrow::Cow, fmt, hash::Hash, sync::Arc};
 
 use hashbrown::HashMap;
 
-use crate::generic::{Shader, CreateShaderLibraryError};
+use crate::generic::{Shader, ShaderLibraryError};
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct GroupBindings {

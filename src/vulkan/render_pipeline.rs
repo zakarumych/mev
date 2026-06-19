@@ -75,16 +75,3 @@ impl RenderPipeline {
         &self.inner.layout
     }
 }
-
-#[derive(Debug)]
-pub enum CreatePipelineErrorKind {
-    InvalidShaderEntry,
-}
-
-impl fmt::Display for CreatePipelineErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreatePipelineErrorKind::InvalidShaderEntry => write!(f, "invalid shader entry"),
-        }
-    }
-}

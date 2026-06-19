@@ -47,14 +47,14 @@ impl crate::traits::Device for Device {
     fn new_compute_pipeline(
         &self,
         desc: crate::ComputePipelineDesc,
-    ) -> Result<crate::backend::ComputePipeline, crate::CreatePipelineError> {
+    ) -> Result<crate::backend::ComputePipeline, crate::PipelineError> {
         unimplemented!("WebGL backend does not support compute pipelines")
     }
 
     fn new_render_pipeline(
         &self,
         desc: crate::RenderPipelineDesc,
-    ) -> Result<crate::backend::RenderPipeline, crate::CreatePipelineError> {
+    ) -> Result<crate::backend::RenderPipeline, crate::PipelineError> {
         todo!()
     }
 
@@ -68,7 +68,7 @@ impl crate::traits::Device for Device {
     fn new_shader_library(
         &self,
         desc: crate::LibraryDesc,
-    ) -> Result<crate::backend::Library, crate::CreateLibraryError> {
+    ) -> Result<crate::backend::Library, crate::LibraryError> {
         todo!()
     }
 

@@ -9,11 +9,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use crate::{
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
-        Capabilities, ComputePipelineDesc, CreateError, CreatePipelineError,
-        CreateShaderLibraryError, CreateWithSurfaceError, DeviceDesc, DeviceError, DeviceRepr,
-        Extent2, Extent3, ImageDesc, ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3,
+        Capabilities, ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3,
+        ImageDesc, ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError,
         PipelineStages, PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader,
-        SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
+        ShaderLibraryError, SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
     },
     BufferMappedRange, BufferMappedRangeMut,
 };
@@ -33,7 +32,7 @@ pub trait Instance: Debug + Resource {
     fn new_device(
         &self,
         info: DeviceDesc,
-    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), CreateError>;
+    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError>;
 
     fn new_device_with_surface(
         &self,
@@ -46,7 +45,7 @@ pub trait Instance: Debug + Resource {
             Vec<crate::backend::Queue>,
             crate::backend::Surface,
         ),
-        CreateWithSurfaceError,
+        SurfaceError,
     > {
         let (device, queues) = self.new_device(info)?;
         let surface = device.new_surface(window, display)?;
@@ -59,19 +58,19 @@ pub trait Device: Clone + Debug + Eq + Resource {
     fn new_shader_library(
         &self,
         desc: LibraryDesc,
-    ) -> Result<crate::backend::Library, CreateShaderLibraryError>;
+    ) -> Result<crate::backend::Library, ShaderLibraryError>;
 
     /// Create a new compute pipeline.
     fn new_compute_pipeline(
         &self,
         desc: ComputePipelineDesc,
-    ) -> Result<crate::backend::ComputePipeline, CreatePipelineError>;
+    ) -> Result<crate::backend::ComputePipeline, PipelineError>;
 
     /// Create a new render pipeline.
     fn new_render_pipeline(
         &self,
         desc: RenderPipelineDesc,
-    ) -> Result<crate::backend::RenderPipeline, CreatePipelineError>;
+    ) -> Result<crate::backend::RenderPipeline, PipelineError>;
 
     /// Create a new buffer with uninitialized contents.
     fn new_buffer(&self, desc: BufferDesc) -> crate::backend::Buffer;

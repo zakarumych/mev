@@ -4,42 +4,21 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
 
 use crate::generic::{
-    Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features,
-    LoadError, QueueFlags,
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
+    QueueFlags,
 };
 
 use super::{Device, Queue};
-
-pub(crate) enum LoadErrorKind {
-    WebGL2NotSupported,
-}
-
-#[derive(Debug)]
-pub(crate) enum CreateErrorKind {
-    CanvasNotFound,
-    WebGL2NotSupported,
-    ContextCreationFailed,
-}
-
-impl fmt::Display for CreateErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateErrorKind::CanvasNotFound => write!(f, "canvas element not found"),
-            CreateErrorKind::WebGL2NotSupported => write!(f, "WebGL 2.0 not supported"),
-            CreateErrorKind::ContextCreationFailed => write!(f, "failed to create WebGL context"),
-        }
-    }
-}
 
 pub struct Instance {
     capabilities: Capabilities,
 }
 
 impl Instance {
-    pub fn load() -> Result<Self, LoadError> {
+    pub fn load() -> Result<Self, DeviceError> {
         // Check if WebGL2RenderingContext is available
-        if js_sys::Reflect::get(&js_sys::global(), &"WebGL2RenderingContext".into()).is_ok() {
-            return Err(LoadError(LoadErrorKind::WebGL2NotSupported));
+        if js_sys::Reflect::get(&js_sys::global(), &"WebGL2RenderingContext".into()).is_err() {
+            return Err(DeviceError::DeviceLost);
         }
 
         // WebGL always has one device (the GPU) with one queue family
@@ -56,15 +35,16 @@ impl Instance {
         })
     }
 
-    fn create_context(
-        canvas: &HtmlCanvasElement,
-    ) -> Result<WebGl2RenderingContext, CreateErrorKind> {
+    fn create_context(canvas: &HtmlCanvasElement) -> Result<WebGl2RenderingContext, DeviceError> {
         let context = canvas
             .get_context("webgl2")
-            .map_err(|_| CreateErrorKind::ContextCreationFailed)?
-            .ok_or(CreateErrorKind::WebGL2NotSupported)?
+            .map_err(|err| {
+                tracing::error!("Failed to get WebGL2 context: {:?}", err);
+                DeviceError::DeviceLost
+            })?
+            .ok_or(DeviceError::DeviceLost)?
             .dyn_into::<WebGl2RenderingContext>()
-            .map_err(|_| CreateErrorKind::WebGL2NotSupported)?;
+            .unwrap();
 
         // Enable standard WebGL2 features
         context.enable(WebGl2RenderingContext::DEPTH_TEST);

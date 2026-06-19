@@ -9,9 +9,11 @@ use std::{
 use ash::*;
 use hashbrown::HashMap;
 
-use crate::generic::{
-    Capabilities, CreateError, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features,
-    LoadError, OutOfMemory,
+use crate::{
+    generic::{
+        Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, OutOfMemory,
+    },
+    DeviceError,
 };
 
 use super::{device::Device, from::*, handle_host_oom, unexpected_error, Queue, Version};
@@ -65,44 +67,6 @@ impl fmt::Debug for Instance {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum LoadErrorKind {
-    OutOfMemory,
-    LoadingError(ash::LoadingError),
-    InitializationFailed,
-}
-
-impl fmt::Display for LoadErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoadErrorKind::LoadingError(err) => {
-                write!(f, "failed to load Vulkan entry points: {}", err)
-            }
-            LoadErrorKind::OutOfMemory => write!(f, "{OutOfMemory}"),
-            LoadErrorKind::InitializationFailed => write!(f, "initialization failed"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum CreateErrorKind {
-    OutOfMemory,
-    InitializationFailed,
-    TooManyObjects,
-    DeviceLost,
-}
-
-impl fmt::Display for CreateErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateErrorKind::OutOfMemory => write!(f, "{OutOfMemory}"),
-            CreateErrorKind::InitializationFailed => write!(f, "initialization failed"),
-            CreateErrorKind::TooManyObjects => write!(f, "too many objects"),
-            CreateErrorKind::DeviceLost => write!(f, "device lost"),
-        }
-    }
-}
-
 unsafe fn find_layer<'a>(
     layers: &'a [vk::LayerProperties],
     name: &str,
@@ -129,24 +93,24 @@ fn engine_version() -> u32 {
 }
 
 impl Instance {
-    pub fn load() -> Result<Self, LoadError> {
+    pub fn load() -> Result<Self, DeviceError> {
         // Load the Vulkan entry points.
 
         // SAFETY:
         // This call is unsafe and cannot be made completely safe.
         // It loads dynamic library and some function pointers.
         // The library must behave correctly in order for the rest of the code to be safe.
-        let entry =
-            unsafe { Entry::load() }.map_err(|err| LoadError(LoadErrorKind::LoadingError(err)))?;
+        let entry = unsafe { Entry::load() }.map_err(|err| {
+            tracing::error!("Vulkan entry load error: {err}");
+            DeviceError::DeviceLost
+        })?;
 
         // Collect instance layers and extensions.
 
         let layers =
             unsafe { entry.enumerate_instance_layer_properties() }.map_err(|err| match err {
-                vk::Result::ERROR_OUT_OF_HOST_MEMORY => {
-                    std::alloc::handle_alloc_error(Layout::new::<()>())
-                }
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => LoadError(LoadErrorKind::OutOfMemory),
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
                 err => unexpected_error(err),
             })?;
 
@@ -155,7 +119,7 @@ impl Instance {
         let extensions = unsafe { entry.enumerate_instance_extension_properties(None) }.map_err(
             |err| match err {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => LoadError(LoadErrorKind::OutOfMemory),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
                 vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("No layer specified"),
                 err => unexpected_error(err),
             },
@@ -254,10 +218,8 @@ impl Instance {
 
         let instance = result.map_err(|err| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => LoadError(LoadErrorKind::OutOfMemory),
-            vk::Result::ERROR_INITIALIZATION_FAILED => {
-                LoadError(LoadErrorKind::InitializationFailed)
-            }
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
+            vk::Result::ERROR_INITIALIZATION_FAILED => DeviceError::DeviceLost,
             vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("Layers were checked"),
             vk::Result::ERROR_EXTENSION_NOT_PRESENT => unreachable!("Extensions were checked"),
             vk::Result::ERROR_INCOMPATIBLE_DRIVER => unreachable!("Version was checked"),
@@ -292,10 +254,8 @@ impl Instance {
         let devices =
             unsafe { instance.enumerate_physical_devices() }.map_err(|err| match err {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => LoadError(LoadErrorKind::OutOfMemory),
-                vk::Result::ERROR_INITIALIZATION_FAILED => {
-                    LoadError(LoadErrorKind::InitializationFailed)
-                }
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
+                vk::Result::ERROR_INITIALIZATION_FAILED => DeviceError::DeviceLost,
                 err => unexpected_error(err),
             })?;
 
@@ -305,7 +265,7 @@ impl Instance {
             let result = unsafe { instance.enumerate_device_extension_properties(device) };
             let extensions = result.map_err(|err| match err {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => LoadError(LoadErrorKind::OutOfMemory),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
                 vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("No layer specified"),
                 err => unexpected_error(err),
             })?;
@@ -467,7 +427,7 @@ impl crate::traits::Instance for Instance {
         &self.capabilities
     }
 
-    fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
+    fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
         let physical_device = self.devices[desc.idx];
         let device_caps = &self.capabilities.devices[desc.idx];
 
@@ -478,7 +438,7 @@ impl crate::traits::Instance for Instance {
 
         let extensions = result.map_err(|err| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreateError(CreateErrorKind::OutOfMemory),
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
             vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("No layer specified"),
             err => unexpected_error(err),
         })?;
@@ -613,14 +573,12 @@ impl crate::traits::Instance for Instance {
 
         let device = result.map_err(|err| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => CreateError(CreateErrorKind::OutOfMemory),
-            vk::Result::ERROR_INITIALIZATION_FAILED => {
-                CreateError(CreateErrorKind::InitializationFailed)
-            }
+            vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => DeviceError::OutOfMemory,
+            vk::Result::ERROR_INITIALIZATION_FAILED => DeviceError::DeviceLost,
             vk::Result::ERROR_EXTENSION_NOT_PRESENT => unreachable!("Extensions were checked"),
             vk::Result::ERROR_FEATURE_NOT_PRESENT => unreachable!("Features were checked"),
-            vk::Result::ERROR_TOO_MANY_OBJECTS => CreateError(CreateErrorKind::TooManyObjects),
-            vk::Result::ERROR_DEVICE_LOST => CreateError(CreateErrorKind::DeviceLost),
+            vk::Result::ERROR_TOO_MANY_OBJECTS => DeviceError::DeviceLost,
+            vk::Result::ERROR_DEVICE_LOST => DeviceError::DeviceLost,
             err => unexpected_error(err),
         })?;
 

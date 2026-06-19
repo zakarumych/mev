@@ -40,11 +40,6 @@ pub use self::{
     surface::{Frame, Surface},
 };
 
-pub(crate) use self::{
-    instance::{CreateErrorKind, LoadErrorKind},
-    render_pipeline::CreatePipelineErrorKind,
-};
-
 #[track_caller]
 fn handle_host_oom() -> ! {
     std::alloc::handle_alloc_error(Layout::new::<()>())

@@ -675,11 +675,13 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             return;
         }
 
-        let texel_size = dst.format().size();
-        debug_assert_eq!(bytes_per_line % texel_size, 0);
-        debug_assert_eq!(bytes_per_plane % texel_size, 0);
-        let texel_per_line = bytes_per_line / texel_size;
-        let texel_per_plane = bytes_per_plane / texel_size;
+        let block_size = dst.format().block_size();
+        let block_extent = dst.format().block_extent();
+
+        debug_assert_eq!(bytes_per_line % block_size, 0);
+        debug_assert_eq!(bytes_per_plane % block_size, 0);
+        let buffer_row_length = (bytes_per_line / block_size) as u32 * block_extent.width();
+        let buffer_image_height = (bytes_per_plane / bytes_per_line) as u32 * block_extent.height();
 
         self.refs.add_buffer(src.clone());
         self.refs.add_image(dst.clone());
@@ -692,8 +694,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 ash::vk::ImageLayout::GENERAL,
                 &[vk::BufferImageCopy {
                     buffer_offset: src_offset as u64,
-                    buffer_row_length: texel_per_line as u32,
-                    buffer_image_height: texel_per_plane as u32,
+                    buffer_row_length,
+                    buffer_image_height,
                     image_subresource: vk::ImageSubresourceLayers {
                         aspect_mask: format_aspect(dst.format()),
                         mip_level: dst.base_level() + level,

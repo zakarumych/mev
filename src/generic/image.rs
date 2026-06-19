@@ -298,14 +298,14 @@ pub struct ImageDesc<'a> {
     /// Image pixel format.
     pub format: PixelFormat,
 
-    /// Image usage flags.
-    pub usage: ImageUsage,
-
     /// Image layers count.
     pub layers: u32,
 
     /// Image mip levels count.
     pub levels: u32,
+
+    /// Image usage flags.
+    pub usage: ImageUsage,
 
     /// Image debug name.
     pub name: &'a str,

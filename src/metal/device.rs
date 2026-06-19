@@ -19,8 +19,8 @@ use raw_window_handle::{
 use crate::{
     generic::{
         parse_shader, ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        CreateLibraryError, CreatePipelineError, ImageDesc, ImageExtent, LibraryDesc, LibraryInput,
-        Memory, OutOfMemory, RenderPipelineDesc, SamplerDesc, CreateShaderLibraryError, ShaderLanguage,
+        ImageDesc, ImageExtent, LibraryDesc, LibraryError, LibraryInput, Memory, OutOfMemory,
+        PipelineError, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError,
         SurfaceError, TlasDesc, VertexStepMode,
     },
     Extent3,
@@ -29,8 +29,8 @@ use crate::{
 use super::{
     from::{IntoMetal, TryIntoMetal},
     shader::{Bindings, EntryPointData},
-    Blas, Buffer, ComputePipeline, CreatePipelineErrorKind, Image, Library, RenderPipeline,
-    Sampler, Surface, Tlas, MAX_VERTEX_BUFFERS,
+    Blas, Buffer, ComputePipeline, Image, Library, RenderPipeline, Sampler, Surface, Tlas,
+    MAX_VERTEX_BUFFERS,
 };
 
 #[derive(Clone)]
@@ -78,7 +78,7 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
-    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateLibraryError> {
+    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, LibraryError> {
         match desc.input {
             LibraryInput::Source(source) => {
                 let options = metal::CompileOptions::new();
@@ -87,7 +87,7 @@ impl crate::traits::Device for Device {
                 match source.language {
                     ShaderLanguage::Msl => {
                         let source = std::str::from_utf8(&*source.code).map_err(|err| {
-                            CreateLibraryError::CompileError(CreateShaderLibraryError::NonUtf8(err))
+                            LibraryError::CompileError(ShaderLibraryError::NonUtf8(err))
                         })?;
 
                         let library = self
@@ -100,7 +100,7 @@ impl crate::traits::Device for Device {
 
                     src => {
                         let compiled = compile_shader(&source.code, source.filename, src)
-                            .map_err(|err| CreateLibraryError::CompileError(err))?;
+                            .map_err(|err| LibraryError::CompileError(err))?;
 
                         let library = self
                             .device
@@ -120,7 +120,7 @@ impl crate::traits::Device for Device {
     fn new_compute_pipeline(
         &self,
         desc: ComputePipelineDesc,
-    ) -> Result<ComputePipeline, CreatePipelineError> {
+    ) -> Result<ComputePipeline, PipelineError> {
         let mdesc = metal::ComputePipelineDescriptor::new();
         mdesc.set_label(desc.name);
 
@@ -128,14 +128,14 @@ impl crate::traits::Device for Device {
             .shader
             .library
             .get_function(&desc.shader.entry)
-            .ok_or_else(|| CreatePipelineError::InvalidShaderEntry)?;
+            .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
         mdesc.set_compute_function(Some(&compute_function));
 
         let pipeline = self
             .device
             .new_compute_pipeline_state(&mdesc)
-            .map_err(|err| CreatePipelineError::Failure(err))?;
+            .map_err(|err| PipelineError::Failure(err))?;
 
         Ok(ComputePipeline::new(
             pipeline,
@@ -147,7 +147,7 @@ impl crate::traits::Device for Device {
     fn new_render_pipeline(
         &self,
         desc: RenderPipelineDesc,
-    ) -> Result<RenderPipeline, CreatePipelineError> {
+    ) -> Result<RenderPipeline, PipelineError> {
         let mdesc = metal::RenderPipelineDescriptor::new();
         mdesc.set_label(desc.name);
 
@@ -155,7 +155,7 @@ impl crate::traits::Device for Device {
             .vertex_shader
             .library
             .get_function(&desc.vertex_shader.entry)
-            .ok_or_else(|| CreatePipelineError(CreatePipelineErrorKind::InvalidShaderEntry))?;
+            .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
         mdesc.set_vertex_function(Some(&vertex_function));
 
@@ -229,9 +229,7 @@ impl crate::traits::Device for Device {
                 let fragment_function = fragment_shader
                     .library
                     .get_function(&fragment_shader.entry)
-                    .ok_or_else(|| {
-                        CreatePipelineError(CreatePipelineErrorKind::InvalidShaderEntry)
-                    })?;
+                    .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
                 mdesc.set_fragment_function(Some(&fragment_function));
 
@@ -275,9 +273,7 @@ impl crate::traits::Device for Device {
         let pipeline = self
             .device
             .new_render_pipeline_state(&mdesc)
-            .map_err(|err| {
-                CreatePipelineError(CreatePipelineErrorKind::FailedToBuildPipeline(err))
-            })?;
+            .map_err(|err| PipelineError::Failure(err.to_string()))?;
 
         Ok(RenderPipeline::new(
             pipeline,
@@ -480,7 +476,7 @@ fn compile_shader(
     code: &[u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<CompiledMetalShader, CreateShaderLibraryError> {
+) -> Result<CompiledMetalShader, ShaderLibraryError> {
     let (module, info, _source_code) = parse_shader(code, filename, lang)?;
 
     let mut options = naga::back::msl::Options {
@@ -613,7 +609,7 @@ fn compile_shader(
             vertex_buffer_mappings: vec![],
         },
     )
-    .map_err(CreateShaderLibraryError::GenMsl)?;
+    .map_err(ShaderLibraryError::GenMsl)?;
 
     // eprintln!("{}", code);
     // eprintln!("{:?}", translation.entry_point_names);

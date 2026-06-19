@@ -21,7 +21,7 @@ use crate::{
     backend::new_semaphore,
     generic::{
         parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        CreatePipelineError, CreateShaderLibraryError, DeviceError, Features, ImageDesc,
+        PipelineError, ShaderLibraryError, DeviceError, Features, ImageDesc,
         LibraryDesc, LibraryInput, Memory, OutOfMemory, PrimitiveTopology, RenderPipelineDesc,
         SamplerDesc, ShaderLanguage, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
     },
@@ -1097,7 +1097,7 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
-    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, CreateShaderLibraryError> {
+    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         let me = &*self.inner;
         match desc.input {
             LibraryInput::Source(source) => {
@@ -1157,7 +1157,7 @@ impl crate::traits::Device for Device {
     fn new_compute_pipeline(
         &self,
         desc: ComputePipelineDesc,
-    ) -> Result<ComputePipeline, CreatePipelineError> {
+    ) -> Result<ComputePipeline, PipelineError> {
         if self.inner.error_state.is_some() {
             return Ok(ComputePipeline::null());
         }
@@ -1227,7 +1227,7 @@ impl crate::traits::Device for Device {
     fn new_render_pipeline(
         &self,
         desc: RenderPipelineDesc,
-    ) -> Result<RenderPipeline, CreatePipelineError> {
+    ) -> Result<RenderPipeline, PipelineError> {
         if self.inner.error_state.is_some() {
             return Ok(RenderPipeline::null());
         }
@@ -1916,7 +1916,7 @@ pub(crate) fn compile_shader(
     code: &[u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<Box<[u32]>, CreateShaderLibraryError> {
+) -> Result<Box<[u32]>, ShaderLibraryError> {
     let (module, info, source_code) = parse_shader(code, filename, lang)?;
 
     let options = naga::back::spv::Options {
@@ -1946,7 +1946,7 @@ pub(crate) fn compile_shader(
 
     let words = naga::back::spv::write_vec(&module, &info, &options, None)
         .map(|vec| vec.into())
-        .map_err(CreateShaderLibraryError::GenSpirV)?;
+        .map_err(ShaderLibraryError::GenSpirV)?;
 
     Ok(words)
 }

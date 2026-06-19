@@ -1,8 +1,6 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::backend::CreatePipelineErrorKind;
-
 use super::{arguments::ArgumentGroupLayout, PixelFormat, Shader, VertexFormat};
 
 /// Describes single vertex attribute.
@@ -308,7 +306,7 @@ pub struct RasterDesc<'a> {
 
 /// Error during render pipeline creation.
 #[derive(Debug)]
-pub enum CreatePipelineError {
+pub enum PipelineError {
     /// Invalid shader entry point.
     InvalidShaderEntry,
 
@@ -316,13 +314,13 @@ pub enum CreatePipelineError {
     Failure(String),
 }
 
-impl fmt::Display for CreatePipelineError {
+impl fmt::Display for PipelineError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CreatePipelineError::InvalidShaderEntry => write!(f, "Invalid shader entry point"),
-            CreatePipelineError::Failure(msg) => write!(f, "Failure: {}", msg),
+            PipelineError::InvalidShaderEntry => write!(f, "Invalid shader entry point"),
+            PipelineError::Failure(msg) => write!(f, "Failure: {}", msg),
         }
     }
 }
 
-impl Error for CreatePipelineError {}
+impl Error for PipelineError {}

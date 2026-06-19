@@ -180,6 +180,7 @@ impl<'a> AsRef<[u8]> for BufferMappedRange<'a> {
         unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.size) }
     }
 }
+
 pub struct BufferMappedRangeMut<'a> {
     buffer: &'a mut Buffer,
     ptr: NonNull<u8>,

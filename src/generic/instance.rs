@@ -1,67 +1,6 @@
 use std::fmt;
 
-use super::{feature::Features, queue::QueueFlags, SurfaceError};
-
-/// Error that can occur when creating an instance.
-///
-/// This signals that backend could not be loaded.
-#[derive(Debug)]
-pub struct LoadError(pub(crate) crate::backend::LoadErrorKind);
-
-impl fmt::Display for LoadError {
-    #[inline(always)]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for LoadError {}
-
-/// Error that can occur when creating device from an instance.
-#[derive(Debug)]
-pub struct CreateError(pub(crate) crate::backend::CreateErrorKind);
-
-impl fmt::Display for CreateError {
-    #[inline(always)]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl std::error::Error for CreateError {}
-
-/// Error that can occur when creating device from an instance.
-#[derive(Debug)]
-pub enum CreateWithSurfaceError {
-    CreateError(CreateError),
-    SurfaceError(SurfaceError),
-}
-
-impl fmt::Display for CreateWithSurfaceError {
-    #[inline(always)]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CreateWithSurfaceError::CreateError(err) => fmt::Display::fmt(err, f),
-            CreateWithSurfaceError::SurfaceError(err) => fmt::Display::fmt(err, f),
-        }
-    }
-}
-
-impl std::error::Error for CreateWithSurfaceError {}
-
-impl From<CreateError> for CreateWithSurfaceError {
-    #[inline(always)]
-    fn from(err: CreateError) -> Self {
-        CreateWithSurfaceError::CreateError(err)
-    }
-}
-
-impl From<SurfaceError> for CreateWithSurfaceError {
-    #[inline(always)]
-    fn from(err: SurfaceError) -> Self {
-        CreateWithSurfaceError::SurfaceError(err)
-    }
-}
+use super::{feature::Features, queue::QueueFlags, OutOfMemory, SurfaceError};
 
 /// Capabilities of a queue family of specific device.
 #[derive(Clone, Debug)]

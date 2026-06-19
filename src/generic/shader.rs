@@ -98,6 +98,55 @@ pub struct ShaderSource<'a> {
     pub language: ShaderLanguage,
 }
 
+impl<'a> ShaderSource<'a> {
+    /// Creates a new WGSL shader source.
+    pub fn wgsl(code: impl Into<Cow<'a, [u8]>>) -> Self {
+        ShaderSource {
+            code: code.into(),
+            filename: None,
+            language: ShaderLanguage::Wgsl,
+        }
+    }
+
+    pub fn glsl_vert(code: impl Into<Cow<'a, [u8]>>) -> Self {
+        ShaderSource {
+            code: code.into(),
+            filename: None,
+            language: ShaderLanguage::Glsl {
+                stage: ShaderStage::Vertex,
+            },
+        }
+    }
+
+    pub fn glsl_frag(code: impl Into<Cow<'a, [u8]>>) -> Self {
+        ShaderSource {
+            code: code.into(),
+            filename: None,
+            language: ShaderLanguage::Glsl {
+                stage: ShaderStage::Fragment,
+            },
+        }
+    }
+
+    pub fn glsl_comp(code: impl Into<Cow<'a, [u8]>>) -> Self {
+        ShaderSource {
+            code: code.into(),
+            filename: None,
+            language: ShaderLanguage::Glsl {
+                stage: ShaderStage::Compute,
+            },
+        }
+    }
+
+    pub fn msl(code: impl Into<Cow<'a, [u8]>>) -> Self {
+        ShaderSource {
+            code: code.into(),
+            filename: None,
+            language: ShaderLanguage::Msl,
+        }
+    }
+}
+
 /// Convenience macro to include shader source code from a file during compilation.
 #[macro_export]
 macro_rules! include_shader_source {
@@ -154,7 +203,7 @@ pub struct Shader<'a> {
 }
 
 #[derive(Debug)]
-pub enum CreateShaderLibraryError {
+pub enum ShaderLibraryError {
     NonUtf8(std::str::Utf8Error),
     ParseSpirV(naga::front::spv::Error),
     ParseWgsl(naga::front::wgsl::ParseError),
@@ -168,18 +217,18 @@ pub enum CreateShaderLibraryError {
     GenMsl(naga::back::msl::Error),
 }
 
-impl fmt::Display for CreateShaderLibraryError {
+impl fmt::Display for ShaderLibraryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CreateShaderLibraryError::NonUtf8(err) => write!(f, "non-utf8: {}", err),
-            CreateShaderLibraryError::ParseSpirV(err) => write!(f, "parse SPIR-V: {}", err),
-            CreateShaderLibraryError::ParseWgsl(err) => write!(f, "parse WGSL: {}", err),
-            CreateShaderLibraryError::ParseGlsl(err) => write!(f, "parse GLSL: {}", err),
-            CreateShaderLibraryError::ValidationFailed => write!(f, "validation failed"),
+            ShaderLibraryError::NonUtf8(err) => write!(f, "non-utf8: {}", err),
+            ShaderLibraryError::ParseSpirV(err) => write!(f, "parse SPIR-V: {}", err),
+            ShaderLibraryError::ParseWgsl(err) => write!(f, "parse WGSL: {}", err),
+            ShaderLibraryError::ParseGlsl(err) => write!(f, "parse GLSL: {}", err),
+            ShaderLibraryError::ValidationFailed => write!(f, "validation failed"),
             #[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
-            CreateShaderLibraryError::GenSpirV(err) => write!(f, "generate SPIR-V: {}", err),
+            ShaderLibraryError::GenSpirV(err) => write!(f, "generate SPIR-V: {}", err),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            CreateShaderLibraryError::GenMsl(err) => write!(f, "generate MSL: {}", err),
+            ShaderLibraryError::GenMsl(err) => write!(f, "generate MSL: {}", err),
         }
     }
 }
@@ -188,23 +237,23 @@ pub(crate) fn parse_shader<'a>(
     code: &'a [u8],
     filename: Option<&str>,
     lang: ShaderLanguage,
-) -> Result<(naga::Module, naga::valid::ModuleInfo, Option<&'a str>), CreateShaderLibraryError> {
+) -> Result<(naga::Module, naga::valid::ModuleInfo, Option<&'a str>), ShaderLibraryError> {
     let mut source_code = None;
     let module = match lang {
         ShaderLanguage::SpirV => {
             naga::front::spv::parse_u8_slice(code, &naga::front::spv::Options::default())
-                .map_err(CreateShaderLibraryError::ParseSpirV)?
+                .map_err(ShaderLibraryError::ParseSpirV)?
         }
         ShaderLanguage::Msl => {
             unimplemented!("Compilation from MSL is not supported")
         }
         ShaderLanguage::Wgsl => {
-            let code = std::str::from_utf8(code).map_err(CreateShaderLibraryError::NonUtf8)?;
+            let code = std::str::from_utf8(code).map_err(ShaderLibraryError::NonUtf8)?;
             source_code = Some(code);
-            naga::front::wgsl::parse_str(code).map_err(CreateShaderLibraryError::ParseWgsl)?
+            naga::front::wgsl::parse_str(code).map_err(ShaderLibraryError::ParseWgsl)?
         }
         ShaderLanguage::Glsl { stage } => {
-            let code = std::str::from_utf8(code).map_err(CreateShaderLibraryError::NonUtf8)?;
+            let code = std::str::from_utf8(code).map_err(ShaderLibraryError::NonUtf8)?;
             source_code = Some(code);
             naga::front::glsl::Frontend::default()
                 .parse(
@@ -218,7 +267,7 @@ pub(crate) fn parse_shader<'a>(
                     },
                     code,
                 )
-                .map_err(CreateShaderLibraryError::ParseGlsl)?
+                .map_err(ShaderLibraryError::ParseGlsl)?
         }
     };
 
@@ -235,7 +284,7 @@ pub(crate) fn parse_shader<'a>(
                         .map(|source| (filename, source))
                 }),
             );
-            CreateShaderLibraryError::ValidationFailed
+            ShaderLibraryError::ValidationFailed
         })?;
 
     Ok((module, info, source_code))
