@@ -119,7 +119,15 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     ///
     /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
     /// Checkpoints are required for resource reclamation.
-    fn submit<I>(&mut self, command_buffers: I, check_point: bool) -> Result<(), DeviceError>
+    fn submit<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    where
+        I: IntoIterator<Item = crate::backend::CommandBuffer>;
+
+    /// Submit command buffers to the queue.
+    ///
+    /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
+    /// Checkpoints are required for resource reclamation.
+    fn submit_with_checkpoint<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 

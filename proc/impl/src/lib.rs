@@ -10,8 +10,9 @@ macro_rules! parse_macro_input {
 }
 
 mod args;
-mod repr;
+mod auto_repr;
 mod r#match;
+mod repr;
 
 mod metal;
 mod vulkan;
@@ -40,10 +41,19 @@ pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
     }
 }
 
-pub fn repr_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
+pub fn derive_repr(input: TokenStream, mev: &TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
 
     match repr::derive(&input, mev) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    }
+}
+
+pub fn derive_auto_repr(input: TokenStream, mev: &TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+
+    match auto_repr::derive(&input, mev) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     }

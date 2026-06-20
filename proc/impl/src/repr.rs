@@ -63,7 +63,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
         quote_spanned! { ty.span() => #acc | (#mev::for_macro::repr_align_of::<#ty>() - 1) }
     });
 
-    let tail_pad = quote::quote!(#mev::for_macro::pad_align(#tail, #total_align + 1));
+    let tail_pad = quote::quote!(#mev::for_macro::pad_align(#tail, (#total_align) + 1));
 
     match data.fields {
         syn::Fields::Named(_) => {
@@ -76,7 +76,12 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
             let pad_names = data
                 .fields
                 .iter()
-                .map(|field| quote::format_ident!("_pad_for_{}", field.ident.as_ref().unwrap()))
+                .map(|field| {
+                    quote::format_ident!(
+                        "_mev_device_repr_pad_before_{}",
+                        field.ident.as_ref().unwrap()
+                    )
+                })
                 .collect::<Vec<_>>();
 
             let tokens = quote::quote! {
@@ -85,6 +90,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
                 #[derive(Clone, Copy, Debug)]
                 #vis struct #name_repr {
                     #(
+                        #[allow(non_snake_case)]
                         #pad_names: [u8; #field_pad_sizes],
                         #field_names: <#field_types as #mev::for_macro::DeviceRepr>::Repr,
                     )*

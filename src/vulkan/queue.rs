@@ -437,71 +437,12 @@ impl Queue {
             }
         }
     }
-}
-
-impl Deref for Queue {
-    type Target = Device;
-
-    #[inline(always)]
-    fn deref(&self) -> &Device {
-        &self.device
-    }
-}
-
-impl crate::traits::Resource for Queue {}
-
-#[hidden_trait::expose]
-impl crate::traits::Queue for Queue {
-    /// Get the device associated with this queue.
-    #[inline(always)]
-    fn device(&self) -> &Device {
-        &self.device
-    }
-
-    /// Get the queue family index.
-    #[inline(always)]
-    fn family(&self) -> u32 {
-        self.family
-    }
-
-    /// Create a new command encoder associated with this queue.
-    /// The encoder must be submitted to the queue it was created from.
-    fn new_command_encoder(&mut self) -> CommandEncoder {
-        let device = self.device.ash();
-        let pool_result = Self::refresh_pools(&mut self.pools, device)
-            .and_then(|_| Self::get_pool(&mut self.pools, device).map(|p| p as *mut Pool));
-
-        let pool = match pool_result {
-            Ok(pool) => unsafe { &mut *pool },
-            Err(OutOfMemory) => {
-                self.device.set_oom();
-                return CommandEncoder::null(self.device.clone());
-            }
-        };
-
-        let device = self.device.ash();
-
-        let handle = match pool.allocate(device) {
-            Ok(h) => h,
-            Err(OutOfMemory) => {
-                self.device.set_oom();
-                return CommandEncoder::null(self.device.clone());
-            }
-        };
-
-        CommandEncoder::new(
-            self.device.clone(),
-            handle,
-            pool.pool,
-            self.free_refs.pop().unwrap_or_else(Refs::new),
-        )
-    }
 
     /// Submit command buffers to the queue.
     ///
     /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
     /// Checkpoints are required for resource reclamation.
-    fn submit<I>(&mut self, command_buffers: I, check_point: bool) -> Result<(), DeviceError>
+    fn submit_impl<I>(&mut self, command_buffers: I, check_point: bool) -> Result<(), DeviceError>
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
@@ -687,6 +628,79 @@ impl crate::traits::Queue for Queue {
         }
 
         device_error
+    }
+}
+
+impl Deref for Queue {
+    type Target = Device;
+
+    #[inline(always)]
+    fn deref(&self) -> &Device {
+        &self.device
+    }
+}
+
+impl crate::traits::Resource for Queue {}
+
+#[hidden_trait::expose]
+impl crate::traits::Queue for Queue {
+    /// Get the device associated with this queue.
+    #[inline(always)]
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    /// Get the queue family index.
+    #[inline(always)]
+    fn family(&self) -> u32 {
+        self.family
+    }
+
+    /// Create a new command encoder associated with this queue.
+    /// The encoder must be submitted to the queue it was created from.
+    fn new_command_encoder(&mut self) -> CommandEncoder {
+        let device = self.device.ash();
+        let pool_result = Self::refresh_pools(&mut self.pools, device)
+            .and_then(|_| Self::get_pool(&mut self.pools, device).map(|p| p as *mut Pool));
+
+        let pool = match pool_result {
+            Ok(pool) => unsafe { &mut *pool },
+            Err(OutOfMemory) => {
+                self.device.set_oom();
+                return CommandEncoder::null(self.device.clone());
+            }
+        };
+
+        let device = self.device.ash();
+
+        let handle = match pool.allocate(device) {
+            Ok(h) => h,
+            Err(OutOfMemory) => {
+                self.device.set_oom();
+                return CommandEncoder::null(self.device.clone());
+            }
+        };
+
+        CommandEncoder::new(
+            self.device.clone(),
+            handle,
+            pool.pool,
+            self.free_refs.pop().unwrap_or_else(Refs::new),
+        )
+    }
+
+    fn submit<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    where
+        I: IntoIterator<Item = crate::backend::CommandBuffer>,
+    {
+        self.submit_impl(command_buffers, false)
+    }
+
+    fn submit_with_checkpoint<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    where
+        I: IntoIterator<Item = crate::backend::CommandBuffer>,
+    {
+        self.submit_impl(command_buffers, true)
     }
 
     /// Synchronize the access to the frame resources.

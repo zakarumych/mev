@@ -6,8 +6,13 @@ pub fn arguments_derive(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_derive(DeviceRepr, attributes(mev))]
-pub fn repr_derive(input: TokenStream) -> TokenStream {
-    mev_proc_impl::repr_derive(input.into(), &quote::quote!(mev)).into()
+pub fn derive_repr(input: TokenStream) -> TokenStream {
+    mev_proc_impl::derive_repr(input.into(), &quote::quote!(mev)).into()
+}
+
+#[proc_macro_derive(AutoDeviceRepr, attributes(mev))]
+pub fn derive_auto_repr(input: TokenStream) -> TokenStream {
+    mev_proc_impl::derive_auto_repr(input.into(), &quote::quote!(mev)).into()
 }
 
 #[proc_macro]

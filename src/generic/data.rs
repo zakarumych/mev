@@ -7,7 +7,6 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 
-
 /// Transmutes type without compile-time check of sizes.
 ///
 /// # Safety
@@ -15,7 +14,7 @@ use bytemuck::{Pod, Zeroable};
 /// Sizes must have equal.
 /// Current bits of argument must be valid for type `B`.
 #[inline(always)]
-unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {    
+unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {
     union TransmuteUnchecked<A: Copy, B: Copy> {
         a: A,
         b: B,
@@ -75,6 +74,9 @@ pub trait DeviceRepr: Sized + 'static {
     /// Size of array repr type.
     const ARRAY_SIZE: usize = size_of::<Self::ArrayRepr>();
 }
+
+/// A type that implements `DeviceRepr` and has the same representation as `Self`.
+pub trait AutoDeviceRepr: DeviceRepr<Repr = Self, ArrayRepr = Self> {}
 
 #[cfg_attr(feature = "inline-more", inline)]
 fn array_as_repr_slow<T: DeviceRepr, const N: usize>(array: &[T; N]) -> [T::ArrayRepr; N] {

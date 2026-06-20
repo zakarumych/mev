@@ -157,7 +157,7 @@ mod private {
 }
 
 pub use self::{backend::*, generic::*};
-pub use mev_proc::{match_backend, Arguments, DeviceRepr};
+pub use mev_proc::{match_backend, Arguments, AutoDeviceRepr, DeviceRepr};
 
 #[doc(hidden)]
 pub mod for_macro {
