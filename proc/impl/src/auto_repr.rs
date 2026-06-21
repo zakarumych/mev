@@ -34,7 +34,10 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
 
         pad_sizes_are_zero.extend(quote::quote_spanned! {
             ty.span() => {
-                assert!(0 == (__mev_device_repr_end % <#ty as #mev::for_macro::DeviceRepr>::ALIGN), concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding"));
+                let padding = #mev::for_macro::repr_pad_for::<#ty>(__mev_device_repr_end);
+                if 0 != padding {
+                    panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of `N bytes`"));
+                }
                 __mev_device_repr_end += <#ty as #mev::for_macro::DeviceRepr>::SIZE;
             }
         });
@@ -46,8 +49,23 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
     });
 
     pad_sizes_are_zero.extend(quote! {
-        assert!(0 == (__mev_device_repr_end % (#total_align + 1)), concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required"));
+        let padding = #mev::for_macro::pad_align(__mev_device_repr_end, (#total_align) + 1);
+        if 0 != padding {
+            panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of `N bytes`"));
+        }
     });
+
+    let mut all_fields_are_auto_repr = quote! {};
+
+    for field in data.fields.iter() {
+        let ty = &field.ty;
+
+        all_fields_are_auto_repr.extend(quote::quote_spanned! {
+            ty.span() => {
+                #mev::for_macro::is_auto_repr::<#ty>();
+            }
+        });
+    }
 
     match data.fields {
         syn::Fields::Named(_) => {
@@ -71,6 +89,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
 
                 const _: () = {
                     #pad_sizes_are_zero
+                    #all_fields_are_auto_repr
                 };
             };
 

@@ -24,7 +24,10 @@ unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {
     unsafe { TransmuteUnchecked { a }.b }
 }
 
-/// Type representable as a POD type with GPU compatible layout
+/// Type representable as a POD type with GPU compatible layout.
+///
+/// Deriving `DeviceRepr` generates type with `#[repr(C)]` and manual padding to make it compatible with GPU layout.
+/// Deriving works for structs with fields that implement `DeviceRepr`.
 pub trait DeviceRepr: Sized + 'static {
     /// A POD type that can represent same data with layout compatible with shaders.
     /// It is `Self` or another type with same data and manual padding.
@@ -75,8 +78,16 @@ pub trait DeviceRepr: Sized + 'static {
     const ARRAY_SIZE: usize = size_of::<Self::ArrayRepr>();
 }
 
-/// A type that implements `DeviceRepr` and has the same representation as `Self`.
-pub trait AutoDeviceRepr: DeviceRepr<Repr = Self, ArrayRepr = Self> {}
+/// A type that implements `DeviceRepr` and is compatible with GPU layout without padding.
+///
+/// It also requires the type to implement `bytemuck::Pod` since `DeviceRepr::Repr` is `Self` and it requires `bytemuck::Pod`.
+///
+/// Deriving `AutoDeviceRepr` generates `DeviceRepr` implementation that checks for padding
+/// and panics at compile time if the type is not compatible with GPU layout.
+/// It also requires that all fields implement `AutoDeviceRepr`.
+pub trait AutoDeviceRepr: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {}
+
+impl<T> AutoDeviceRepr for T where T: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {}
 
 #[cfg_attr(feature = "inline-more", inline)]
 fn array_as_repr_slow<T: DeviceRepr, const N: usize>(array: &[T; N]) -> [T::ArrayRepr; N] {

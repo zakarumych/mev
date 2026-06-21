@@ -129,7 +129,7 @@ impl TriangleApp {
         let cbuf = encoder.finish();
 
         self.window.as_ref().unwrap().pre_present_notify();
-        self.queue.submit([cbuf], true).unwrap();
+        self.queue.submit_with_checkpoint([cbuf]).unwrap();
     }
 }
 
@@ -167,7 +167,8 @@ fn main() {
     let _ = event_loop.run_app(&mut app);
 }
 
-#[derive(mev::DeviceRepr)]
+#[derive(Copy, Clone, Debug, bytemuck::Zeroable, bytemuck::Pod, mev::AutoDeviceRepr)]
+#[repr(C)]
 pub struct TriangleConstants {
     pub angle: f32,
     pub width: u32,

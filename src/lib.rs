@@ -164,6 +164,38 @@ pub mod for_macro {
     pub use crate::backend::for_macro::*;
 
     pub use crate::generic::{
-        Automatic, DeviceRepr, LibraryInput, Sampled, ShaderSource, Storage, Uniform,
+        AutoDeviceRepr, Automatic, DeviceRepr, LibraryInput, Sampled, ShaderSource, Storage,
+        Uniform,
     };
+
+    pub use bytemuck::{Pod, Zeroable};
+    pub use std::{
+        mem::{align_of, size_of, MaybeUninit},
+        ptr::addr_of,
+    };
+
+    pub const fn align_end(end: usize, align: usize) -> usize {
+        ((end + (align - 1)) & !(align - 1))
+    }
+
+    pub const fn repr_pad_for<T: DeviceRepr>(end: usize) -> usize {
+        let align = T::ALIGN;
+        pad_align(end, align)
+    }
+
+    pub const fn pad_align(end: usize, align: usize) -> usize {
+        align_end(end, align) - end
+    }
+
+    pub const fn repr_append_field<T: DeviceRepr>(end: usize) -> usize {
+        align_end(end, T::ALIGN) + T::SIZE
+    }
+
+    pub const fn repr_align_of<T: DeviceRepr>() -> usize {
+        T::ALIGN
+    }
+
+    pub const fn is_repr<T: DeviceRepr>() {}
+
+    pub const fn is_auto_repr<T: AutoDeviceRepr>() {}
 }
