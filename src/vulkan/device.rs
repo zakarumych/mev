@@ -1929,13 +1929,20 @@ pub(crate) fn compile_shader(
 
     let options = naga::back::spv::Options {
         lang_version: (1, 3),
-        flags: naga::back::spv::WriterFlags::ADJUST_COORDINATE_SPACE,
+        flags: naga::back::spv::WriterFlags::ADJUST_COORDINATE_SPACE
+            | naga::back::spv::WriterFlags::LABEL_VARYINGS
+            | naga::back::spv::WriterFlags::CLAMP_FRAG_DEPTH
+            | if cfg!(debug_assertions) {
+                naga::back::spv::WriterFlags::DEBUG
+            } else {
+                naga::back::spv::WriterFlags::empty()
+            },
         fake_missing_bindings: true,
         binding_map: naga::back::spv::BindingMap::default(),
         capabilities: None,
         bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
         zero_initialize_workgroup_memory: naga::back::spv::ZeroInitializeWorkgroupMemoryMode::None,
-        force_loop_bounding: false,
+        force_loop_bounding: true,
         use_storage_input_output_16: true,
         debug_info: match source_code {
             None => None,

@@ -484,7 +484,7 @@ fn compile_shader(
         per_entry_point_map: Default::default(),
         inline_samplers: Vec::new(),
         spirv_cross_compatibility: false,
-        fake_missing_bindings: false,
+        fake_missing_bindings: true,
         bounds_check_policies: Default::default(),
         zero_initialize_workgroup_memory: false,
     };

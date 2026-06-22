@@ -152,8 +152,8 @@ impl<'a> ShaderSource<'a> {
 macro_rules! include_shader_source {
     ($lang:tt $filename:expr) => {
         $crate::for_macro::ShaderSource {
-            code: std::borrow::Cow::Borrowed(std::include_bytes!($filename)),
-            filename: std::option::Option::Some($filename),
+            code: ::std::borrow::Cow::Borrowed(::std::include_bytes!($filename)),
+            filename: ::std::option::Option::Some($filename),
             language: $crate::ShaderLanguage::$lang,
         }
     };

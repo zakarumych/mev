@@ -5,24 +5,7 @@ use std::{
     ptr::copy_nonoverlapping,
 };
 
-use bytemuck::{Pod, Zeroable};
-
-/// Transmutes type without compile-time check of sizes.
-///
-/// # Safety
-///
-/// Sizes must have equal.
-/// Current bits of argument must be valid for type `B`.
-#[inline(always)]
-unsafe fn transmute_unchecked<A: Copy, B: Copy>(a: A) -> B {
-    union TransmuteUnchecked<A: Copy, B: Copy> {
-        a: A,
-        b: B,
-    }
-
-    debug_assert_eq!(size_of::<A>(), size_of::<B>());
-    unsafe { TransmuteUnchecked { a }.b }
-}
+use bytemuck::{AnyBitPattern, NoUninit, Pod, Zeroable};
 
 /// Type representable as a POD type with GPU compatible layout.
 ///
@@ -51,7 +34,7 @@ pub trait DeviceRepr: Sized + 'static {
     fn as_array_repr(&self) -> Self::ArrayRepr {
         if size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() {
             // Safety: transmuting between POD types with same size is safe.
-            unsafe { transmute_unchecked(self.as_repr()) }
+            unsafe { bytemuck::cast(self.as_repr()) }
         }
         self.make_array_repr()
     }
