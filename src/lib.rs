@@ -153,6 +153,8 @@ impl Backend {
 }
 
 mod private {
+    /// Trait that is not publicly exposed, so it can only be named in this crate.
+    /// It is used as subtrait to signal that that trait is not meant to be implemented outside of this crate.
     pub trait Sealed {}
 }
 
@@ -203,22 +205,22 @@ pub mod for_macro {
     pub const fn is_auto_repr<T: AutoDeviceRepr>() {}
 
     #[doc(hidden)]
-    pub struct VertexAttributeDescs<T: ?Sized> {
+    pub struct VertexAttributeDescs<T> {
         pub buffer_index: u32,
         pub offset: usize,
-        marker: std::marker::PhantomData<T>,
+        marker: std::marker::PhantomData<fn() -> T>,
     }
 
-    impl<T: ?Sized> Clone for VertexAttributeDescs<T> {
+    impl<T> Clone for VertexAttributeDescs<T> {
         #[inline(always)]
         fn clone(&self) -> Self {
             *self
         }
     }
 
-    impl<T: ?Sized> Copy for VertexAttributeDescs<T> {}
+    impl<T> Copy for VertexAttributeDescs<T> {}
 
-    impl<T: ?Sized> fmt::Debug for VertexAttributeDescs<T> {
+    impl<T> fmt::Debug for VertexAttributeDescs<T> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.debug_struct("VertexAttributes")
                 .field("type", &type_name::<T>())
@@ -228,7 +230,7 @@ pub mod for_macro {
         }
     }
 
-    impl<T: ?Sized> VertexAttributeDescs<T>
+    impl<T> VertexAttributeDescs<T>
     where
         T: VertexAttributes,
     {
@@ -242,7 +244,7 @@ pub mod for_macro {
         }
     }
 
-    impl<T: ?Sized> IntoIterator for VertexAttributeDescs<T>
+    impl<T> IntoIterator for VertexAttributeDescs<T>
     where
         T: VertexAttributes,
     {
@@ -254,7 +256,7 @@ pub mod for_macro {
                 format: T::FORMAT,
                 buffer_index: self.buffer_index,
                 offset: self.offset,
-                count: T::COUNT as u32,
+                count: T::COUNT as usize,
             }
         }
     }
@@ -263,11 +265,16 @@ pub mod for_macro {
         format: VertexFormat,
         buffer_index: u32,
         offset: usize,
-        count: u32,
+        count: usize,
     }
 
     impl Iterator for VertexAttributeDescIter {
         type Item = VertexAttributeDesc;
+
+        #[inline]
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (self.count, Some(self.count))
+        }
 
         #[inline]
         fn next(&mut self) -> Option<VertexAttributeDesc> {
@@ -286,6 +293,13 @@ pub mod for_macro {
             self.count -= 1;
 
             Some(desc)
+        }
+    }
+
+    impl ExactSizeIterator for VertexAttributeDescIter {
+        #[inline]
+        fn len(&self) -> usize {
+            self.count
         }
     }
 }
