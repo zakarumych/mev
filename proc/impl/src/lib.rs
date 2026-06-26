@@ -13,6 +13,7 @@ mod args;
 mod auto_repr;
 mod r#match;
 mod repr;
+mod vertex;
 
 mod metal;
 mod vulkan;
@@ -61,4 +62,13 @@ pub fn derive_auto_repr(input: TokenStream, mev: &TokenStream) -> TokenStream {
 
 pub fn match_backend(input: TokenStream, mev: &TokenStream) -> TokenStream {
     r#match::match_backend(input, mev)
+}
+
+pub fn derive_vertex(input: TokenStream, mev: &TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+
+    match vertex::derive(&input, mev) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    }
 }

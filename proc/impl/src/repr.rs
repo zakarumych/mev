@@ -24,7 +24,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
         }
     };
 
-    let name_repr = quote::format_ident!("MevGenerated{}Pod", name);
+    let name_repr = quote::format_ident!("__MevGenerated{}Pod", name);
 
     let field_types = data
         .fields
@@ -85,6 +85,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
                 .collect::<Vec<_>>();
 
             let tokens = quote::quote! {
+                #[allow(unused, non_camel_case_types)]
                 #[repr(C)]
                 #[doc(hidden)]
                 #[derive(Clone, Copy, Debug)]

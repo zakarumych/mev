@@ -157,20 +157,23 @@ mod private {
 }
 
 pub use self::{backend::*, generic::*};
-pub use mev_proc::{match_backend, Arguments, AutoDeviceRepr, DeviceRepr};
+pub use mev_proc::{match_backend, Arguments, AutoDeviceRepr, DeviceRepr, VertexBinding};
 
 #[doc(hidden)]
 pub mod for_macro {
     pub use crate::backend::for_macro::*;
 
     pub use crate::generic::{
-        AutoDeviceRepr, Automatic, DeviceRepr, LibraryInput, Sampled, ShaderSource, Storage,
-        Uniform,
+        AutoDeviceRepr, Automatic, DataType, DeviceRepr, LibraryInput, Sampled, ScalarType,
+        ShaderSource, Storage, Uniform, VectorSize, VertexAttributeDesc, VertexAttributes,
+        VertexBinding, VertexFormat, VertexLayoutDesc, VertexStepMode,
     };
 
     pub use bytemuck::{Pod, Zeroable};
+    use std::any::type_name;
     pub use std::{
-        mem::{align_of, size_of, MaybeUninit},
+        fmt,
+        mem::{align_of, offset_of, size_of, MaybeUninit},
         ptr::addr_of,
     };
 
@@ -198,4 +201,91 @@ pub mod for_macro {
     pub const fn is_repr<T: DeviceRepr>() {}
 
     pub const fn is_auto_repr<T: AutoDeviceRepr>() {}
+
+    #[doc(hidden)]
+    pub struct VertexAttributeDescs<T: ?Sized> {
+        pub buffer_index: u32,
+        pub offset: usize,
+        marker: std::marker::PhantomData<T>,
+    }
+
+    impl<T: ?Sized> Clone for VertexAttributeDescs<T> {
+        #[inline(always)]
+        fn clone(&self) -> Self {
+            *self
+        }
+    }
+
+    impl<T: ?Sized> Copy for VertexAttributeDescs<T> {}
+
+    impl<T: ?Sized> fmt::Debug for VertexAttributeDescs<T> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("VertexAttributes")
+                .field("type", &type_name::<T>())
+                .field("buffer_index", &self.buffer_index)
+                .field("offset", &self.offset)
+                .finish()
+        }
+    }
+
+    impl<T: ?Sized> VertexAttributeDescs<T>
+    where
+        T: VertexAttributes,
+    {
+        #[inline(always)]
+        pub fn new(buffer_index: u32, offset: usize) -> VertexAttributeDescs<T> {
+            VertexAttributeDescs {
+                buffer_index,
+                offset,
+                marker: std::marker::PhantomData,
+            }
+        }
+    }
+
+    impl<T: ?Sized> IntoIterator for VertexAttributeDescs<T>
+    where
+        T: VertexAttributes,
+    {
+        type Item = VertexAttributeDesc;
+        type IntoIter = VertexAttributeDescIter;
+
+        fn into_iter(self) -> VertexAttributeDescIter {
+            VertexAttributeDescIter {
+                format: T::FORMAT,
+                buffer_index: self.buffer_index,
+                offset: self.offset,
+                count: T::COUNT as u32,
+            }
+        }
+    }
+
+    pub struct VertexAttributeDescIter {
+        format: VertexFormat,
+        buffer_index: u32,
+        offset: usize,
+        count: u32,
+    }
+
+    impl Iterator for VertexAttributeDescIter {
+        type Item = VertexAttributeDesc;
+
+        #[inline]
+        fn next(&mut self) -> Option<VertexAttributeDesc> {
+            if self.count == 0 {
+                return None;
+            }
+
+            let desc = VertexAttributeDesc {
+                format: self.format,
+                buffer_index: self.buffer_index,
+                offset: u32::try_from(self.offset)
+                    .expect("Vertex attribute offset exceeds u32::MAX"),
+            };
+
+            self.offset += self.format.size();
+            self.count -= 1;
+
+            Some(desc)
+        }
+    }
 }

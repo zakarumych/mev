@@ -5,7 +5,10 @@ use syn;
 
 use crate::args::*;
 
-pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+pub fn derive(
+    input: &syn::DeriveInput,
+    mev: &TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
 
@@ -102,7 +105,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_m
     let field_bindings = (0..data.fields.len() as u32).collect::<Vec<_>>();
     let fields_count = data.fields.len();
 
-    let update_name = quote::format_ident!("MevGenerated{}Update", name);
+    let update_name = quote::format_ident!("__MevGenerated{}Update", name);
 
     match &data.fields {
         syn::Fields::Unit => {
@@ -119,6 +122,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_m
                 .map(|field| field.ident.as_ref().unwrap())
                 .collect::<Vec<_>>();
             Ok(quote! {
+                #[allow(unused, non_camel_case_types)]
                 #[doc(hidden)]
                 #[derive(Clone, Copy)]
                 #vis struct #update_name {

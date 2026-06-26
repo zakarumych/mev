@@ -1,6 +1,9 @@
-proc_easy::easy_flags! {
-    pub Kind(kind) {
-        // Constant(constant),
+proc_easy::easy_token!(uniform);
+proc_easy::easy_token!(sampled);
+proc_easy::easy_token!(storage);
+
+proc_easy::easy_argument_group! {
+    pub enum Kind {
         Uniform(uniform),
         Sampled(sampled),
         Storage(storage),

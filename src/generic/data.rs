@@ -7,6 +7,8 @@ use std::{
 
 use bytemuck::{AnyBitPattern, NoUninit, Pod, Zeroable};
 
+use crate::{VertexBinding, VertexFormat};
+
 /// Type representable as a POD type with GPU compatible layout.
 ///
 /// Deriving `DeviceRepr` generates type with `#[repr(C)]` and manual padding to make it compatible with GPU layout.
@@ -156,7 +158,7 @@ impl ScalarType {
 }
 
 /// Scalar types compatible with shaders primitives.
-pub trait Scalar: crate::private::Sealed + Sized + Debug + 'static {
+pub trait Scalar: crate::private::Sealed + bytemuck::NoUninit + Sized + Debug + 'static {
     /// Type of the scalar.
     const TYPE: ScalarType;
 
@@ -168,7 +170,54 @@ pub trait Scalar: crate::private::Sealed + Sized + Debug + 'static {
     fn as_scalar_repr(&self) -> Self::ScalarRepr {
         assert_eq!(align_of::<Self>(), align_of::<Self::ScalarRepr>());
         assert_eq!(size_of::<Self>(), size_of::<Self::ScalarRepr>());
-        unsafe { *(self as *const Self as *const Self::ScalarRepr) }
+        bytemuck::cast(*self)
+    }
+}
+
+/// Narrow traits for scalar types that can be used as vertex attributes.
+pub trait VertexScalar: Scalar {}
+
+const fn vertex_format<T: VertexScalar>(size: VectorSize) -> VertexFormat {
+    match (T::TYPE, size) {
+        (ScalarType::Sint64 | ScalarType::Uint64 | ScalarType::Float64, _) => {
+            panic!("64-bit scalars do not implement VertexScalar")
+        }
+        (ScalarType::Bool, VectorSize::One) => VertexFormat::Uint8,
+        (ScalarType::Sint8, VectorSize::One) => VertexFormat::Sint32,
+        (ScalarType::Uint8, VectorSize::One) => VertexFormat::Uint32,
+        (ScalarType::Sint16, VectorSize::One) => VertexFormat::Sint32,
+        (ScalarType::Uint16, VectorSize::One) => VertexFormat::Uint32,
+        (ScalarType::Float16, VectorSize::One) => VertexFormat::Float32,
+        (ScalarType::Sint32, VectorSize::One) => VertexFormat::Sint32,
+        (ScalarType::Uint32, VectorSize::One) => VertexFormat::Uint32,
+        (ScalarType::Float32, VectorSize::One) => VertexFormat::Float32,
+        (ScalarType::Bool, VectorSize::Two) => VertexFormat::Uint8x2,
+        (ScalarType::Sint8, VectorSize::Two) => VertexFormat::Sint8x2,
+        (ScalarType::Uint8, VectorSize::Two) => VertexFormat::Uint8x2,
+        (ScalarType::Sint16, VectorSize::Two) => VertexFormat::Sint16x2,
+        (ScalarType::Uint16, VectorSize::Two) => VertexFormat::Uint16x2,
+        (ScalarType::Float16, VectorSize::Two) => VertexFormat::Float16x2,
+        (ScalarType::Sint32, VectorSize::Two) => VertexFormat::Sint32x2,
+        (ScalarType::Uint32, VectorSize::Two) => VertexFormat::Uint32x2,
+        (ScalarType::Float32, VectorSize::Two) => VertexFormat::Float32x2,
+        (ScalarType::Bool, VectorSize::Three) => VertexFormat::Uint8x3,
+        (ScalarType::Sint8, VectorSize::Three) => VertexFormat::Sint8x3,
+        (ScalarType::Uint8, VectorSize::Three) => VertexFormat::Uint8x3,
+        (ScalarType::Sint16, VectorSize::Three) => VertexFormat::Sint16x3,
+        (ScalarType::Uint16, VectorSize::Three) => VertexFormat::Uint16x3,
+        (ScalarType::Float16, VectorSize::Three) => VertexFormat::Float16x3,
+        (ScalarType::Sint32, VectorSize::Three) => VertexFormat::Sint32x3,
+        (ScalarType::Uint32, VectorSize::Three) => VertexFormat::Uint32x3,
+        (ScalarType::Float32, VectorSize::Three) => VertexFormat::Float32x3,
+        (ScalarType::Bool, VectorSize::Four) => VertexFormat::Uint8x4,
+        (ScalarType::Sint8, VectorSize::Four) => VertexFormat::Sint8x4,
+        (ScalarType::Uint8, VectorSize::Four) => VertexFormat::Uint8x4,
+        (ScalarType::Sint16, VectorSize::Four) => VertexFormat::Sint16x4,
+        (ScalarType::Uint16, VectorSize::Four) => VertexFormat::Uint16x4,
+        (ScalarType::Float16, VectorSize::Four) => VertexFormat::Float16x4,
+        (ScalarType::Sint32, VectorSize::Four) => VertexFormat::Sint32x4,
+        (ScalarType::Uint32, VectorSize::Four) => VertexFormat::Uint32x4,
+        (ScalarType::Float32, VectorSize::Four) => VertexFormat::Float32x4,
     }
 }
 
@@ -204,48 +253,95 @@ impl crate::private::Sealed for i8 {}
 impl Scalar for i8 {
     const TYPE: ScalarType = ScalarType::Sint8;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for i8 {}
 
 impl crate::private::Sealed for u8 {}
 
 impl Scalar for u8 {
     const TYPE: ScalarType = ScalarType::Uint8;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for u8 {}
 
 impl crate::private::Sealed for i16 {}
 
 impl Scalar for i16 {
     const TYPE: ScalarType = ScalarType::Sint16;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for i16 {}
 
 impl crate::private::Sealed for u16 {}
 
 impl Scalar for u16 {
     const TYPE: ScalarType = ScalarType::Uint16;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for u16 {}
 
 impl crate::private::Sealed for i32 {}
 
 impl Scalar for i32 {
     const TYPE: ScalarType = ScalarType::Sint32;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for i32 {}
 
 impl crate::private::Sealed for u32 {}
 
 impl Scalar for u32 {
     const TYPE: ScalarType = ScalarType::Uint32;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for u32 {}
 
 impl crate::private::Sealed for i64 {}
 
 impl Scalar for i64 {
     const TYPE: ScalarType = ScalarType::Sint64;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
 
 impl crate::private::Sealed for u64 {}
@@ -253,6 +349,11 @@ impl crate::private::Sealed for u64 {}
 impl Scalar for u64 {
     const TYPE: ScalarType = ScalarType::Uint64;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
 
 impl crate::private::Sealed for f32 {}
@@ -260,13 +361,25 @@ impl crate::private::Sealed for f32 {}
 impl Scalar for f32 {
     const TYPE: ScalarType = ScalarType::Float32;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
+
+impl VertexScalar for f32 {}
 
 impl crate::private::Sealed for f64 {}
 
 impl Scalar for f64 {
     const TYPE: ScalarType = ScalarType::Float64;
     type ScalarRepr = Self;
+
+    #[inline(always)]
+    fn as_scalar_repr(&self) -> Self {
+        *self
+    }
 }
 
 /// Supported sizes of vectors.
@@ -292,22 +405,19 @@ pub struct DataType {
     pub rows: VectorSize,
 }
 
-/// Values that can be passed as arguments to shaders.
+/// Values that can be passed as attributes to shaders.
 /// This trait is sealed and cannot be implemented in other crates.
-pub trait Data: crate::private::Sealed + 'static {
-    /// The scalar type of the data type.
-    const TYPE: DataType;
+pub trait VertexAttributes: crate::private::Sealed + 'static {
+    const FORMAT: VertexFormat;
+    const COUNT: VectorSize;
 }
 
-impl<T> Data for T
+impl<T> VertexAttributes for T
 where
-    T: Scalar,
+    T: VertexScalar,
 {
-    const TYPE: DataType = DataType {
-        scalar: T::TYPE,
-        columns: VectorSize::One,
-        rows: VectorSize::One,
-    };
+    const FORMAT: VertexFormat = vertex_format::<T>(VectorSize::One);
+    const COUNT: VectorSize = VectorSize::One;
 }
 
 /// Vector data type.
@@ -531,75 +641,72 @@ impl<T> crate::private::Sealed for vec<T, 2> where T: Scalar {}
 impl<T> crate::private::Sealed for vec<T, 3> where T: Scalar {}
 impl<T> crate::private::Sealed for vec<T, 4> where T: Scalar {}
 
-impl<T, const N: usize> crate::private::Sealed for mat<T, 1, N> where vec<T, N>: Data {}
-impl<T, const N: usize> crate::private::Sealed for mat<T, 2, N> where vec<T, N>: Data {}
-impl<T, const N: usize> crate::private::Sealed for mat<T, 3, N> where vec<T, N>: Data {}
-impl<T, const N: usize> crate::private::Sealed for mat<T, 4, N> where vec<T, N>: Data {}
-
-impl<T> Data for vec2<T>
-where
-    T: Scalar,
+impl<T, const N: usize> crate::private::Sealed for mat<T, 1, N> where
+    vec<T, N>: crate::private::Sealed
 {
-    const TYPE: DataType = DataType {
-        scalar: T::TYPE,
-        columns: VectorSize::One,
-        rows: VectorSize::Two,
-    };
 }
 
-impl<T> Data for vec3<T>
-where
-    T: Scalar,
+impl<T, const N: usize> crate::private::Sealed for mat<T, 2, N> where
+    vec<T, N>: crate::private::Sealed
 {
-    const TYPE: DataType = DataType {
-        scalar: T::TYPE,
-        columns: VectorSize::One,
-        rows: VectorSize::Three,
-    };
 }
 
-impl<T> Data for vec4<T>
-where
-    T: Scalar,
+impl<T, const N: usize> crate::private::Sealed for mat<T, 3, N> where
+    vec<T, N>: crate::private::Sealed
 {
-    const TYPE: DataType = DataType {
-        scalar: T::TYPE,
-        columns: VectorSize::One,
-        rows: VectorSize::Four,
-    };
 }
 
-impl<T, const M: usize> Data for mat<T, 2, M>
-where
-    vec<T, M>: Data,
+impl<T, const N: usize> crate::private::Sealed for mat<T, 4, N> where
+    vec<T, N>: crate::private::Sealed
 {
-    const TYPE: DataType = DataType {
-        scalar: <vec<T, M> as Data>::TYPE.scalar,
-        columns: VectorSize::Two,
-        rows: <vec<T, M> as Data>::TYPE.rows,
-    };
 }
 
-impl<T, const M: usize> Data for mat<T, 3, M>
+impl<T> VertexAttributes for vec2<T>
 where
-    vec<T, M>: Data,
+    T: VertexScalar,
 {
-    const TYPE: DataType = DataType {
-        scalar: <vec<T, M> as Data>::TYPE.scalar,
-        columns: VectorSize::Three,
-        rows: <vec<T, M> as Data>::TYPE.rows,
-    };
+    const FORMAT: VertexFormat = vertex_format::<T>(VectorSize::Two);
+    const COUNT: VectorSize = VectorSize::One;
 }
 
-impl<T, const M: usize> Data for mat<T, 4, M>
+impl<T> VertexAttributes for vec3<T>
 where
-    vec<T, M>: Data,
+    T: VertexScalar,
 {
-    const TYPE: DataType = DataType {
-        scalar: <vec<T, M> as Data>::TYPE.scalar,
-        columns: VectorSize::Four,
-        rows: <vec<T, M> as Data>::TYPE.rows,
-    };
+    const FORMAT: VertexFormat = vertex_format::<T>(VectorSize::Three);
+    const COUNT: VectorSize = VectorSize::One;
+}
+
+impl<T> VertexAttributes for vec4<T>
+where
+    T: VertexScalar,
+{
+    const FORMAT: VertexFormat = vertex_format::<T>(VectorSize::Four);
+    const COUNT: VectorSize = VectorSize::One;
+}
+
+impl<T, const M: usize> VertexAttributes for mat<T, 2, M>
+where
+    vec<T, M>: VertexAttributes,
+{
+    const FORMAT: VertexFormat = <vec<T, M> as VertexAttributes>::FORMAT;
+    const COUNT: VectorSize = VectorSize::Two;
+}
+
+impl<T, const M: usize> VertexAttributes for mat<T, 3, M>
+where
+    vec<T, M>: VertexAttributes,
+{
+    const FORMAT: VertexFormat = <vec<T, M> as VertexAttributes>::FORMAT;
+    const COUNT: VectorSize = VectorSize::Three;
+}
+
+impl<T, const M: usize> VertexAttributes for mat<T, 4, M>
+where
+    vec<T, M>: VertexAttributes,
+{
+    const FORMAT: VertexFormat = <vec<T, M> as VertexAttributes>::FORMAT;
+    const COUNT: VectorSize = VectorSize::Four;
 }
 
 impl<T> DeviceRepr for vec2<T>

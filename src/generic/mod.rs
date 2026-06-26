@@ -2,7 +2,7 @@
 mod acst;
 mod arguments;
 mod buffer;
-mod compute_pipeline;
+mod compute;
 mod data;
 mod feature;
 mod format;
@@ -10,7 +10,6 @@ mod image;
 mod instance;
 mod queue;
 mod render;
-mod render_pipeline;
 mod sampler;
 mod shader;
 mod stages;
@@ -36,18 +35,18 @@ pub use self::{
         AsBufferSlice, BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut,
         BufferRange, BufferSlice, BufferUsage,
     },
-    compute_pipeline::ComputePipelineDesc,
+    compute::ComputePipelineDesc,
     data::*,
     feature::Features,
     format::{PixelFormat, VertexFormat},
     image::{ComponentSwizzle, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
     instance::{Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities},
     queue::QueueFlags,
-    render::{AttachmentDesc, ClearColor, ClearDepthStencil, LoadOp, RenderPassDesc, StoreOp},
-    render_pipeline::{
-        Blend, BlendDesc, BlendFactor, BlendOp, ColorTargetDesc, CompareFunction, Culling,
-        DepthStencilDesc, FrontFace, PipelineError, PrimitiveTopology, RasterDesc,
-        RenderPipelineDesc, VertexAttributeDesc, VertexLayoutDesc, VertexStepMode, WriteMask,
+    render::{
+        AttachmentDesc, Blend, BlendDesc, BlendFactor, BlendOp, ClearColor, ClearDepthStencil,
+        ColorTargetDesc, CompareFunction, Culling, DepthStencilDesc, FrontFace, LoadOp,
+        PipelineError, PrimitiveTopology, RasterDesc, RenderPassDesc, RenderPipelineDesc, StoreOp,
+        VertexBinding, VertexAttributeDesc, VertexLayoutDesc, VertexStepMode, WriteMask,
     },
     sampler::{AddressMode, Filter, MipMapMode, SamplerDesc},
     shader::{

@@ -848,3 +848,66 @@ pub enum VertexFormat {
     /// 32-bit floating-point number quadruple.
     Float32x4,
 }
+
+impl VertexFormat {
+    pub fn size(&self) -> usize {
+        match *self {
+            VertexFormat::Uint8
+            | VertexFormat::Sint8
+            | VertexFormat::Unorm8
+            | VertexFormat::Snorm8 => 1,
+            VertexFormat::Uint16
+            | VertexFormat::Sint16
+            | VertexFormat::Unorm16
+            | VertexFormat::Snorm16
+            | VertexFormat::Float16 => 2,
+            VertexFormat::Uint32
+            | VertexFormat::Sint32
+            | VertexFormat::Unorm32
+            | VertexFormat::Snorm32
+            | VertexFormat::Float32 => 4,
+            VertexFormat::Uint8x2
+            | VertexFormat::Sint8x2
+            | VertexFormat::Unorm8x2
+            | VertexFormat::Snorm8x2 => 2,
+            VertexFormat::Uint16x2
+            | VertexFormat::Sint16x2
+            | VertexFormat::Unorm16x2
+            | VertexFormat::Snorm16x2
+            | VertexFormat::Float16x2 => 4,
+            VertexFormat::Uint32x2
+            | VertexFormat::Sint32x2
+            | VertexFormat::Unorm32x2
+            | VertexFormat::Snorm32x2
+            | VertexFormat::Float32x2 => 8,
+            VertexFormat::Uint8x3
+            | VertexFormat::Sint8x3
+            | VertexFormat::Unorm8x3
+            | VertexFormat::Snorm8x3 => 3,
+            VertexFormat::Uint16x3
+            | VertexFormat::Sint16x3
+            | VertexFormat::Unorm16x3
+            | VertexFormat::Snorm16x3
+            | VertexFormat::Float16x3 => 6,
+            VertexFormat::Uint32x3
+            | VertexFormat::Sint32x3
+            | VertexFormat::Unorm32x3
+            | VertexFormat::Snorm32x3
+            | VertexFormat::Float32x3 => 12,
+            VertexFormat::Uint8x4
+            | VertexFormat::Sint8x4
+            | VertexFormat::Unorm8x4
+            | VertexFormat::Snorm8x4 => 4,
+            VertexFormat::Uint16x4
+            | VertexFormat::Sint16x4
+            | VertexFormat::Unorm16x4
+            | VertexFormat::Snorm16x4
+            | VertexFormat::Float16x4 => 8,
+            VertexFormat::Uint32x4
+            | VertexFormat::Sint32x4
+            | VertexFormat::Unorm32x4
+            | VertexFormat::Snorm32x4
+            | VertexFormat::Float32x4 => 16,
+        }
+    }
+}

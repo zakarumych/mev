@@ -41,7 +41,7 @@ use super::{
         WeakDescriptorSetLayout, WeakPipelineLayout,
     },
     // queue::PendingEpochs,
-    render_pipeline::RenderPipeline,
+    render::RenderPipeline,
     sampler::WeakSampler,
     shader::Library,
     surface::Surface,
@@ -475,7 +475,7 @@ impl WeakDevice {
                     let weak = entry.get();
                     // It is only safe to drop when no strong refs exist.
                     // While this function is called when last strong reference is dropped
-                    // the entry could be replaced by new sampler before lock was acquired.
+                    // the weak could have been upgraded to strong reference before lock was acquired.
                     if weak.unused() {
                         // No strong references exists.
                         unsafe {
@@ -484,7 +484,9 @@ impl WeakDevice {
                     }
                 }
                 _ => {
-                    // Entry was removed, probably in `new_sampler` call with the same `SamplerDesc`.
+                    // Entry was removed.
+                    // It could have been reused and dropped again before lock was acquired.
+                    // No action is needed in this case.
                 }
             }
         }
@@ -510,7 +512,9 @@ impl WeakDevice {
                     }
                 }
                 _ => {
-                    // Entry was removed, probably in `new_sampler` call with the same `SamplerDesc`.
+                    // Entry was removed.
+                    // It could have been reused and dropped again before lock was acquired.
+                    // No action is needed in this case.
                 }
             }
         }
@@ -546,7 +550,9 @@ impl WeakDevice {
                     }
                 }
                 _ => {
-                    // Entry was removed, probably in `new_sampler` call with the same `SamplerDesc`.
+                    // Entry was removed.
+                    // It could have been reused and dropped again before lock was acquired.
+                    // No action is needed in this case.
                 }
             }
         }

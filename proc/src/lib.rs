@@ -15,6 +15,11 @@ pub fn derive_auto_repr(input: TokenStream) -> TokenStream {
     mev_proc_impl::derive_auto_repr(input.into(), &quote::quote!(mev)).into()
 }
 
+#[proc_macro_derive(VertexBinding, attributes(mev))]
+pub fn derive_vertex(input: TokenStream) -> TokenStream {
+    mev_proc_impl::derive_vertex(input.into(), &quote::quote!(mev)).into()
+}
+
 #[proc_macro]
 pub fn match_backend(input: TokenStream) -> TokenStream {
     mev_proc_impl::match_backend(input.into(), &quote::quote!(mev)).into()
