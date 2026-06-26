@@ -36,7 +36,25 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
             ty.span() => {
                 let padding = #mev::for_macro::repr_pad_for::<#ty>(__mev_device_repr_end);
                 if 0 != padding {
-                    panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of `N bytes`"));
+                    match padding {
+                        1 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 1 byte")),
+                        2 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 2 bytes")),
+                        3 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 3 bytes")),
+                        4 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 4 bytes")),
+                        5 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 5 bytes")),
+                        6 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 6 bytes")),
+                        7 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 7 bytes")),
+                        8 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 8 bytes")),
+                        9 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 9 bytes")),
+                        10 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 10 bytes")),
+                        11 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 11 bytes")),
+                        12 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 12 bytes")),
+                        13 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 13 bytes")),
+                        14 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 14 bytes")),
+                        15 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 15 bytes")),
+                        16 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of 16 bytes")),
+                        _ => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Field `", #memeber, "` requires padding of many bytes")),
+                    }
                 }
                 __mev_device_repr_end += <#ty as #mev::for_macro::DeviceRepr>::SIZE;
             }
@@ -51,7 +69,25 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
     pad_sizes_are_zero.extend(quote! {
         let padding = #mev::for_macro::pad_align(__mev_device_repr_end, (#total_align) + 1);
         if 0 != padding {
-            panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of `N bytes`"));
+            match padding {
+                1 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 1 byte")),
+                2 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 2 bytes")),
+                3 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 3 bytes")),
+                4 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 4 bytes")),
+                5 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 5 bytes")),
+                6 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 6 bytes")),
+                7 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 7 bytes")),
+                8 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 8 bytes")),
+                9 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 9 bytes")),
+                10 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 10 bytes")),
+                11 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 11 bytes")),
+                12 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 12 bytes")),
+                13 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 13 bytes")),
+                14 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 14 bytes")),
+                15 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 15 bytes")),
+                16 => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of 16 bytes")),
+                _ => panic!(concat!("struct `", stringify!(#name), "` is not a valid device representation. Tail padding is required of many bytes")),
+            }
         }
     });
 
