@@ -177,11 +177,11 @@ impl<'a> RenderPassDesc<'a> {
 /// Describes single vertex attribute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VertexAttributeDesc {
-    /// Vertex attribute format.
-    pub format: VertexFormat,
-
     /// Index of the buffer that contains vertex data.
     pub buffer_index: u32,
+
+    /// Vertex attribute format.
+    pub format: VertexFormat,
 
     /// Offset from the beginning of the vertex data in buffer.
     pub offset: u32,

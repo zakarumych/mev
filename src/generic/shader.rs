@@ -100,17 +100,23 @@ pub struct ShaderSource<'a> {
 
 impl<'a> ShaderSource<'a> {
     /// Creates a new WGSL shader source.
-    pub fn wgsl(code: impl Into<Cow<'a, [u8]>>) -> Self {
+    pub fn wgsl(code: impl Into<Cow<'a, str>>) -> Self {
         ShaderSource {
-            code: code.into(),
+            code: match code.into() {
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+                Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+            },
             filename: None,
             language: ShaderLanguage::Wgsl,
         }
     }
 
-    pub fn glsl_vert(code: impl Into<Cow<'a, [u8]>>) -> Self {
+    pub fn glsl_vert(code: impl Into<Cow<'a, str>>) -> Self {
         ShaderSource {
-            code: code.into(),
+            code: match code.into() {
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+                Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+            },
             filename: None,
             language: ShaderLanguage::Glsl {
                 stage: ShaderStage::Vertex,
@@ -118,9 +124,12 @@ impl<'a> ShaderSource<'a> {
         }
     }
 
-    pub fn glsl_frag(code: impl Into<Cow<'a, [u8]>>) -> Self {
+    pub fn glsl_frag(code: impl Into<Cow<'a, str>>) -> Self {
         ShaderSource {
-            code: code.into(),
+            code: match code.into() {
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+                Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+            },
             filename: None,
             language: ShaderLanguage::Glsl {
                 stage: ShaderStage::Fragment,
@@ -128,9 +137,12 @@ impl<'a> ShaderSource<'a> {
         }
     }
 
-    pub fn glsl_comp(code: impl Into<Cow<'a, [u8]>>) -> Self {
+    pub fn glsl_comp(code: impl Into<Cow<'a, str>>) -> Self {
         ShaderSource {
-            code: code.into(),
+            code: match code.into() {
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+                Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+            },
             filename: None,
             language: ShaderLanguage::Glsl {
                 stage: ShaderStage::Compute,
@@ -138,9 +150,12 @@ impl<'a> ShaderSource<'a> {
         }
     }
 
-    pub fn msl(code: impl Into<Cow<'a, [u8]>>) -> Self {
+    pub fn msl(code: impl Into<Cow<'a, str>>) -> Self {
         ShaderSource {
-            code: code.into(),
+            code: match code.into() {
+                Cow::Borrowed(s) => Cow::Borrowed(s.as_bytes()),
+                Cow::Owned(s) => Cow::Owned(s.into_bytes()),
+            },
             filename: None,
             language: ShaderLanguage::Msl,
         }
@@ -165,6 +180,29 @@ macro_rules! include_shader_source {
 pub enum LibraryInput<'a> {
     /// Shader source code.
     Source(ShaderSource<'a>),
+}
+
+impl<'a> LibraryInput<'a> {
+    /// Creates a new WGSL shader source.
+    pub fn wgsl(code: impl Into<Cow<'a, str>>) -> Self {
+        LibraryInput::Source(ShaderSource::wgsl(code))
+    }
+
+    pub fn glsl_vert(code: impl Into<Cow<'a, str>>) -> Self {
+        LibraryInput::Source(ShaderSource::glsl_vert(code))
+    }
+
+    pub fn glsl_frag(code: impl Into<Cow<'a, str>>) -> Self {
+        LibraryInput::Source(ShaderSource::glsl_frag(code))
+    }
+
+    pub fn glsl_comp(code: impl Into<Cow<'a, str>>) -> Self {
+        LibraryInput::Source(ShaderSource::glsl_comp(code))
+    }
+
+    pub fn msl(code: impl Into<Cow<'a, str>>) -> Self {
+        LibraryInput::Source(ShaderSource::msl(code))
+    }
 }
 
 impl<'a> From<ShaderSource<'a>> for LibraryInput<'a> {
