@@ -7,7 +7,7 @@ use std::{
 
 use bytemuck::{AnyBitPattern, NoUninit, Pod, Zeroable};
 
-use crate::{VertexBinding, VertexFormat};
+use crate::generic::{VertexBinding, VertexFormat, Zero};
 
 /// Type representable as a POD type with GPU compatible layout.
 ///
@@ -453,11 +453,25 @@ where
     }
 }
 
+impl<T, const N: usize> Zero for vec<T, N>
+where
+    T: Zero,
+{
+    const ZERO: Self = vec([T::ZERO; N]);
+}
+
 /// Matrix data type.
 /// Element type should be `Scalar`, then it can be used as device data type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub struct mat<T, const N: usize, const M: usize>(pub [vec<T, M>; N]);
+
+impl<T, const N: usize, const M: usize> Zero for mat<T, N, M>
+where
+    T: Zero,
+{
+    const ZERO: Self = mat([const { vec([T::ZERO; M]) }; N]);
+}
 
 unsafe impl<T, const N: usize, const M: usize> Zeroable for mat<T, N, M> where T: Zeroable {}
 unsafe impl<T, const N: usize, const M: usize> Pod for mat<T, N, M> where T: Pod {}
@@ -713,96 +727,96 @@ impl<T> DeviceRepr for vec2<T>
 where
     T: Scalar,
 {
-    type Repr = [T::ScalarRepr; 2];
-    type ArrayRepr = [T::ScalarRepr; 2];
+    type Repr = vec2<T::ScalarRepr>;
+    type ArrayRepr = vec2<T::ScalarRepr>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        vec(self.0.as_repr())
     }
 
-    const ALIGN: usize = size_of::<[T::ScalarRepr; 2]>();
+    const ALIGN: usize = size_of::<vec2<T::ScalarRepr>>();
 }
 
 impl<T> DeviceRepr for vec3<T>
 where
     T: Scalar,
 {
-    type Repr = [T::ScalarRepr; 3];
-    type ArrayRepr = [T::ScalarRepr; 4];
+    type Repr = vec3<T::ScalarRepr>;
+    type ArrayRepr = vec4<T::ScalarRepr>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        vec(self.0.as_repr())
     }
 
     #[inline(always)]
-    fn make_array_repr(&self) -> [T::ScalarRepr; 4] {
+    fn make_array_repr(&self) -> vec4<T::ScalarRepr> {
         let [a, b, c] = self.0.as_repr();
-        [a, b, c, Zeroable::zeroed()]
+        vec([a, b, c, Zeroable::zeroed()])
     }
 
-    const ALIGN: usize = size_of::<[T::ScalarRepr; 4]>();
+    const ALIGN: usize = size_of::<vec4<T::ScalarRepr>>();
 }
 
 impl<T> DeviceRepr for vec4<T>
 where
     T: Scalar,
 {
-    type Repr = [T::ScalarRepr; 4];
-    type ArrayRepr = [T::ScalarRepr; 4];
+    type Repr = vec4<T::ScalarRepr>;
+    type ArrayRepr = vec4<T::ScalarRepr>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        vec(self.0.as_repr())
     }
 
-    const ALIGN: usize = size_of::<[T::ScalarRepr; 4]>();
+    const ALIGN: usize = size_of::<vec4<T::ScalarRepr>>();
 }
 
-impl<T, const M: usize> DeviceRepr for mat<T, 2, M>
+impl<T, const N: usize> DeviceRepr for mat<T, N, 2>
 where
-    vec<T, M>: DeviceRepr,
+    T: Scalar,
 {
-    type Repr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 2];
-    type ArrayRepr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 2];
+    type Repr = mat<T::ScalarRepr, N, 2>;
+    type ArrayRepr = mat<T::ScalarRepr, N, 2>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        mat(self.0.as_repr())
     }
 
-    const ALIGN: usize = <vec<T, M> as DeviceRepr>::ALIGN;
+    const ALIGN: usize = size_of::<vec2<T::ScalarRepr>>();
 }
 
-impl<T, const M: usize> DeviceRepr for mat<T, 3, M>
+impl<T, const N: usize> DeviceRepr for mat<T, N, 3>
 where
-    vec<T, M>: DeviceRepr,
+    T: Scalar,
 {
-    type Repr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 3];
-    type ArrayRepr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 3];
+    type Repr = mat<T::ScalarRepr, N, 4>;
+    type ArrayRepr = mat<T::ScalarRepr, N, 4>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        mat(self.0.as_repr())
     }
 
-    const ALIGN: usize = <vec<T, M> as DeviceRepr>::ALIGN;
+    const ALIGN: usize = size_of::<vec4<T::ScalarRepr>>();
 }
 
-impl<T, const M: usize> DeviceRepr for mat<T, 4, M>
+impl<T, const N: usize> DeviceRepr for mat<T, N, 4>
 where
-    vec<T, M>: DeviceRepr,
+    T: Scalar,
 {
-    type Repr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 4];
-    type ArrayRepr = [<vec<T, M> as DeviceRepr>::ArrayRepr; 4];
+    type Repr = mat<T::ScalarRepr, N, 4>;
+    type ArrayRepr = mat<T::ScalarRepr, N, 4>;
 
     #[inline(always)]
     fn as_repr(&self) -> Self::Repr {
-        self.0.as_repr()
+        mat(self.0.as_repr())
     }
 
-    const ALIGN: usize = <vec<T, M> as DeviceRepr>::ALIGN;
+    const ALIGN: usize = size_of::<vec4<T::ScalarRepr>>();
 }
 
 /// Boolean vector type of two elements.
