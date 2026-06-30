@@ -12,7 +12,8 @@ struct Constants {
     height: u32,
 }
 
-var<push_constant> pc: Constants;
+@group(0) @binding(0)
+var<uniform> pc: Constants;
 
 @vertex
 fn vs_main(@builtin(vertex_index) index: u32) -> VertOutput {

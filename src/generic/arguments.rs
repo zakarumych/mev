@@ -2,12 +2,10 @@ use crate::backend::{ComputeCommandEncoder, RenderCommandEncoder};
 
 use super::ShaderStages;
 
-
 /// Kind of the shader argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArgumentKind {
     // Constant,
-
     /// Argument is uniform buffer.
     /// Read-only data that is shared between all invocations of a shader.
     UniformBuffer,
@@ -56,7 +54,7 @@ pub trait ArgumentsSealed {}
 
 /// Shader arguments trait.
 /// Implemented by types that serve as shader arguments.
-/// 
+///
 /// Derive this trait for structures where all fields are `ArgumentsField` implementations.
 /// It can be buffers, buffer slices, images, samplers, etc.
 /// Use attributes to override default argument kind and specify stages.

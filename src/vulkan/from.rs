@@ -1,13 +1,10 @@
 use ash::vk;
 
-use crate::{
-    generic::{
-        AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, ComponentSwizzle, Culling,
-        Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
-        MipMapMode, Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags,
-        ShaderStage, ShaderStages, Swizzle, VertexFormat, WriteMask,
-    },
-    mat,
+use crate::generic::{
+    AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, ComponentSwizzle, Culling,
+    Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage, MipMapMode,
+    Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags, ShaderStage,
+    ShaderStages, Swizzle, VertexFormat, WriteMask,
 };
 
 macro_rules! from_flags {
@@ -46,7 +43,7 @@ where
 }
 
 pub trait AshFrom<T> {
-    fn ash_from(generic: T) -> Self;
+    fn ash_from(mev: T) -> Self;
 }
 
 pub trait IntoAsh<A> {
@@ -650,8 +647,8 @@ impl AshFrom<FrontFace> for ash::vk::FrontFace {
 
 impl AshFrom<Culling> for ash::vk::CullModeFlags {
     #[inline]
-    fn ash_from(generic: Culling) -> Self {
-        match generic {
+    fn ash_from(mev: Culling) -> Self {
+        match mev {
             Culling::None => ash::vk::CullModeFlags::NONE,
             Culling::Front => ash::vk::CullModeFlags::FRONT,
             Culling::Back => ash::vk::CullModeFlags::BACK,
@@ -661,29 +658,29 @@ impl AshFrom<Culling> for ash::vk::CullModeFlags {
 
 impl AshFrom<Extent2> for ash::vk::Extent2D {
     #[inline]
-    fn ash_from(generic: Extent2) -> Self {
+    fn ash_from(mev: Extent2) -> Self {
         ash::vk::Extent2D {
-            width: generic.width(),
-            height: generic.height(),
+            width: mev.width(),
+            height: mev.height(),
         }
     }
 }
 
 impl AshFrom<Extent3> for ash::vk::Extent3D {
     #[inline]
-    fn ash_from(generic: Extent3) -> Self {
+    fn ash_from(mev: Extent3) -> Self {
         ash::vk::Extent3D {
-            width: generic.width(),
-            height: generic.height(),
-            depth: generic.depth(),
+            width: mev.width(),
+            height: mev.height(),
+            depth: mev.depth(),
         }
     }
 }
 
 impl AshFrom<ImageExtent> for ash::vk::Extent3D {
     #[inline]
-    fn ash_from(generic: ImageExtent) -> Self {
-        match generic {
+    fn ash_from(mev: ImageExtent) -> Self {
+        match mev {
             ImageExtent::D1(extent) => ash::vk::Extent3D {
                 width: extent.width(),
                 height: 1,
@@ -705,21 +702,21 @@ impl AshFrom<ImageExtent> for ash::vk::Extent3D {
 
 impl AshFrom<Offset2> for ash::vk::Offset2D {
     #[inline]
-    fn ash_from(generic: Offset2) -> Self {
+    fn ash_from(mev: Offset2) -> Self {
         ash::vk::Offset2D {
-            x: generic.x(),
-            y: generic.y(),
+            x: mev.x(),
+            y: mev.y(),
         }
     }
 }
 
 impl AshFrom<Offset3> for ash::vk::Offset3D {
     #[inline]
-    fn ash_from(generic: Offset3) -> Self {
+    fn ash_from(mev: Offset3) -> Self {
         ash::vk::Offset3D {
-            x: generic.x(),
-            y: generic.y(),
-            z: generic.z(),
+            x: mev.x(),
+            y: mev.y(),
+            z: mev.z(),
         }
     }
 }

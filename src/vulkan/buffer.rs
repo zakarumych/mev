@@ -35,7 +35,6 @@ struct Inner {
     owner: WeakDevice,
     size: usize,
     usage: BufferUsage,
-    name: Box<str>,
     block: Option<MemoryBlock<DeviceMemory>>,
     mapped: Option<Mapped>,
     idx: usize,
@@ -69,7 +68,6 @@ impl fmt::Debug for Buffer {
                 .field("handle", &self.handle)
                 .field("size", &self.inner.size)
                 .field("usage", &self.inner.usage)
-                .field("name", &self.inner.name)
                 .finish()
         } else {
             f.debug_tuple("Buffer").field(&self.handle).finish()
@@ -100,7 +98,6 @@ impl Buffer {
         handle: vk::Buffer,
         size: usize,
         usage: BufferUsage,
-        name: Box<str>,
         block: MemoryBlock<DeviceMemory>,
         idx: usize,
     ) -> Self {
@@ -110,7 +107,6 @@ impl Buffer {
                 owner,
                 size,
                 usage,
-                name,
                 block: Some(block),
                 mapped: None,
                 idx,
@@ -123,14 +119,13 @@ impl Buffer {
     }
 
     /// Creates a null/invalid Buffer for use when device OOM occurs.
-    pub(super) fn null(size: usize, usage: BufferUsage, name: Box<str>) -> Self {
+    pub(super) fn null(size: usize, usage: BufferUsage) -> Self {
         Buffer {
             handle: vk::Buffer::null(),
             inner: Arc::new(Inner {
                 owner: WeakDevice::null(),
                 size,
                 usage,
-                name,
                 block: None,
                 mapped: None,
                 idx: 0,
@@ -216,12 +211,6 @@ impl crate::traits::Buffer for Buffer {
     #[inline(always)]
     fn usage(&self) -> crate::generic::BufferUsage {
         self.inner.usage
-    }
-
-    /// Returns the name of the buffer.
-    #[inline(always)]
-    fn name(&self) -> &str {
-        &*self.inner.name
     }
 
     /// Returns `true` if the buffer is not shared,
@@ -578,10 +567,10 @@ impl crate::traits::Buffer for Buffer {
 }
 
 impl ArgumentsField<Automatic> for Buffer {
-    const KIND: ArgumentKind = <Self as ArgumentsField<Uniform>>::KIND;
-    const SIZE: usize = <Self as ArgumentsField<Uniform>>::SIZE;
-    const OFFSET: usize = <Self as ArgumentsField<Uniform>>::OFFSET;
-    const STRIDE: usize = <Self as ArgumentsField<Uniform>>::STRIDE;
+    const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
+    const SIZE: usize = 1;
+    const OFFSET: usize = 0;
+    const STRIDE: usize = size_of::<vk::DescriptorBufferInfo>();
 
     type Update = <Self as ArgumentsField<Uniform>>::Update;
 

@@ -1,7 +1,18 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
-use mev::DeviceRepr;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
+
+use mev::{Arguments, DeviceRepr};
 use winit::application::ApplicationHandler;
+
+#[derive(Arguments)]
+struct TriangleArguments {
+    #[mev(uniform)]
+    #[mev(vertex)]
+    pc: mev::Buffer,
+}
 
 struct TriangleApp {
     queue: mev::Queue,
@@ -9,6 +20,7 @@ struct TriangleApp {
     surface: Option<mev::Surface>,
     last_format: Option<mev::PixelFormat>,
     pipeline: Option<mev::RenderPipeline>,
+    pc: mev::Buffer,
     start: Instant,
 }
 
@@ -33,9 +45,26 @@ impl ApplicationHandler for TriangleApp {
 
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         if self.window.is_none() {
-            let window = event_loop
-                .create_window(winit::window::Window::default_attributes())
-                .unwrap();
+            #[allow(unused_mut)]
+            let mut attributes = winit::window::WindowAttributes::default();
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                use wasm_bindgen::JsCast;
+                use winit::platform::web::WindowAttributesExtWebSys;
+                let canvas = web_sys::window()
+                    .unwrap()
+                    .document()
+                    .unwrap()
+                    .get_element_by_id("mev_example")
+                    .unwrap()
+                    .dyn_into::<wgpu::web_sys::HtmlCanvasElement>()
+                    .unwrap();
+
+                attributes = attributes.with_canvas(Some(canvas));
+            }
+
+            let window = event_loop.create_window(attributes).unwrap();
             let surface = self.queue.new_surface(&window, &window).unwrap();
 
             self.window = Some(window);
@@ -87,7 +116,7 @@ impl TriangleApp {
                         front_face: mev::FrontFace::default(),
                         culling: mev::Culling::Back,
                     }),
-                    arguments: &[],
+                    arguments: &[TriangleArguments::LAYOUT],
                     constants: TriangleConstants::SIZE,
                 })
                 .unwrap();
@@ -106,6 +135,19 @@ impl TriangleApp {
             mev::PipelineStages::COLOR_OUTPUT,
             frame.image(),
         );
+
+        {
+            let mut copy = encoder.copy();
+
+            copy.write_buffer(
+                &self.pc,
+                &TriangleConstants {
+                    angle,
+                    width: target_extent.width(),
+                    height: target_extent.height(),
+                },
+            );
+        }
         {
             let mut render = encoder.render(mev::RenderPassDesc {
                 name: "main",
@@ -118,11 +160,12 @@ impl TriangleApp {
             render.with_viewport(mev::Offset3::ZERO, target_extent.into_3d().cast_as_f32());
             render.with_scissor(mev::Offset2::ZERO, target_extent.into_2d());
             render.with_pipeline(pipeline);
-            render.with_constants(&TriangleConstants {
-                angle,
-                width: target_extent.width(),
-                height: target_extent.height(),
-            });
+            render.with_arguments(
+                0,
+                &TriangleArguments {
+                    pc: self.pc.clone(),
+                },
+            );
             render.draw(0..3, 0..1);
         }
 
@@ -134,6 +177,7 @@ impl TriangleApp {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     mev::match_backend! {
         metal => {
@@ -142,7 +186,17 @@ fn main() {
         vulkan => {
             println!("Vulkan backend");
         }
+        webgpu => {
+            println!("WebGPU backend");
+        }
     }
+
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            // .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .finish(), // .with(toaster.tracing_layer()),
+    )
+    .expect("Global subscriber is set only once");
 
     let instance = mev::Instance::load().expect("Failed to init graphics");
 
@@ -155,6 +209,12 @@ fn main() {
         .unwrap();
     let queue = queues.pop().unwrap();
 
+    let pc = queue.new_buffer(mev::BufferDesc {
+        name: "triangle_constants",
+        size: TriangleConstants::SIZE,
+        usage: mev::BufferUsage::UNIFORM | mev::BufferUsage::TRANSFER_DST,
+    });
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
     let mut app = TriangleApp {
         queue,
@@ -163,9 +223,81 @@ fn main() {
         last_format: None,
         pipeline: None,
         start: Instant::now(),
+        pc,
     };
 
     let _ = event_loop.run_app(&mut app);
+}
+
+// #[cfg(target_arch = "wasm32")]
+// fn get_canvas_element() -> Option<web_sys::HtmlCanvasElement> {
+//     use eframe::wasm_bindgen::JsCast;
+
+//     let document = web_sys::window()?.document()?;
+//     let canvas = document.get_element_by_id("egui_snarl_demo")?;
+//     canvas.dyn_into::<web_sys::HtmlCanvasElement>().ok()
+// }
+
+// When compiling to web using trunk:
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+    std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false) // Only partially supported across browsers
+        .without_time() // std::time is not available in browsers
+        .with_writer(tracing_web::MakeWebConsoleWriter::new()); // write events to the console
+
+    tracing_subscriber::registry().with(fmt_layer).init();
+
+    mev::match_backend! {
+        metal => {
+            tracing::info!("mev Metal backend");
+        }
+        vulkan => {
+            tracing::info!("mev Vulkan backend");
+        }
+        webgpu => {
+            tracing::info!("mev WebGPU backend");
+        }
+    }
+
+    wasm_bindgen_futures::spawn_local(async {
+        let instance = mev::Instance::load_async()
+            .await
+            .expect("Failed to init graphics");
+
+        let (_device, mut queues) = instance
+            .new_device_async(mev::DeviceDesc {
+                idx: 0,
+                queues: &[0],
+                features: mev::Features::SURFACE,
+            })
+            .await
+            .unwrap();
+        let queue = queues.pop().unwrap();
+
+        let pc = queue.new_buffer(mev::BufferDesc {
+            name: "triangle_constants",
+            size: TriangleConstants::SIZE,
+            usage: mev::BufferUsage::UNIFORM | mev::BufferUsage::TRANSFER_DST,
+        });
+
+        let event_loop = winit::event_loop::EventLoop::new().unwrap();
+        let mut app = TriangleApp {
+            queue,
+            window: None,
+            surface: None,
+            last_format: None,
+            pipeline: None,
+            start: Instant::now(),
+            pc,
+        };
+
+        let _ = event_loop.run_app(&mut app);
+    });
 }
 
 #[derive(Copy, Clone, Debug, bytemuck::Zeroable, bytemuck::Pod, mev::AutoDeviceRepr)]

@@ -8,5 +8,8 @@ bitflags::bitflags! {
         ///
         /// See [`Device::new_surface`](crate::Device::new_surface).
         const SURFACE = 0x0000_0000_0000_0000_0000_0000_0000_0001;
+
+        /// If this feature is enabled, the device will support BC texture compression formats.
+        const TEXTURE_COMPRESSION_BC = 0x0000_0000_0000_0000_0000_0000_0000_0002;
     }
 }

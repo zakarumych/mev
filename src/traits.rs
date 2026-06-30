@@ -4,6 +4,7 @@ use std::{
     ops::{Deref, Range},
 };
 
+use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
@@ -17,26 +18,48 @@ use crate::{
     BufferMappedRange, BufferMappedRangeMut,
 };
 
-#[cfg(mev_backend = "metal")]
-pub trait Resource: Send + Sync + 'static {}
+// match_backend! {
+//     metal => {
+//         pub trait Resource: Send + Sync + 'static {}
+//     }
+//     vulkan => {
+//         pub trait Resource: Send + Sync + 'static {}
+//     }
+//     webgpu => {
+//         pub trait Resource: 'static {}
+//     }
+// }
 
-#[cfg(mev_backend = "vulkan")]
-pub trait Resource: Send + Sync + 'static {}
+with_metal! {
+    pub trait Resource: Send + Sync + Sized + 'static {}
+}
 
-#[cfg(any(mev_backend = "webgl", mev_backend = "webgpu"))]
-pub trait Resource: 'static {}
+with_vulkan! {
+    pub trait Resource: Send + Sync + Sized + 'static {}
+}
+
+with_webgpu! {
+    pub trait Resource: Sized + 'static {}
+}
 
 pub trait Instance: Debug + Resource {
     fn capabilities(&self) -> &Capabilities;
 
     fn new_device(
         &self,
-        info: DeviceDesc,
+        info: DeviceDesc<'_>,
     ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError>;
+
+    async fn new_device_async(
+        &self,
+        info: DeviceDesc<'_>,
+    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError> {
+        self.new_device(info)
+    }
 
     fn new_device_with_surface(
         &self,
-        info: DeviceDesc,
+        info: DeviceDesc<'_>,
         window: &impl HasWindowHandle,
         display: &impl HasDisplayHandle,
     ) -> Result<
@@ -48,6 +71,24 @@ pub trait Instance: Debug + Resource {
         SurfaceError,
     > {
         let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
+    }
+
+    async fn new_device_with_surface_async(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<
+        (
+            crate::backend::Device,
+            Vec<crate::backend::Queue>,
+            crate::backend::Surface,
+        ),
+        SurfaceError,
+    > {
+        let (device, queues) = self.new_device_async(info).await?;
         let surface = device.new_surface(window, display)?;
         Ok((device, queues, surface))
     }
@@ -302,12 +343,12 @@ pub trait AccelerationStructureCommandEncoder {
     );
 }
 
-pub trait Surface: Send + Sync + 'static {
+pub trait Surface: Resource {
     /// Acquires next frame from the surface.
     fn next_frame(&mut self) -> Result<crate::backend::Frame, SurfaceError>;
 }
 
-pub trait Frame: Send + Sync + 'static {
+pub trait Frame: Resource {
     fn image(&self) -> &crate::backend::Image;
 }
 
@@ -348,9 +389,6 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
 
     /// Returns the buffer usage.
     fn usage(&self) -> crate::generic::BufferUsage;
-
-    /// Returns the name of the buffer.
-    fn name(&self) -> &str;
 
     /// Returns `true` if the buffer is not shared,
     /// meaning that there are no other references to the buffer

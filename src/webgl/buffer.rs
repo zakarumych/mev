@@ -67,7 +67,6 @@ struct Inner {
     buffer: WebGlBuffer,
     size: usize,
     usage: BufferUsage,
-    name: Box<str>,
     // Reference to the owning WebGL context
     gl: GL,
     shadow: Option<ShadowBuffer>,
@@ -94,7 +93,6 @@ impl Buffer {
         buffer: WebGlBuffer,
         size: usize,
         usage: BufferUsage,
-        name: Box<str>,
         gl: GL,
     ) -> Self {
         Buffer {
@@ -102,7 +100,6 @@ impl Buffer {
                 buffer,
                 size,
                 usage,
-                name,
                 gl,
                 shadow: None,
             }),
@@ -189,7 +186,6 @@ impl fmt::Debug for Buffer {
                 .field("handle", &self.inner.buffer)
                 .field("size", &self.inner.size)
                 .field("usage", &self.inner.usage)
-                .field("name", &self.inner.name)
                 .finish()
         } else {
             f.debug_tuple("Buffer").field(&self.inner.buffer).finish()
@@ -223,11 +219,6 @@ impl crate::traits::Buffer for Buffer {
     #[inline(always)]
     fn usage(&self) -> BufferUsage {
         self.inner.usage
-    }
-
-    #[inline(always)]
-    fn name(&self) -> &str {
-        &self.inner.name
     }
 
     #[inline(always)]

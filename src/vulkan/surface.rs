@@ -493,19 +493,15 @@ impl Surface {
     }
 }
 
+impl crate::traits::Resource for Surface {}
+
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
         self.clear_retired(true)?;
 
-        match self.suboptimal_retire {
-            SuboptimalRetire::Cooldown(0) => {}
-            SuboptimalRetire::Cooldown(ref mut n) => {
-                *n -= 1;
-            }
-            SuboptimalRetire::Retire => {
-                self.init()?;
-            }
+        if let SuboptimalRetire::Retire = self.suboptimal_retire {
+            self.init()?;
         }
 
         if self.current.is_none() {
@@ -529,8 +525,14 @@ impl crate::traits::Surface for Surface {
                         Ok((idx, false)) => idx,
                         Ok((idx, true)) => {
                             tracing::debug!("Surface '{:?}' is suboptimal", self.surface);
-                            if self.suboptimal_retire == SuboptimalRetire::Cooldown(0) {
-                                self.suboptimal_retire = SuboptimalRetire::Retire;
+                            match self.suboptimal_retire {
+                                SuboptimalRetire::Cooldown(0) => {
+                                    self.suboptimal_retire = SuboptimalRetire::Retire;
+                                }
+                                SuboptimalRetire::Cooldown(n) => {
+                                    self.suboptimal_retire = SuboptimalRetire::Cooldown(n - 1);
+                                }
+                                SuboptimalRetire::Retire => {}
                             }
                             idx
                         }
@@ -645,6 +647,8 @@ impl Frame {
         }
     }
 }
+
+impl crate::traits::Resource for Frame {}
 
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {

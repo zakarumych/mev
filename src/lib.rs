@@ -2,9 +2,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(unused)]
 
-mod generic;
-mod traits;
-
 /// Macro that passes-through any tokens inside if chosen backend is Metal.
 /// Otherwise, it unwraps to nothing.
 ///
@@ -169,7 +166,11 @@ with_webgpu! {
     mod backend;
 }
 
+mod generic;
+mod traits;
+
 /// Backend that is used for rendering.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Backend {
     Metal,
     Vulkan,
@@ -210,20 +211,25 @@ pub use mev_proc::{match_backend, Arguments, AutoDeviceRepr, DeviceRepr, VertexB
 
 #[doc(hidden)]
 pub mod for_macro {
-    pub use crate::backend::for_macro::*;
-
-    pub use crate::generic::{
-        AutoDeviceRepr, Automatic, DataType, DeviceRepr, LibraryInput, Sampled, ScalarType,
-        ShaderSource, Storage, Uniform, VectorSize, VertexAttributeDesc, VertexAttributes,
-        VertexBinding, VertexFormat, VertexLayoutDesc, VertexStepMode,
-    };
-
-    pub use bytemuck::{Pod, Zeroable};
     use std::any::type_name;
+
     pub use std::{
         fmt,
         mem::{align_of, offset_of, size_of, MaybeUninit},
         ptr::addr_of,
+    };
+
+    pub use bytemuck::{Pod, Zeroable};
+
+    pub use mev_proc::match_backend;
+
+    pub use crate::{
+        backend::for_macro::*,
+        generic::{
+            AutoDeviceRepr, Automatic, DataType, DeviceRepr, LibraryInput, Sampled, ScalarType,
+            ShaderSource, Storage, Uniform, VectorSize, VertexAttributeDesc, VertexAttributes,
+            VertexBinding, VertexFormat, VertexLayoutDesc, VertexStepMode,
+        },
     };
 
     pub const fn align_end(end: usize, align: usize) -> usize {

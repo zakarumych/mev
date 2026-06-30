@@ -81,11 +81,6 @@ impl crate::traits::Buffer for Buffer {
     }
 
     #[inline(always)]
-    fn name(&self) -> &str {
-        self.buffer.label()
-    }
-
-    #[inline(always)]
     fn detached(&self) -> bool {
         let count: NSUInteger = unsafe { msg_send![(self.buffer.as_ptr()), retainCount] };
         count == 1

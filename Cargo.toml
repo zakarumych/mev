@@ -26,6 +26,8 @@ raw-window-handle.workspace = true
 slab.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
 
 [target.'cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))'.dependencies]
 ash.workspace = true
@@ -47,12 +49,34 @@ web-sys = { workspace = true, features=[
     "WebGlBuffer",
     "WebGlTexture",
     "Window"] }
-wasm-bindgen = { workspace = true }
-naga = { workspace = true, features = ["glsl-out"] }
-wgpu = { workspace = true, default-features = false, features = ["webgpu"] }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+naga = { workspace = true, features = ["wgsl-out"] }
+tracing-web.workspace = true
+console_error_panic_hook = "0.1"
+web-time = "1.1"
 
 [dev-dependencies]
 winit = "0.30.12"
+tracing-subscriber = "0.3.23"
+
+[profile.dev.package.foldhash]
+opt-level = 3
+
+[profile.dev.package.metal]
+opt-level = 3
+
+[profile.dev.package.hashbrown]
+opt-level = 3
+
+[profile.dev.package.ash]
+opt-level = 3
+
+[[example]]
+name = "triangle"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mev_backend, values("vulkan", "metal", "webgl", "webgpu"))'] }
 
 [workspace]
 resolver = "2"
@@ -77,9 +101,10 @@ hashbrown = { version = "0.16.1" }
 hidden-trait = "0.1"
 libloading = "0.9.0"
 metal = { version = "0.33.0" }
-naga = { version = "27.0.3", features = ["spv-in", "wgsl-in", "glsl-in"] }
+naga = { version = "29.0.3", features = ["spv-in", "wgsl-in", "glsl-in"] }
 objc = { version = "0.2" }
 parking_lot = "0.12.5"
+pollster = "0.3"
 proc-macro2 = "1"
 syn = "2"
 quote = "1"
@@ -88,26 +113,10 @@ raw-window-handle = "0.6"
 slab = "0.4.11"
 smallvec = "1.15.1"
 tracing = "0.1.44"
+tracing-web = "0.1"
 
 js-sys = "0.3.103"
 web-sys = "0.3.103"
 wasm-bindgen = "0.2.126"
-wgpu = { version = "29", default-features = false, features = ["std"] }
-
-[profile.dev.package.foldhash]
-opt-level = 3
-
-[profile.dev.package.metal]
-opt-level = 3
-
-[profile.dev.package.hashbrown]
-opt-level = 3
-
-[profile.dev.package.ash]
-opt-level = 3
-
-[[example]]
-name = "triangle"
-
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mev_backend, values("vulkan", "metal", "webgl", "webgpu"))'] }
+wasm-bindgen-futures = "0.4.76"
+wgpu = { version = "29" }

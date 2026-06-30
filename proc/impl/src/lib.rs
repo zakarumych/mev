@@ -12,12 +12,12 @@ macro_rules! parse_macro_input {
 mod args;
 mod auto_repr;
 mod r#match;
+mod metal;
 mod repr;
 mod vertex;
-
-mod metal;
 mod vulkan;
-mod webgl;
+// mod webgl;
+mod webgpu;
 
 pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
@@ -26,19 +26,20 @@ pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     };
+
     let vulkan_tokens = match vulkan::arguments::derive(&input, mev) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     };
-    // let webgl_tokens = match webgl::arguments::derive(&input, mev) {
-    //     Ok(tokens) => tokens,
-    //     Err(err) => err.to_compile_error(),
-    // };
 
+    let webgpu_tokens = match webgpu::arguments::derive(&input, mev) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    };
     quote::quote! {
-        #mev::with_metal!{#metal_tokens}
-        #mev::with_vulkan!{#vulkan_tokens}
-        // #mev::with_webgl!{#webgl_tokens}
+        #mev::with_metal! { #metal_tokens }
+        #mev::with_vulkan! { #vulkan_tokens }
+        #mev::with_webgpu! { #webgpu_tokens }
     }
 }
 

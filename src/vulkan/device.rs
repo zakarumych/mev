@@ -1462,12 +1462,12 @@ impl crate::traits::Device for Device {
 
     fn new_buffer(&self, desc: BufferDesc) -> Buffer {
         if self.inner.error_state.is_some() {
-            return Buffer::null(desc.size, desc.usage, desc.name.into());
+            return Buffer::null(desc.size, desc.usage);
         }
 
         let Ok(size) = u64::try_from(desc.size) else {
             self.set_oom();
-            return Buffer::null(desc.size, desc.usage, desc.name.into());
+            return Buffer::null(desc.size, desc.usage);
         };
 
         let result = unsafe {
@@ -1486,7 +1486,7 @@ impl crate::traits::Device for Device {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                     self.set_oom();
-                    return Buffer::null(desc.size, desc.usage, desc.name.into());
+                    return Buffer::null(desc.size, desc.usage);
                 }
                 _ => unexpected_error(err),
             },
@@ -1515,7 +1515,7 @@ impl crate::traits::Device for Device {
                 unsafe {
                     self.ash().destroy_buffer(buffer, None);
                 }
-                return Buffer::null(desc.size, desc.usage, desc.name.into());
+                return Buffer::null(desc.size, desc.usage);
             }
         };
 
@@ -1531,15 +1531,7 @@ impl crate::traits::Device for Device {
 
                 let idx = self.inner.buffers.lock().insert(buffer);
 
-                Buffer::new(
-                    self.weak(),
-                    buffer,
-                    desc.size,
-                    desc.usage,
-                    desc.name.into(),
-                    block,
-                    idx,
-                )
+                Buffer::new(self.weak(), buffer, desc.size, desc.usage, block, idx)
             }
             Err(err) => {
                 unsafe {
@@ -1552,7 +1544,7 @@ impl crate::traits::Device for Device {
                     vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                     vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                         self.set_oom();
-                        Buffer::null(desc.size, desc.usage, desc.name.into())
+                        Buffer::null(desc.size, desc.usage)
                     }
                     _ => unexpected_error(err),
                 }
@@ -1562,7 +1554,7 @@ impl crate::traits::Device for Device {
 
     fn new_buffer_init(&self, desc: BufferInitDesc<'_>) -> Buffer {
         if self.inner.error_state.is_some() {
-            return Buffer::null(desc.data.len(), desc.usage, desc.name.into());
+            return Buffer::null(desc.data.len(), desc.usage);
         }
 
         let mut buffer = self.new_buffer(BufferDesc {
@@ -1949,6 +1941,7 @@ pub(crate) fn compile_shader(
         bounds_check_policies: naga::proc::BoundsCheckPolicies::default(),
         zero_initialize_workgroup_memory: naga::back::spv::ZeroInitializeWorkgroupMemoryMode::None,
         force_loop_bounding: true,
+        ray_query_initialization_tracking: true,
         use_storage_input_output_16: true,
         debug_info: match source_code {
             None => None,
@@ -1963,6 +1956,8 @@ pub(crate) fn compile_shader(
                 },
             }),
         },
+        task_dispatch_limits: None,
+        mesh_shader_primitive_indices_clamp: false,
     };
 
     let words = naga::back::spv::write_vec(&module, &info, &options, None)
