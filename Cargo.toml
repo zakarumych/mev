@@ -10,6 +10,7 @@ description = "Metal Et Vulkan abstraction"
 [features]
 debug = []
 inline-more = []
+cargo-clippy = []
 
 [dependencies]
 mev-proc = { version = "=0.1.0", path = "proc" }
@@ -40,9 +41,15 @@ naga = { workspace = true, features = ["msl-out"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = { workspace = true }
-web-sys = { workspace = true, features=["HtmlCanvasElement", "WebGl2RenderingContext", "Window"] }
+web-sys = { workspace = true, features=[
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "WebGlBuffer",
+    "WebGlTexture",
+    "Window"] }
 wasm-bindgen = { workspace = true }
 naga = { workspace = true, features = ["glsl-out"] }
+wgpu = { workspace = true, default-features = false, features = ["webgpu"] }
 
 [dev-dependencies]
 winit = "0.30.12"
@@ -65,28 +72,27 @@ bytemuck = { version = "1.24", features = ["derive", "min_const_generics"] }
 codespan-reporting = "0.13.1"
 core-graphics-types = { version = "0.2" }
 foreign-types = { version = "0.5" }
-#gpu-alloc = { version = "0.6" }
-gpu-alloc = { version = "0.6", path = "../gpu-alloc/gpu-alloc" }
+gpu-alloc = { version = "0.6.2" }
 hashbrown = { version = "0.16.1" }
 hidden-trait = "0.1"
 libloading = "0.9.0"
-metal = { version = "0.32.0" }
+metal = { version = "0.33.0" }
 naga = { version = "27.0.3", features = ["spv-in", "wgsl-in", "glsl-in"] }
 objc = { version = "0.2" }
 parking_lot = "0.12.5"
-proc-macro2 = "1.0.103"
-proc-easy = "0.4.0"
+proc-macro2 = "1"
+syn = "2"
 quote = "1"
+proc-easy = "0.4.0"
 raw-window-handle = "0.6"
 slab = "0.4.11"
 smallvec = "1.15.1"
-syn = "2.0.110"
-tracing = "0.1.41"
+tracing = "0.1.44"
 
-js-sys = "0.3.82"
-web-sys = "0.3.82"
-wasm-bindgen = "0.2.105"
-
+js-sys = "0.3.103"
+web-sys = "0.3.103"
+wasm-bindgen = "0.2.126"
+wgpu = { version = "29", default-features = false, features = ["std"] }
 
 [profile.dev.package.foldhash]
 opt-level = 3
@@ -104,4 +110,4 @@ opt-level = 3
 name = "triangle"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mev_backend, values("vulkan", "metal", "webgl"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(mev_backend, values("vulkan", "metal", "webgl", "webgpu"))'] }

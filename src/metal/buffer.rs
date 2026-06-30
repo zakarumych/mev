@@ -1,27 +1,42 @@
 use std::{
     fmt,
     hash::{Hash, Hasher},
+    ptr::NonNull,
 };
 
 use foreign_types::ForeignType;
+use metal::{NSRange, NSUInteger};
+use objc::*;
 
-use crate::generic::{ArgumentKind, Automatic, Storage, Uniform};
+use crate::{
+    generic::{ArgumentKind, Automatic, Storage, Uniform},
+    BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferUsage, DeviceError,
+};
 
-use super::{arguments::ArgumentsField, out_of_bounds};
+use super::arguments::ArgumentsField;
 
 #[derive(Clone)]
-#[repr(transparent)]
 pub struct Buffer {
     buffer: metal::Buffer,
+    usage: BufferUsage,
 }
 
 impl Buffer {
-    pub(super) fn new(buffer: metal::Buffer) -> Self {
-        Buffer { buffer }
+    #[inline(always)]
+    pub(super) fn new(buffer: metal::Buffer, usage: BufferUsage) -> Self {
+        Buffer { buffer, usage }
     }
 
+    #[inline(always)]
     pub(super) fn metal(&self) -> &metal::BufferRef {
         &self.buffer
+    }
+
+    #[inline]
+    pub(crate) fn flush_range(&mut self, offset: usize, size: usize) -> Result<(), DeviceError> {
+        self.buffer
+            .did_modify_range(NSRange::new(offset as u64, size as u64));
+        Ok(())
     }
 }
 
@@ -36,12 +51,14 @@ impl fmt::Debug for Buffer {
 }
 
 impl Hash for Buffer {
+    #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.buffer.as_ptr().hash(state);
     }
 }
 
 impl PartialEq for Buffer {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.buffer.as_ptr() == other.buffer.as_ptr()
     }
@@ -59,37 +76,120 @@ impl crate::traits::Buffer for Buffer {
     }
 
     #[inline(always)]
-    fn detached(&self) -> bool {
-        use foreign_types::ForeignType;
-        use metal::NSUInteger;
-        use objc::*;
+    fn usage(&self) -> BufferUsage {
+        self.usage
+    }
 
+    #[inline(always)]
+    fn name(&self) -> &str {
+        self.buffer.label()
+    }
+
+    #[inline(always)]
+    fn detached(&self) -> bool {
         let count: NSUInteger = unsafe { msg_send![(self.buffer.as_ptr()), retainCount] };
         count == 1
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
-    unsafe fn write_unchecked(&mut self, offset: usize, data: &[u8]) {
-        let length = self.buffer.length();
-        let fits = match (u64::try_from(offset), u64::try_from(data.len())) {
-            (Ok(off), Ok(len)) => match off.checked_add(len) {
-                Some(end) => end <= length,
-                None => false,
-            },
-            _ => false,
-        };
-        if !fits {
-            out_of_bounds();
-        }
+    #[inline]
+    fn map<R>(&mut self, range: R) -> Result<(), DeviceError>
+    where
+        R: BufferRange,
+    {
+        assert!(self.detached());
+        assert!(!self.buffer.contents().is_null());
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn unmap(&mut self) {}
+
+    fn read_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRange<'_>, DeviceError>
+    where
+        R: BufferRange,
+    {
+        assert!(self.detached());
+
+        let ptr = self.buffer.contents();
+
+        assert!(!ptr.is_null());
+
+        let length = self.buffer.length() as usize;
+
+        let range = range.range(length);
+        assert!(range.start <= range.end, "Invalid range");
+
+        assert!(range.start <= length, "Range start out of bounds");
+        assert!(range.end <= length, "Range end out of bounds");
+
         unsafe {
-            let ptr = self.buffer.contents().add(offset as usize);
-            ptr.cast::<u8>()
-                .copy_from_nonoverlapping(data.as_ptr(), data.len());
-            self.buffer.did_modify_range(metal::NSRange {
-                location: offset as _,
-                length: data.len() as _,
-            })
+            let ptr = ptr.cast::<u8>().add(range.start);
+
+            Ok(BufferMappedRange::new(
+                self,
+                NonNull::new_unchecked(ptr),
+                range.start,
+                range.end - range.start,
+            ))
         }
+    }
+
+    fn write_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
+    where
+        R: BufferRange,
+    {
+        assert!(self.detached());
+
+        let ptr = self.buffer.contents();
+
+        assert!(!ptr.is_null());
+
+        let length = self.buffer.length() as usize;
+
+        let range = range.range(length);
+        assert!(range.start <= range.end, "Invalid range");
+
+        assert!(range.start <= length, "Range start out of bounds");
+        assert!(range.end <= length, "Range end out of bounds");
+
+        unsafe {
+            let ptr = ptr.cast::<u8>().add(range.start);
+
+            Ok(BufferMappedRangeMut::new(
+                self,
+                NonNull::new_unchecked(ptr),
+                range.start,
+                range.end - range.start,
+            ))
+        }
+    }
+
+    fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), DeviceError> {
+        let length = self.buffer.length() as usize;
+
+        assert!(offset <= length, "Offset out of bounds");
+        assert!(offset + data.len() <= length, "Data out of bounds");
+
+        unsafe {
+            let ptr = self.buffer.contents().cast::<u8>().add(offset);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+        }
+
+        Ok(())
+    }
+
+    fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError> {
+        let length = self.buffer.length() as usize;
+
+        assert!(offset <= length, "Offset out of bounds");
+        assert!(offset + data.len() <= length, "Data out of bounds");
+
+        unsafe {
+            let ptr = self.buffer.contents().cast::<u8>().add(offset);
+            std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), data.len());
+        }
+
+        Ok(())
     }
 }
 

@@ -1,14 +1,19 @@
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::{
+    HasDisplayHandle, HasRawWindowHandle, HasWindowHandle, RawWindowHandle, WindowHandle,
+};
 use std::{convert::Infallible, fmt};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext};
 
-use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
-    QueueFlags,
+use crate::{
+    generic::{
+        Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
+        QueueFlags,
+    },
+    SurfaceError,
 };
 
-use super::{Device, Queue};
+use super::{Device, Queue, Surface};
 
 pub struct Instance {
     capabilities: Capabilities,
@@ -68,7 +73,7 @@ impl crate::traits::Instance for Instance {
         &self.capabilities
     }
 
-    fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), CreateError> {
+    fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
         unimplemented!("WebGL does not support device creation without a surface")
     }
 
@@ -77,8 +82,18 @@ impl crate::traits::Instance for Instance {
         info: DeviceDesc,
         window: &impl HasWindowHandle,
         display: &impl HasDisplayHandle,
-    ) -> Result<(Device, Vec<Queue>, Surface), CreateError> {
-        let context = Self::create_context(desc.canvas).map_err(|e| CreateError(e))?;
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let handle = window.window_handle().map_err(|err| {
+            tracing::error!("Failed to get window handle: {:?}", err);
+            SurfaceError::SurfaceLost
+        })?;
+
+        match handle.as_raw() {
+            RawWindowHandle::WebCanvas(web_canvas) => {}
+            RawWindowHandle::Web(web) => {}
+        }
+
+        let context = Self::create_context(desc.canvas).map_err(|e| DeviceError::DeviceLost)?;
 
         let device = Device::new(context);
 

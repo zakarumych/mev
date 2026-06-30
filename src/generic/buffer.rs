@@ -84,10 +84,9 @@ pub trait BufferRange {
 impl BufferRange for Range<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
+        debug_assert!(self.start <= self.end, "buffer range out of bounds");
         debug_assert!(self.end <= size, "buffer range out of bounds");
-        let end = self.end.min(size);
-        let start = self.start.min(end);
-        start..end
+        self.start..self.end
     }
 }
 
@@ -95,8 +94,7 @@ impl BufferRange for RangeFrom<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         debug_assert!(self.start <= size, "buffer range out of bounds");
-        let start = self.start.min(size);
-        start..size
+        self.start..size
     }
 }
 
@@ -104,8 +102,7 @@ impl BufferRange for RangeTo<usize> {
     #[inline(always)]
     fn range(self, size: usize) -> Range<usize> {
         debug_assert!(self.end <= size, "buffer range out of bounds");
-        let end = self.end.min(size);
-        0..end
+        0..self.end
     }
 }
 

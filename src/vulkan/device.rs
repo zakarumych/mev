@@ -60,7 +60,7 @@ pub(super) struct DeviceMemory {
 }
 
 impl gpu_alloc::MemoryDevice<DeviceMemory> for DeviceInner {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     unsafe fn allocate_memory(
         &self,
         size: u64,
@@ -98,7 +98,7 @@ impl gpu_alloc::MemoryDevice<DeviceMemory> for DeviceInner {
         Ok(DeviceMemory { handle, idx })
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     unsafe fn deallocate_memory(&self, memory: DeviceMemory) {
         unsafe {
             self.device.free_memory(memory.handle, None);
@@ -107,7 +107,7 @@ impl gpu_alloc::MemoryDevice<DeviceMemory> for DeviceInner {
         self.memory.lock().remove(memory.idx);
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     unsafe fn map_memory(
         &self,
         memory: &mut DeviceMemory,
@@ -141,7 +141,7 @@ impl gpu_alloc::MemoryDevice<DeviceMemory> for DeviceInner {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     unsafe fn invalidate_memory_ranges(
         &self,
         ranges: &[gpu_alloc::MappedMemoryRange<'_, DeviceMemory>],
@@ -167,7 +167,7 @@ impl gpu_alloc::MemoryDevice<DeviceMemory> for DeviceInner {
         })
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     unsafe fn flush_memory_ranges(
         &self,
         ranges: &[gpu_alloc::MappedMemoryRange<'_, DeviceMemory>],
@@ -199,7 +199,7 @@ struct DescriptorUpdateTemplateEntries {
 }
 
 impl PartialEq for DescriptorUpdateTemplateEntries {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         self.entries.iter().zip(other.entries.iter()).all(|(a, b)| {
             a.dst_binding == b.dst_binding
@@ -211,7 +211,7 @@ impl PartialEq for DescriptorUpdateTemplateEntries {
         })
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn ne(&self, other: &Self) -> bool {
         self.entries.iter().zip(other.entries.iter()).any(|(a, b)| {
             a.dst_binding != b.dst_binding
@@ -227,7 +227,7 @@ impl PartialEq for DescriptorUpdateTemplateEntries {
 impl Eq for DescriptorUpdateTemplateEntries {}
 
 impl Hash for DescriptorUpdateTemplateEntries {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn hash<H: Hasher>(&self, state: &mut H) {
         for entry in &self.entries {
             entry.dst_binding.hash(state);
@@ -435,12 +435,12 @@ impl WeakDevice {
         WeakDevice { inner: Weak::new() }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn upgrade(&self) -> Option<Device> {
         self.inner.upgrade().map(|inner| Device { inner })
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_buffer(&self, idx: usize, block: MemoryBlock<DeviceMemory>) {
         if let Some(inner) = self.inner.upgrade() {
             unsafe { inner.allocator.lock().dealloc(&*inner, block) }
@@ -453,7 +453,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_image(&self, idx: usize, block: MemoryBlock<DeviceMemory>) {
         if let Some(inner) = self.inner.upgrade() {
             unsafe { inner.allocator.lock().dealloc(&*inner, block) }
@@ -466,7 +466,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_sampler(&self, desc: SamplerDesc) {
         if let Some(inner) = self.inner.upgrade() {
             let mut samplers = inner.samplers.lock();
@@ -492,7 +492,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_descriptor_set_layout(&self, desc: DescriptorSetLayoutDesc) {
         if let Some(inner) = self.inner.upgrade() {
             let mut samplers = inner.set_layouts.lock();
@@ -520,7 +520,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_pipeline_layout(
         &self,
         desc: PipelineLayoutDesc,
@@ -558,7 +558,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_pipeline(&self, idx: usize) {
         if let Some(inner) = self.inner.upgrade() {
             let pipeline = inner.pipelines.lock().remove(idx);
@@ -568,7 +568,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_image_view(&self, idx: usize) {
         if let Some(inner) = self.inner.upgrade() {
             let mut image_views = inner.image_views.lock();
@@ -579,7 +579,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_image_views(&self, iter: impl Iterator<Item = usize>) {
         if let Some(inner) = self.inner.upgrade() {
             let mut image_views = inner.image_views.lock();
@@ -592,7 +592,7 @@ impl WeakDevice {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn drop_library(&self, idx: usize) {
         if let Some(inner) = self.inner.upgrade() {
             let library = inner.libraries.lock().remove(idx);
@@ -613,7 +613,7 @@ pub struct Device {
 }
 
 impl PartialEq for Device {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -686,27 +686,27 @@ impl Device {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn inner(&self) -> &DeviceInner {
         &self.inner
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn ash(&self) -> &ash::Device {
         &self.inner.device
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn ash_instance(&self) -> &ash::Instance {
         &self.inner.instance
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn is(&self, weak: &WeakDevice) -> bool {
         Arc::as_ptr(&self.inner) == Weak::as_ptr(&weak.inner)
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn is_owner(&self, owned: &impl DeviceOwned) -> bool {
         self.is(owned.owner())
     }
@@ -736,46 +736,46 @@ impl Device {
         self.inner.error_state.get_error()
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn weak(&self) -> WeakDevice {
         WeakDevice {
             inner: Arc::downgrade(&self.inner),
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub fn push_descriptor(&self) -> &ash::khr::push_descriptor::Device {
         &self.inner.push_descriptor
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn surface(&self) -> &ash::khr::surface::Instance {
         self.inner.surface.as_ref().unwrap()
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn swapchain(&self) -> &ash::khr::swapchain::Device {
         self.inner.swapchain.as_ref().unwrap()
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn swapchain_maintenance1(
         &self,
     ) -> Option<&ash::ext::swapchain_maintenance1::Device> {
         self.inner.swapchain_maintenance1.as_ref()
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn physical_device(&self) -> vk::PhysicalDevice {
         self.inner.physical_device
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn queue_families(&self) -> &[u32] {
         &self.inner.families
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     #[cfg(any(debug_assertions, feature = "debug"))]
     fn set_object_name<T: Handle>(&self, handle: T, name: &str) {
         if !name.is_empty() {
@@ -792,7 +792,7 @@ impl Device {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn new_sampler_slow(&self, count: usize, desc: SamplerDesc) -> Sampler {
         if self.inner.properties.limits.max_sampler_allocation_count as usize <= count {
             self.set_oom();
@@ -999,7 +999,7 @@ impl Device {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     #[cold]
     pub(super) fn new_image_view(
         &self,

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, fmt, ops::Deref};
+use std::{char::MAX, collections::VecDeque, fmt, num::NonZero, ops::Deref};
 
 use ash::vk;
 use parking_lot::Mutex;
@@ -102,6 +102,7 @@ impl Pool {
 /// and fence that must be signaled before references can be dropped.
 struct Epoch {
     fence: vk::Fence,
+    id: NonZero<u64>,
     refs: Vec<Refs>,
 
     /// Contains owning command pool handle for each command buffer in the epoch.
@@ -163,12 +164,14 @@ impl Epoch {
 }
 
 struct PendingEpochs {
+    last_finished_epoch: u64,
     array: Mutex<VecDeque<Epoch>>,
 }
 
 impl PendingEpochs {
     fn new() -> Self {
         PendingEpochs {
+            last_finished_epoch: 0,
             array: Mutex::new(VecDeque::new()),
         }
     }
@@ -177,14 +180,27 @@ impl PendingEpochs {
         self.array.get_mut().push_back(epoch);
     }
 
-    fn recycle(
+    fn last_finished_epoch(&self) -> u64 {
+        self.last_finished_epoch
+    }
+
+    fn get_epoch(
         &mut self,
-        device: &ash::Device,
+        device: &Device,
         pools: &mut VecDeque<Pool>,
-    ) -> Result<Option<Epoch>, DeviceError> {
+    ) -> Result<Epoch, DeviceError> {
         let array = self.array.get_mut();
         if array.len() < MAX_EPOCHS {
-            return Ok(None);
+            // Create a new epoch fence.
+            let fence = device.new_fence()?;
+
+            // Always inserts since this_epoch is None.
+            return Ok(Epoch {
+                fence,
+                id: NonZero::new(array.len() as u64 + 1).unwrap(),
+                refs: Vec::new(),
+                cbufs: Vec::new(),
+            });
         }
 
         // Can't create new epoch, must wait for the earliest one to complete.
@@ -192,13 +208,18 @@ impl PendingEpochs {
             let front_epoch = array.front_mut().unwrap_unchecked();
 
             device
+                .ash()
                 .wait_for_fences(&[front_epoch.fence], true, !0)
                 .map_err(map_device_error)?;
-            front_epoch.reset(device, pools)?;
+
+            self.last_finished_epoch = front_epoch.id.get();
+            front_epoch.reset(device.ash(), pools)?;
         }
 
         // Epoch is properly reset and ready to be reused.
-        Ok(Some(unsafe { array.pop_front().unwrap_unchecked() }))
+        let mut epoch = unsafe { array.pop_front().unwrap_unchecked() };
+        epoch.id = NonZero::new(epoch.id.get() + MAX_EPOCHS as u64).unwrap();
+        Ok(epoch)
     }
 
     fn destroy_all(&mut self, device: &ash::Device, pools: &mut VecDeque<Pool>) {
@@ -397,7 +418,7 @@ impl Queue {
 
     /// # Safety
     ///
-    /// Must be called after fence of the epoch returned by `get_epoch` is submitted.
+    /// Must be called after `get_epoch` returns a valid epoch.
     unsafe fn next_epoch(&mut self) {
         // Safety: caller must ensure that this_epoch is not None by calling get_epoch first.
         let epoch = unsafe { self.this_epoch.take().unwrap_unchecked() };
@@ -419,34 +440,15 @@ impl Queue {
             return Ok(epoch);
         }
 
-        match pending_epochs.recycle(device.ash(), pools)? {
-            Some(epoch) => {
-                // Always inserts since this_epoch is None.
-                return Ok(this_epoch.get_or_insert(epoch));
-            }
-            None => {
-                // Create a new epoch fence.
-                let fence = device.new_fence()?;
-
-                // Always inserts since this_epoch is None.
-                Ok(this_epoch.get_or_insert(Epoch {
-                    fence,
-                    refs: Vec::new(),
-                    cbufs: Vec::new(),
-                }))
-            }
-        }
+        Ok(this_epoch.get_or_insert(pending_epochs.get_epoch(device, pools)?))
     }
 
-    /// Submit command buffers to the queue.
-    ///
-    /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
-    /// Checkpoints are required for resource reclamation.
-    fn submit_impl<I>(&mut self, command_buffers: I, check_point: bool) -> Result<(), DeviceError>
+    fn submit_impl<I>(&mut self, command_buffers: I, checkpoint: bool) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
-        let mut device_error = self.device.get_error();
+        let mut current_epoch_id = 0;
+        let mut submit_result = self.device.get_error();
 
         debug_assert!(self.command_buffer_submit.is_empty());
         debug_assert!(self.command_buffers.is_empty());
@@ -476,7 +478,7 @@ impl Queue {
             self.command_buffers.push(cbuf);
         }
 
-        if device_error.is_ok() {
+        if submit_result.is_ok() {
             match Self::get_epoch(
                 &mut self.this_epoch,
                 &mut self.pending_epochs,
@@ -484,7 +486,9 @@ impl Queue {
                 &self.device,
             ) {
                 Ok(epoch) => {
-                    let fence = if check_point {
+                    current_epoch_id = epoch.id.get();
+
+                    let fence = if checkpoint {
                         epoch.fence
                     } else {
                         ash::vk::Fence::null()
@@ -505,7 +509,18 @@ impl Queue {
                     self.command_buffer_submit.clear();
 
                     match result {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            // Drain refs from command buffers and add them to the epoch
+                            // when submitting was successful.
+                            for cbuf in self.command_buffers.drain(..) {
+                                epoch.refs.push(cbuf.refs);
+                                epoch.cbufs.push((cbuf.handle, cbuf.pool));
+                            }
+
+                            if checkpoint {
+                                unsafe { self.next_epoch() };
+                            }
+                        }
                         Err(err) => {
                             self.signal_semaphores.truncate(signal_semaphores_len);
                             self.present_semaphores.truncate(present_semaphores_len);
@@ -516,7 +531,7 @@ impl Queue {
                                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                                     self.device.set_oom();
-                                    device_error = Err(DeviceError::OutOfMemory);
+                                    submit_result = Err(DeviceError::OutOfMemory);
 
                                     // Attempt to reclaim some resources.
                                     for mut cbuf in self.command_buffers.drain(..) {
@@ -534,7 +549,7 @@ impl Queue {
                                 }
                                 vk::Result::ERROR_DEVICE_LOST => {
                                     self.device.set_lost();
-                                    device_error = Err(DeviceError::DeviceLost);
+                                    submit_result = Err(DeviceError::DeviceLost);
 
                                     // Nothing can be done now.
                                     self.command_buffers.clear();
@@ -544,30 +559,17 @@ impl Queue {
                         }
                     }
 
-                    // Drain refs from command buffers and add them to the epoch
-                    // when submitting was successful.
-                    for cbuf in self.command_buffers.drain(..) {
-                        epoch.refs.push(cbuf.refs);
-                        epoch.cbufs.push((cbuf.handle, cbuf.pool));
-                    }
-
                     self.wait_semaphores.clear();
                     self.wait_stages.clear();
                     self.signal_semaphores.clear();
-
-                    if check_point {
-                        unsafe {
-                            self.next_epoch();
-                        }
-                    }
                 }
                 Err(DeviceError::OutOfMemory) => {
                     self.device.set_oom();
-                    device_error = Err(DeviceError::OutOfMemory);
+                    submit_result = Err(DeviceError::OutOfMemory);
                 }
                 Err(DeviceError::DeviceLost) => {
                     self.device.set_lost();
-                    device_error = Err(DeviceError::DeviceLost);
+                    submit_result = Err(DeviceError::DeviceLost);
                 }
             }
         }
@@ -604,13 +606,13 @@ impl Queue {
                 Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                 Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
                     self.device.set_oom();
-                    if device_error.is_ok() {
-                        device_error = Err(DeviceError::OutOfMemory);
+                    if submit_result.is_ok() {
+                        submit_result = Err(DeviceError::OutOfMemory);
                     }
                 }
                 Err(vk::Result::ERROR_DEVICE_LOST) => {
                     self.device.set_lost();
-                    device_error = Err(DeviceError::DeviceLost);
+                    submit_result = Err(DeviceError::DeviceLost);
                 }
                 Err(
                     vk::Result::ERROR_OUT_OF_DATE_KHR
@@ -627,7 +629,10 @@ impl Queue {
             };
         }
 
-        device_error
+        match submit_result {
+            Ok(_) => Ok(current_epoch_id),
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -689,14 +694,14 @@ impl crate::traits::Queue for Queue {
         )
     }
 
-    fn submit<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    fn submit<I>(&mut self, command_buffers: I) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>,
     {
         self.submit_impl(command_buffers, false)
     }
 
-    fn submit_with_checkpoint<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    fn submit_checkpoint<I>(&mut self, command_buffers: I) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>,
     {
@@ -734,5 +739,9 @@ impl crate::traits::Queue for Queue {
         self.pending_epochs.queue_is_idle();
 
         result.and_then(|_| self.device.get_error())
+    }
+
+    fn last_finished_epoch(&self) -> u64 {
+        self.pending_epochs.last_finished_epoch()
     }
 }

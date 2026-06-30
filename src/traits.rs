@@ -23,7 +23,7 @@ pub trait Resource: Send + Sync + 'static {}
 #[cfg(mev_backend = "vulkan")]
 pub trait Resource: Send + Sync + 'static {}
 
-#[cfg(mev_backend = "webgl")]
+#[cfg(any(mev_backend = "webgl", mev_backend = "webgpu"))]
 pub trait Resource: 'static {}
 
 pub trait Instance: Debug + Resource {
@@ -117,17 +117,24 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
 
     /// Submit command buffers to the queue.
     ///
-    /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
-    /// Checkpoints are required for resource reclamation.
-    fn submit<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    /// Returns the epoch id this submission belongs to.
+    fn submit<I>(&mut self, command_buffers: I) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 
     /// Submit command buffers to the queue.
     ///
-    /// If `check_point` is `true`, inserts a checkpoint into queue and check previous checkpoints.
-    /// Checkpoints are required for resource reclamation.
-    fn submit_with_checkpoint<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
+    /// Returns the epoch id this submission belongs to.
+    ///
+    /// This method is similar to `submit`,
+    /// but it also ends the current epoch and starts a new one.
+    ///
+    /// Queue may have fixed number of epochs in flight,
+    /// so next submit may block until one of the previous epochs is finished.
+    ///
+    /// Therefore it is recommended to use this method with last submission of the frame,
+    /// allowing a few frames to be in flight at the same time.
+    fn submit_checkpoint<I>(&mut self, command_buffers: I) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 
@@ -136,6 +143,14 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
 
     /// Wait for all operations on the queue to complete.
     fn wait_idle(&self) -> Result<(), DeviceError>;
+
+    /// Returns the id of the last finished epoch.
+    ///
+    /// Returns id of the last epoch that was finished on the GPU.
+    ///
+    /// If resource was used in submits that returned this or smaller epoch ids,
+    /// then it is safe to use the resource from host.
+    fn last_finished_epoch(&self) -> u64;
 }
 
 pub trait SyncCommandEncoder {

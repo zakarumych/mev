@@ -3,44 +3,41 @@ use web_sys::WebGl2RenderingContext;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Device {
-    context: WebGl2RenderingContext,
+    gl: WebGl2RenderingContext,
 }
 
 unsafe impl Sync for Device {}
 unsafe impl Send for Device {}
 
 impl Device {
-    pub fn new(context: WebGl2RenderingContext) -> Self {
-        Device { context }
+    pub fn new(gl: WebGl2RenderingContext) -> Self {
+        Device { gl }
     }
 
     pub fn context(&self) -> &WebGl2RenderingContext {
-        &self.context
+        &self.gl
     }
 }
 
 impl crate::traits::Resource for Device {}
 
-// #[hidden_trait::expose]
+#[hidden_trait::expose]
 impl crate::traits::Device for Device {
-    fn new_buffer(
-        &self,
-        desc: crate::BufferDesc,
-    ) -> Result<crate::backend::Buffer, crate::OutOfMemory> {
+    fn new_buffer(&self, desc: crate::BufferDesc) -> crate::backend::Buffer {
+        self.gl.create_buffer();
+
         todo!()
     }
 
-    fn new_buffer_init(
-        &self,
-        desc: crate::BufferInitDesc,
-    ) -> Result<crate::backend::Buffer, crate::OutOfMemory> {
+    fn new_buffer_init(&self, desc: crate::BufferInitDesc) -> crate::backend::Buffer {
         todo!()
     }
 
-    fn new_image(
-        &self,
-        desc: crate::ImageDesc,
-    ) -> Result<crate::backend::Image, crate::OutOfMemory> {
+    fn new_image(&self, desc: crate::ImageDesc) -> crate::backend::Image {
+        todo!()
+    }
+
+    fn new_sampler(&self, desc: crate::SamplerDesc) -> crate::backend::Sampler {
         todo!()
     }
 
@@ -58,17 +55,10 @@ impl crate::traits::Device for Device {
         todo!()
     }
 
-    fn new_sampler(
-        &self,
-        desc: crate::SamplerDesc,
-    ) -> Result<crate::backend::Sampler, crate::OutOfMemory> {
-        todo!()
-    }
-
     fn new_shader_library(
         &self,
         desc: crate::LibraryDesc,
-    ) -> Result<crate::backend::Library, crate::LibraryError> {
+    ) -> Result<crate::backend::Library, crate::ShaderLibraryError> {
         todo!()
     }
 
@@ -80,15 +70,15 @@ impl crate::traits::Device for Device {
         unimplemented!("WebGL backend does not support creating surfaces after device creation")
     }
 
-    fn new_blas(&self, desc: crate::BlasDesc) -> Result<crate::backend::Blas, crate::OutOfMemory> {
+    fn new_blas(&self, desc: crate::BlasDesc) -> crate::backend::Blas {
         unimplemented!("WebGL backend does not support BLAS")
     }
 
-    fn new_tlas(&self, desc: crate::TlasDesc) -> Result<crate::backend::Tlas, crate::OutOfMemory> {
+    fn new_tlas(&self, desc: crate::TlasDesc) -> crate::backend::Tlas {
         unimplemented!("WebGL backend does not support TLAS")
     }
 
-    fn wait_idle(&self) -> Result<(), crate::OutOfMemory> {
+    fn wait_idle(&self) -> Result<(), crate::DeviceError> {
         self.context.client_wait_sync()
     }
 }

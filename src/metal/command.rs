@@ -15,8 +15,7 @@ use crate::{
 };
 
 use super::{
-    from::TryIntoMetal, out_of_bounds, shader::Bindings, Blas, Buffer, Frame, Image,
-    RenderPipeline, Tlas,
+    from::TryIntoMetal, shader::Bindings, Blas, Buffer, Frame, Image, RenderPipeline, Tlas,
 };
 
 pub struct CommandBuffer {
@@ -53,7 +52,7 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
 #[hidden_trait::expose]
 impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline(always)]
-    fn copy(&mut self) -> CopyCommandEncoder {
+    fn copy(&mut self) -> CopyCommandEncoder<'_> {
         let encoder = self.buffer.new_blit_command_encoder();
         CopyCommandEncoder {
             device: &mut self.device,
@@ -178,10 +177,10 @@ impl crate::traits::CommandEncoder for CommandEncoder {
     }
 
     #[inline(always)]
-    fn finish(self) -> Result<CommandBuffer, OutOfMemory> {
-        Ok(CommandBuffer {
+    fn finish(self) -> CommandBuffer {
+        CommandBuffer {
             buffer: self.buffer,
-        })
+        }
     }
 }
 
@@ -209,7 +208,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy_buffer_to_image(
         &mut self,
         src: &Buffer,
@@ -247,7 +246,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy_image_region(
         &mut self,
         src: &Image,
@@ -313,7 +312,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
         let slice = slice.as_buffer_slice();
 
@@ -327,16 +326,18 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
         if data.is_empty() {
             return;
         }
 
         let slice = slice.as_buffer_slice();
-        if data.len() > slice.size {
-            out_of_bounds();
-        }
+        assert_eq!(
+            data.len(),
+            slice.size,
+            "Data length does not match buffer slice size"
+        );
 
         let staged = self.device.new_buffer_with_data(
             data.as_ptr().cast(),
@@ -353,15 +354,33 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline(always)]
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
         self.write_buffer_slice(slice, bytemuck::bytes_of(data))
     }
 
     /// Writes data to the buffer.
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline(always)]
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
+    }
+
+    #[inline(always)]
+    fn copy_buffer_to_buffer(
+        &mut self,
+        src: &crate::backend::Buffer,
+        src_offset: usize,
+        dst: &crate::backend::Buffer,
+        dst_offset: usize,
+        size: usize,
+    ) {
+        self.encoder.copy_from_buffer(
+            src.metal(),
+            src_offset as NSUInteger,
+            dst.metal(),
+            dst_offset as NSUInteger,
+            size as NSUInteger,
+        );
     }
 }
 
@@ -528,7 +547,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     /// Sets constants for the current pipeline.
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_constants(&mut self, constants: &impl DeviceRepr) {
         let data = constants.as_repr();
         let data_bytes = bytemuck::bytes_of(&data);
@@ -555,7 +574,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     /// Bind vertex buffer to the current pipeline.
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn bind_vertex_buffers(&mut self, start: u32, buffers: &[(impl AsBufferSlice)]) {
         let (buffers, offsets) = buffers
             .iter()
@@ -582,7 +601,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         self.index_buffer_offset = buffer_slice.offset as NSUInteger;
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         if vertices.end <= vertices.start {
             // Rendering no vertices is a no-op
@@ -620,7 +639,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
         debug_assert!(vertex_offset >= 0);
 

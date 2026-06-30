@@ -96,7 +96,7 @@ impl crate::traits::Image for Image {
         self.texture.usage().metal_into()
     }
 
-    fn view(&self, _device: &Device, desc: ViewDesc) -> Result<Image, OutOfMemory> {
+    fn view(&self, _device: &Device, desc: ViewDesc) -> Image {
         use foreign_types::{ForeignType, ForeignTypeRef};
         use objc::*;
 
@@ -106,7 +106,7 @@ impl crate::traits::Image for Image {
         if desc.swizzle == Swizzle::IDENTITY {
             if desc.base_layer == 0 && desc.base_level == 0 {
                 let texture = root_texture.new_texture_view(desc.format.expect_into_metal());
-                Ok(Image { texture })
+                Image { texture }
             } else {
                 let base_layer = self.texture.parent_relative_slice() as u32 + desc.base_layer;
                 let base_level = self.texture.mipmap_level_count() as u32 + desc.base_level;
@@ -117,7 +117,7 @@ impl crate::traits::Image for Image {
                     metal::NSRange::new(base_level.into(), desc.levels.into()),
                     metal::NSRange::new(base_layer.into(), desc.layers.into()),
                 );
-                Ok(Image { texture })
+                Image { texture }
             }
         } else {
             let base_layer = self.texture.parent_relative_slice() as u32 + desc.base_layer;
@@ -137,7 +137,7 @@ impl crate::traits::Image for Image {
                 ]
             };
 
-            Ok(Image { texture })
+            Image { texture }
         }
     }
 

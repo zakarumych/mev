@@ -13,7 +13,7 @@ unsafe impl Send for ComputePipeline {}
 unsafe impl Sync for ComputePipeline {}
 
 impl ComputePipeline {
-    #[inline]
+    #[inline(always)]
     pub(super) fn new(
         state: metal::ComputePipelineState,
         bindings: Option<Arc<Bindings>>,

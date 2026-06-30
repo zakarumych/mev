@@ -78,7 +78,7 @@ pub struct Library {
 }
 
 impl Library {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn new(library: metal::Library) -> Self {
         Library {
             library,
@@ -86,7 +86,7 @@ impl Library {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn with_entry_point_data(
         library: metal::Library,
         entry_point_data: HashMap<String, EntryPointData>,
@@ -97,7 +97,7 @@ impl Library {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn get_function(&self, entry: &str) -> Option<metal::Function> {
         match self.entry_point_data.get(entry) {
             Some(ep) => match &ep.name {
@@ -108,13 +108,13 @@ impl Library {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn get_bindings(&self, entry: &str) -> Option<Arc<Bindings>> {
         let ep = self.entry_point_data.get(entry)?;
         Some(ep.bindings.clone())
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn get_workgroup_size(&self, entry: &str) -> Option<[u32; 3]> {
         let ep = self.entry_point_data.get(entry)?;
         Some(ep.workgroup_size)

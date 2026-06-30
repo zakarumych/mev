@@ -11,17 +11,14 @@ use objc::{
 };
 
 use parking_lot::Mutex;
-use raw_window_handle::{
-    HasDisplayHandle, HasRawDisplayHandle, HasRawWindowHandle, HasWindowHandle, RawDisplayHandle,
-    RawWindowHandle,
-};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::{
     generic::{
         parse_shader, ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        ImageDesc, ImageExtent, LibraryDesc, LibraryError, LibraryInput, Memory, OutOfMemory,
-        PipelineError, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError,
-        SurfaceError, TlasDesc, VertexStepMode,
+        ImageDesc, ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
+        RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError,
+        TlasDesc, VertexStepMode,
     },
     Extent3,
 };
@@ -78,7 +75,7 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait::expose]
 impl crate::traits::Device for Device {
-    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, LibraryError> {
+    fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
             LibraryInput::Source(source) => {
                 let options = metal::CompileOptions::new();
@@ -86,9 +83,8 @@ impl crate::traits::Device for Device {
 
                 match source.language {
                     ShaderLanguage::Msl => {
-                        let source = std::str::from_utf8(&*source.code).map_err(|err| {
-                            LibraryError::CompileError(ShaderLibraryError::NonUtf8(err))
-                        })?;
+                        let source = std::str::from_utf8(&*source.code)
+                            .map_err(|err| ShaderLibraryError::NonUtf8(err))?;
 
                         let library = self
                             .device
@@ -99,8 +95,7 @@ impl crate::traits::Device for Device {
                     }
 
                     src => {
-                        let compiled = compile_shader(&source.code, source.filename, src)
-                            .map_err(|err| LibraryError::CompileError(err))?;
+                        let compiled = compile_shader(&source.code, source.filename, src)?;
 
                         let library = self
                             .device
@@ -284,47 +279,53 @@ impl crate::traits::Device for Device {
         ))
     }
 
-    fn new_buffer(&self, desc: BufferDesc) -> Result<Buffer, OutOfMemory> {
+    fn new_buffer(&self, desc: BufferDesc) -> Buffer {
         let mut options = metal::MTLResourceOptions::empty();
 
-        match desc.memory {
-            Memory::Device => options |= metal::MTLResourceOptions::StorageModePrivate,
-            Memory::Shared => options |= metal::MTLResourceOptions::StorageModeShared,
-            Memory::Upload => {
-                options |= metal::MTLResourceOptions::StorageModeManaged
-                    | metal::MTLResourceOptions::CPUCacheModeWriteCombined
+        if desc
+            .usage
+            .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
+        {
+            if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
+                options |= metal::MTLResourceOptions::CPUCacheModeWriteCombined;
             }
-            Memory::Download => options |= metal::MTLResourceOptions::StorageModeManaged,
+            options |= metal::MTLResourceOptions::StorageModeShared;
+        } else {
+            options |= metal::MTLResourceOptions::StorageModePrivate;
         }
 
         let buffer = self.device.new_buffer(desc.size as _, options);
-        Ok(Buffer::new(buffer))
+        buffer.set_label(desc.name);
+        Buffer::new(buffer, desc.usage)
     }
 
-    fn new_buffer_init(&self, desc: BufferInitDesc) -> Result<Buffer, OutOfMemory> {
+    fn new_buffer_init(&self, desc: BufferInitDesc) -> Buffer {
         let Ok(len) = u64::try_from(desc.data.len()) else {
-            return Err(OutOfMemory);
+            size_exceeds_u64();
         };
 
         let mut options = metal::MTLResourceOptions::empty();
 
-        match desc.memory {
-            Memory::Device => options |= metal::MTLResourceOptions::StorageModePrivate,
-            Memory::Shared => options |= metal::MTLResourceOptions::StorageModeShared,
-            Memory::Upload => {
-                options |= metal::MTLResourceOptions::StorageModeManaged
-                    | metal::MTLResourceOptions::CPUCacheModeWriteCombined
+        if desc
+            .usage
+            .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
+        {
+            if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
+                options |= metal::MTLResourceOptions::CPUCacheModeWriteCombined;
             }
-            Memory::Download => options |= metal::MTLResourceOptions::StorageModeManaged,
+            options |= metal::MTLResourceOptions::StorageModeShared;
+        } else {
+            options |= metal::MTLResourceOptions::StorageModePrivate;
         }
 
         let buffer = self
             .device
             .new_buffer_with_data(desc.data.as_ptr().cast(), len, options);
-        Ok(Buffer::new(buffer))
+        buffer.set_label(desc.name);
+        Buffer::new(buffer, desc.usage)
     }
 
-    fn new_image(&self, desc: ImageDesc) -> Result<Image, OutOfMemory> {
+    fn new_image(&self, desc: ImageDesc) -> Image {
         let mdesc = metal::TextureDescriptor::new();
         mdesc.set_pixel_format(desc.format.try_into_metal().unwrap());
         match desc.extent {
@@ -351,10 +352,11 @@ impl crate::traits::Device for Device {
         mdesc.set_storage_mode(metal::MTLStorageMode::Private);
 
         let texture = self.device.new_texture(&mdesc);
-        Ok(Image::new(texture))
+        texture.set_label(desc.name);
+        Image::new(texture)
     }
 
-    fn new_sampler(&self, desc: SamplerDesc) -> Result<Sampler, OutOfMemory> {
+    fn new_sampler(&self, desc: SamplerDesc) -> Sampler {
         let mdesc = SamplerDescriptor::new();
         mdesc.set_min_filter(desc.min_filter.into_metal());
         mdesc.set_mag_filter(desc.mag_filter.into_metal());
@@ -369,7 +371,7 @@ impl crate::traits::Device for Device {
         mdesc.set_lod_max_clamp(desc.max_lod);
         mdesc.set_normalized_coordinates(desc.normalized);
         let state = self.device.new_sampler(&mdesc);
-        Ok(Sampler::new(state))
+        Sampler::new(state)
     }
 
     fn new_surface(
@@ -401,29 +403,27 @@ impl crate::traits::Device for Device {
         }
     }
 
-    fn new_fake_surface(&self, image: Image) -> Result<Surface, OutOfMemory> {
+    fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {
         todo!()
     }
 
-    fn new_blas(&self, desc: BlasDesc) -> Result<Blas, OutOfMemory> {
+    fn new_blas(&self, desc: BlasDesc) -> Blas {
         let Ok(size) = u64::try_from(desc.size) else {
-            return Err(OutOfMemory);
+            size_exceeds_u64();
         };
         let blas = self.device.new_acceleration_structure_with_size(size);
-        Ok(Blas::new(blas))
+        // blas.set_label(desc.name);
+        Blas::new(blas)
     }
 
-    fn new_tlas(&self, desc: TlasDesc) -> Result<Tlas, OutOfMemory> {
+    fn new_tlas(&self, desc: TlasDesc) -> Tlas {
         let Ok(size) = u64::try_from(desc.size) else {
-            return Err(OutOfMemory);
+            size_exceeds_u64();
         };
         let tlas = self.device.new_acceleration_structure_with_size(size);
-        Ok(Tlas::new(tlas))
+        // tlas.set_label(desc.name);
+        Tlas::new(tlas)
     }
-
-    // fn wait_idle(&self) -> Result<(), OutOfMemory> {
-    //     Ok(())
-    // }
 }
 
 unsafe fn layer_from_view(view: *mut Object) -> metal::MetalLayer {
@@ -487,6 +487,7 @@ fn compile_shader(
         fake_missing_bindings: true,
         bounds_check_policies: Default::default(),
         zero_initialize_workgroup_memory: false,
+        force_loop_bounding: true,
     };
 
     let mut entry_point_data = HashMap::new();
@@ -523,7 +524,7 @@ fn compile_shader(
                                 buffer: Some(next_buffer_slot),
                                 texture: None,
                                 sampler: None,
-                                binding_array_size: None,
+                                external_texture: None,
                                 mutable: false,
                             },
                         );
@@ -537,7 +538,7 @@ fn compile_shader(
                                 buffer: Some(next_buffer_slot),
                                 texture: None,
                                 sampler: None,
-                                binding_array_size: None,
+                                external_texture: None,
                                 mutable: access.contains(naga::StorageAccess::STORE),
                             },
                         );
@@ -558,7 +559,7 @@ fn compile_shader(
                                                 next_sampler_slot,
                                             ),
                                         ),
-                                        binding_array_size: None,
+                                        external_texture: None,
                                         mutable: false,
                                     },
                                 );
@@ -572,7 +573,7 @@ fn compile_shader(
                                         buffer: None,
                                         texture: Some(next_texture_slot),
                                         sampler: None,
-                                        binding_array_size: None,
+                                        external_texture: None,
                                         mutable: matches!(class, naga::ImageClass::Storage { .. }),
                                     },
                                 );
@@ -604,6 +605,7 @@ fn compile_shader(
         &info,
         &options,
         &naga::back::msl::PipelineOptions {
+            entry_point: None,
             allow_and_force_point_size: false,
             vertex_pulling_transform: true,
             vertex_buffer_mappings: vec![],
@@ -623,4 +625,8 @@ fn compile_shader(
         code,
         entry_point_data,
     })
+}
+
+fn size_exceeds_u64() -> ! {
+    panic!("Buffer data length exceeds u64::MAX");
 }

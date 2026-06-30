@@ -1,7 +1,8 @@
 use std::{convert::Infallible, fmt};
 
 use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, QueueFlags,
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
+    QueueFlags,
 };
 
 use super::{Device, Queue};
@@ -41,6 +42,7 @@ impl crate::traits::Resource for Instance {}
 
 #[hidden_trait::expose]
 impl crate::traits::Instance for Instance {
+    #[inline(always)]
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }

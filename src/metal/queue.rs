@@ -55,14 +55,14 @@ impl crate::traits::Queue for Queue {
         0
     }
 
-    fn new_command_encoder(&mut self) -> Result<CommandEncoder, OutOfMemory> {
-        Ok(CommandEncoder::new(
+    fn new_command_encoder(&mut self) -> CommandEncoder {
+        CommandEncoder::new(
             self.device.metal().to_owned(),
             self.queue.new_command_buffer().to_owned(),
-        ))
+        )
     }
 
-    fn submit<I>(&mut self, command_buffers: I, _check_point: bool) -> Result<(), DeviceError>
+    fn submit<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
@@ -78,17 +78,25 @@ impl crate::traits::Queue for Queue {
         Ok(())
     }
 
-    /// Drop command buffers without submitting them to the queue.
-    fn drop_command_buffer<I>(&mut self, command_buffers: I)
+    fn submit_with_checkpoint<I>(&mut self, command_buffers: I) -> Result<(), DeviceError>
     where
-        I: IntoIterator<Item = CommandBuffer>,
+        I: IntoIterator<Item = crate::backend::CommandBuffer>,
     {
-        command_buffers.into_iter().for_each(drop);
+        let last_cbuf = command_buffers
+            .into_iter()
+            .map(CommandBuffer::commit)
+            .last();
+
+        if let Some(last_cbuf) = last_cbuf {
+            self.last_cbuf = Some(last_cbuf);
+        }
+
+        Ok(())
     }
 
     fn sync_frame(&mut self, _frame: &mut Frame, _before: PipelineStages) {}
 
-    fn wait_idle(&self) -> Result<(), OutOfMemory> {
+    fn wait_idle(&self) -> Result<(), DeviceError> {
         if let Some(last_cbuf) = &self.last_cbuf {
             last_cbuf.wait_until_completed();
         }

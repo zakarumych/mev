@@ -30,7 +30,7 @@ where
 {
     const LAYOUT: ArgumentGroupLayout<'static> = T::LAYOUT;
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn bind_render(&self, group: u32, encoder: &mut RenderCommandEncoder) {
         let Some(layout) = encoder.current_layout() else {
             panic!("Argument binding requires a pipeline to be bound to the encoder");
@@ -69,7 +69,7 @@ where
         self.add_refs(encoder.refs_mut());
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn bind_compute(&self, group: u32, encoder: &mut ComputeCommandEncoder) {
         let Some(layout) = encoder.current_layout() else {
             panic!("Argument binding requires a pipeline to be bound to the encoder");

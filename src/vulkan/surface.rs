@@ -631,12 +631,12 @@ pub struct Frame {
 }
 
 impl Frame {
-    #[inline]
+    #[inline(always)]
     pub(super) fn is_real(&self) -> bool {
         self.swapchain != vk::SwapchainKHR::null()
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn present_layout(&self) -> vk::ImageLayout {
         if self.is_real() {
             vk::ImageLayout::PRESENT_SRC_KHR
@@ -646,16 +646,9 @@ impl Frame {
     }
 }
 
-impl Deref for Frame {
-    type Target = Image;
-
-    fn deref(&self) -> &Self::Target {
-        &self.image
-    }
-}
-
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {
+    #[inline]
     fn image(&self) -> &Image {
         &self.image
     }

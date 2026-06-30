@@ -97,7 +97,7 @@ impl fmt::Debug for Image {
 }
 
 impl DeviceOwned for Image {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn owner(&self) -> &WeakDevice {
         &self.inner.owner
     }
@@ -242,7 +242,7 @@ impl Image {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn get_view(&self, device: &Device, desc: ViewDesc) -> Image {
         if self.handle.is_null() || self.view.is_null() {
             return Image {
@@ -304,22 +304,22 @@ impl Image {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn handle(&self) -> vk::Image {
         self.handle
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn view_handle(&self) -> vk::ImageView {
         self.view
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn base_layer(&self) -> u32 {
         self.inner.desc.base_layer
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     pub(super) fn base_level(&self) -> u32 {
         self.inner.desc.base_level
     }
@@ -329,37 +329,37 @@ impl crate::traits::Resource for Image {}
 
 #[hidden_trait::expose]
 impl crate::traits::Image for Image {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn format(&self) -> PixelFormat {
         self.inner.desc.format
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn extent(&self) -> ImageExtent {
         self.inner.extent
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn layers(&self) -> u32 {
         self.inner.desc.layers
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn levels(&self) -> u32 {
         self.inner.desc.levels
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn usage(&self) -> ImageUsage {
         self.inner.usage
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn view(&self, device: &Device, desc: ViewDesc) -> Image {
         self.get_view(device, desc)
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn detached(&self) -> bool {
         // If strong is 1, it cannot be changed by another thread if called owns
         // mutable reference to self
@@ -378,12 +378,12 @@ impl ArgumentsField<Automatic> for Image {
 
     type Update = <Self as ArgumentsField<Sampled>>::Update;
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn update(&self) -> <Self as ArgumentsField<Sampled>>::Update {
         <Self as ArgumentsField<Sampled>>::update(self)
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn add_refs(&self, refs: &mut Refs) {
         refs.add_image(self.clone());
     }
@@ -397,7 +397,7 @@ impl ArgumentsField<Sampled> for Image {
 
     type Update = vk::DescriptorImageInfo;
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn update(&self) -> vk::DescriptorImageInfo {
         vk::DescriptorImageInfo {
             sampler: vk::Sampler::null(),
@@ -406,7 +406,7 @@ impl ArgumentsField<Sampled> for Image {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn add_refs(&self, refs: &mut Refs) {
         refs.add_image(self.clone());
     }
@@ -420,7 +420,7 @@ impl ArgumentsField<Storage> for Image {
 
     type Update = vk::DescriptorImageInfo;
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn update(&self) -> vk::DescriptorImageInfo {
         vk::DescriptorImageInfo {
             sampler: vk::Sampler::null(),
@@ -429,7 +429,7 @@ impl ArgumentsField<Storage> for Image {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn add_refs(&self, refs: &mut Refs) {
         refs.add_image(self.clone());
     }

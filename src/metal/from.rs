@@ -35,7 +35,7 @@ impl<T, U> IntoMetal<U> for T
 where
     U: MetalFrom<T>,
 {
-    #[inline]
+    #[inline(always)]
     fn into_metal(self) -> U {
         U::metal_from(self)
     }
@@ -44,7 +44,7 @@ where
 pub trait TryFromMetal<T>: Sized {
     fn try_from_metal(t: T) -> Option<Self>;
 
-    #[inline]
+    #[inline(always)]
     fn expect_from_metal(t: T) -> Self {
         Self::try_from_metal(t).expect("Failed to convert from metal")
     }
@@ -53,7 +53,7 @@ pub trait TryFromMetal<T>: Sized {
 pub trait TryMetalInto<T>: Sized {
     fn try_metal_into(self) -> Option<T>;
 
-    #[inline]
+    #[inline(always)]
     fn expect_metal_into(self) -> T {
         self.try_metal_into().expect("Failed to convert from metal")
     }
@@ -63,12 +63,12 @@ impl<T, U> TryMetalInto<U> for T
 where
     U: TryFromMetal<T>,
 {
-    #[inline]
+    #[inline(always)]
     fn try_metal_into(self) -> Option<U> {
         U::try_from_metal(self)
     }
 
-    #[inline]
+    #[inline(always)]
     fn expect_metal_into(self) -> U {
         U::expect_from_metal(self)
     }
@@ -77,7 +77,7 @@ where
 pub trait TryMetalFrom<T>: Sized {
     fn try_metal_from(t: T) -> Option<Self>;
 
-    #[inline]
+    #[inline(always)]
     fn expect_metal_from(t: T) -> Self {
         Self::try_metal_from(t).expect("Failed to convert to metal")
     }
@@ -86,7 +86,7 @@ pub trait TryMetalFrom<T>: Sized {
 pub trait TryIntoMetal<T>: Sized {
     fn try_into_metal(self) -> Option<T>;
 
-    #[inline]
+    #[inline(always)]
     fn expect_into_metal(self) -> T {
         self.try_into_metal().expect("Failed to convert to metal")
     }
@@ -96,19 +96,19 @@ impl<T, U> TryIntoMetal<U> for T
 where
     U: TryMetalFrom<T>,
 {
-    #[inline]
+    #[inline(always)]
     fn try_into_metal(self) -> Option<U> {
         U::try_metal_from(self)
     }
 
-    #[inline]
+    #[inline(always)]
     fn expect_into_metal(self) -> U {
         U::expect_metal_from(self)
     }
 }
 
 impl TryMetalFrom<PixelFormat> for metal::MTLPixelFormat {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn try_metal_from(t: PixelFormat) -> Option<Self> {
         Some(match t {
             PixelFormat::R8Unorm => metal::MTLPixelFormat::R8Unorm,
@@ -193,7 +193,7 @@ impl TryMetalFrom<PixelFormat> for metal::MTLPixelFormat {
 }
 
 impl TryFromMetal<metal::MTLPixelFormat> for PixelFormat {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn try_from_metal(t: metal::MTLPixelFormat) -> Option<Self> {
         Some(match t {
             metal::MTLPixelFormat::R8Unorm => PixelFormat::R8Unorm,
@@ -277,7 +277,7 @@ impl TryFromMetal<metal::MTLPixelFormat> for PixelFormat {
 }
 
 impl TryMetalFrom<VertexFormat> for metal::MTLVertexFormat {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn try_metal_from(format: VertexFormat) -> Option<Self> {
         Some(match format {
             VertexFormat::Uint8 => metal::MTLVertexFormat::UChar,
@@ -342,7 +342,7 @@ impl TryMetalFrom<VertexFormat> for metal::MTLVertexFormat {
 }
 
 impl TryMetalFrom<VertexFormat> for metal::MTLAttributeFormat {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn try_metal_from(format: VertexFormat) -> Option<Self> {
         Some(match format {
             VertexFormat::Uint8 => metal::MTLAttributeFormat::UChar,
@@ -407,7 +407,7 @@ impl TryMetalFrom<VertexFormat> for metal::MTLAttributeFormat {
 }
 
 impl MetalFrom<PrimitiveTopology> for metal::MTLPrimitiveTopologyClass {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn metal_from(t: PrimitiveTopology) -> Self {
         match t {
             PrimitiveTopology::Point => metal::MTLPrimitiveTopologyClass::Point,

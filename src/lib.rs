@@ -77,37 +77,73 @@ macro_rules! with_vulkan {
     };
 }
 
-/// Macro that passes-through any tokens inside if chosen backend is WebGL.
+// /// Macro that passes-through any tokens inside if chosen backend is WebGL.
+// /// Otherwise, it unwraps to nothing.
+// ///
+// /// # Example
+// ///
+// /// ```
+// /// with_webgl! {
+// ///    // WebGL-specific code
+// /// }
+// /// ```
+// #[macro_export]
+// #[cfg(mev_backend = "webgl")]
+// macro_rules! with_webgl {
+//     ($($tokens:tt)*) => {
+//         $($tokens)*
+//     };
+// }
+
+// /// Macro that passes-through any tokens inside if chosen backend is WebGL.
+// /// Otherwise, it unwraps to nothing.
+// ///
+// /// # Example
+// ///
+// /// ```
+// /// with_webgl! {
+// ///    // WebGL-specific code
+// /// }
+// /// ```
+// #[macro_export]
+// #[cfg(not(mev_backend = "webgl"))]
+// macro_rules! with_webgl {
+//     ($($tokens:tt)*) => {
+//         // Nothing
+//     };
+// }
+
+/// Macro that passes-through any tokens inside if chosen backend is WebGPU.
 /// Otherwise, it unwraps to nothing.
 ///
 /// # Example
 ///
 /// ```
-/// with_webgl! {
-///    // WebGL-specific code
+/// with_webgpu! {
+///    // WebGPU-specific code
 /// }
 /// ```
 #[macro_export]
-#[cfg(mev_backend = "webgl")]
-macro_rules! with_webgl {
+#[cfg(mev_backend = "webgpu")]
+macro_rules! with_webgpu {
     ($($tokens:tt)*) => {
         $($tokens)*
     };
 }
 
-/// Macro that passes-through any tokens inside if chosen backend is WebGL.
+/// Macro that passes-through any tokens inside if chosen backend is WebGPU.
 /// Otherwise, it unwraps to nothing.
 ///
 /// # Example
 ///
 /// ```
-/// with_webgl! {
-///    // WebGL-specific code
+/// with_webgpu! {
+///    // WebGPU-specific code
 /// }
 /// ```
 #[macro_export]
-#[cfg(not(mev_backend = "webgl"))]
-macro_rules! with_webgl {
+#[cfg(not(mev_backend = "webgpu"))]
+macro_rules! with_webgpu {
     ($($tokens:tt)*) => {
         // Nothing
     };
@@ -123,8 +159,13 @@ with_vulkan! {
     mod backend;
 }
 
-with_webgl! {
-    #[path = "webgl/mod.rs"]
+// with_webgl! {
+//     #[path = "webgl/mod.rs"]
+//     mod backend;
+// }
+
+with_webgpu! {
+    #[path = "webgpu/mod.rs"]
     mod backend;
 }
 
@@ -132,7 +173,8 @@ with_webgl! {
 pub enum Backend {
     Metal,
     Vulkan,
-    WebGL,
+    // WebGL,
+    WebGPU,
 }
 
 impl Backend {
@@ -146,9 +188,14 @@ impl Backend {
         const CURRENT: Self = Self::Vulkan;
     }
 
-    with_webgl! {
+    // with_webgl! {
+    //     /// Current backend constant.
+    //     const CURRENT: Self = Self::WebGL;
+    // }
+
+    with_webgpu! {
         /// Current backend constant.
-        const CURRENT: Self = Self::WebGL;
+        const CURRENT: Self = Self::WebGPU;
     }
 }
 

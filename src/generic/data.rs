@@ -74,7 +74,7 @@ pub trait AutoDeviceRepr: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Se
 
 impl<T> AutoDeviceRepr for T where T: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {}
 
-#[cfg_attr(feature = "inline-more", inline)]
+#[inline]
 fn array_as_repr_slow<T: DeviceRepr, const N: usize>(array: &[T; N]) -> [T::ArrayRepr; N] {
     // Construct `ArrayRepr` from elements.
     let mut repr: MaybeUninit<[T::ArrayRepr; N]> = MaybeUninit::uninit();

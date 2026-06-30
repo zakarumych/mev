@@ -49,6 +49,7 @@ impl ApplicationHandler for TriangleApp {
 impl TriangleApp {
     fn render(&mut self) {
         let mut frame = self.surface.as_mut().unwrap().next_frame().unwrap();
+
         let target_format = frame.image().format();
         let target_extent = frame.image().extent();
         let angle = self.start.elapsed().as_secs_f32() * 0.1;
@@ -97,10 +98,12 @@ impl TriangleApp {
 
         let pipeline = self.pipeline.as_ref().unwrap();
 
+        self.queue
+            .sync_frame(&mut frame, mev::PipelineStages::COLOR_OUTPUT);
         let mut encoder = self.queue.new_command_encoder();
         encoder.init_image(
             mev::PipelineStages::empty(),
-            mev::PipelineStages::FRAGMENT_SHADER,
+            mev::PipelineStages::COLOR_OUTPUT,
             frame.image(),
         );
         {
@@ -123,13 +126,11 @@ impl TriangleApp {
             render.draw(0..3, 0..1);
         }
 
-        self.queue
-            .sync_frame(&mut frame, mev::PipelineStages::FRAGMENT_SHADER);
         encoder.present(frame, mev::PipelineStages::FRAGMENT_SHADER);
         let cbuf = encoder.finish();
 
         self.window.as_ref().unwrap().pre_present_notify();
-        self.queue.submit_with_checkpoint([cbuf]).unwrap();
+        self.queue.submit_checkpoint([cbuf]).unwrap();
     }
 }
 

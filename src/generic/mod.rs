@@ -46,7 +46,7 @@ pub use self::{
         AttachmentDesc, Blend, BlendDesc, BlendFactor, BlendOp, ClearColor, ClearDepthStencil,
         ColorTargetDesc, CompareFunction, Culling, DepthStencilDesc, FrontFace, LoadOp,
         PipelineError, PrimitiveTopology, RasterDesc, RenderPassDesc, RenderPipelineDesc, StoreOp,
-        VertexBinding, VertexAttributeDesc, VertexLayoutDesc, VertexStepMode, WriteMask,
+        VertexAttributeDesc, VertexBinding, VertexLayoutDesc, VertexStepMode, WriteMask,
     },
     sampler::{AddressMode, Filter, MipMapMode, SamplerDesc},
     shader::{

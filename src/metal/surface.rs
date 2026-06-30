@@ -98,7 +98,7 @@ impl crate::traits::Surface for Surface {
 
         let image = Image::new(drawable.texture().to_owned());
         Ok(Frame {
-            drawable: drawable.to_owned(),
+            drawable: Some(drawable.to_owned()),
             image,
         })
     }

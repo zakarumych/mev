@@ -64,9 +64,16 @@ impl Hash for Buffer {
 
 impl fmt::Debug for Buffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Buffer")
-            .field("handle", &self.handle)
-            .finish()
+        if f.alternate() {
+            f.debug_struct("Buffer")
+                .field("handle", &self.handle)
+                .field("size", &self.inner.size)
+                .field("usage", &self.inner.usage)
+                .field("name", &self.inner.name)
+                .finish()
+        } else {
+            f.debug_tuple("Buffer").field(&self.handle).finish()
+        }
     }
 }
 
@@ -111,6 +118,10 @@ impl Buffer {
         }
     }
 
+    fn detatched_inner(&mut self) -> &mut Inner {
+        Arc::get_mut(&mut self.inner).expect("Buffer must be detached to write to it")
+    }
+
     /// Creates a null/invalid Buffer for use when device OOM occurs.
     pub(super) fn null(size: usize, usage: BufferUsage, name: Box<str>) -> Self {
         Buffer {
@@ -132,9 +143,37 @@ impl Buffer {
         self.handle
     }
 
+    fn invalidate_range(&mut self, offset: usize, size: usize) -> Result<(), DeviceError> {
+        let inner = self.detatched_inner();
+
+        let Some(block) = &mut inner.block else {
+            return Err(DeviceError::OutOfMemory);
+        };
+
+        let Some(device) = inner.owner.upgrade() else {
+            return Err(DeviceError::DeviceLost);
+        };
+
+        let result = unsafe { block.invalidate_range(device.inner(), offset as u64, size as u64) };
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot invalidate it");
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn flush_range(&mut self, offset: usize, size: usize) -> Result<(), DeviceError> {
-        let inner =
-            Arc::get_mut(&mut self.inner).expect("Buffer must be detached to invalidate it");
+        let inner = self.detatched_inner();
 
         let Some(block) = &mut inner.block else {
             return Err(DeviceError::OutOfMemory);
@@ -206,7 +245,7 @@ impl crate::traits::Buffer for Buffer {
     {
         let range = range.range(self.size());
 
-        let inner = Arc::get_mut(&mut self.inner).expect("Buffer must be detached to write to it");
+        let inner = self.detatched_inner();
 
         let Some(block) = &mut inner.block else {
             return Err(DeviceError::OutOfMemory);
@@ -215,6 +254,11 @@ impl crate::traits::Buffer for Buffer {
         let Some(device) = inner.owner.upgrade() else {
             return Err(DeviceError::DeviceLost);
         };
+
+        assert!(
+            inner.mapped.is_none(),
+            "Buffer is already mapped, cannot map it again"
+        );
 
         let result =
             unsafe { block.map(device.inner(), range.start as u64, range.end - range.start) };
@@ -239,11 +283,6 @@ impl crate::traits::Buffer for Buffer {
             }
         };
 
-        debug_assert!(
-            inner.mapped.is_none(),
-            "Buffer is already mapped, cannot map it again"
-        );
-
         inner.mapped = Some(Mapped {
             ptr,
             offset: range.start,
@@ -254,7 +293,7 @@ impl crate::traits::Buffer for Buffer {
     }
 
     fn unmap(&mut self) {
-        let inner = Arc::get_mut(&mut self.inner).expect("Buffer must be detached to unmap it");
+        let inner = self.detatched_inner();
 
         let _mapped = inner
             .mapped
@@ -280,12 +319,9 @@ impl crate::traits::Buffer for Buffer {
     {
         let range = range.range(self.size());
 
-        assert!(
-            range.start <= range.end,
-            "Range start must be less than or equal to range end"
-        );
+        assert!(range.start <= range.end, "Invalid range");
 
-        let inner = Arc::get_mut(&mut self.inner).expect("Buffer must be detached to write to it");
+        let inner = self.detatched_inner();
 
         let Some(device) = inner.owner.upgrade() else {
             return Err(DeviceError::DeviceLost);
@@ -348,12 +384,9 @@ impl crate::traits::Buffer for Buffer {
     {
         let range = range.range(self.size());
 
-        assert!(
-            range.start <= range.end,
-            "Range start must be less than or equal to range end"
-        );
+        assert!(range.start <= range.end, "Invalid range");
 
-        let inner = Arc::get_mut(&mut self.inner).expect("Buffer must be detached to write to it");
+        let inner = self.detatched_inner();
 
         let Some(device) = inner.owner.upgrade() else {
             return Err(DeviceError::DeviceLost);
@@ -412,20 +445,135 @@ impl crate::traits::Buffer for Buffer {
 
     #[inline]
     fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), DeviceError> {
-        let range = offset..offset + data.len();
-        self.map(range.clone())?;
-        let mut mapped = self.write_mapped_range(range)?;
-        mapped.write(0, data);
-        mapped.flush()
+        let inner = self.detatched_inner();
+
+        let Some(device) = inner.owner.upgrade() else {
+            return Err(DeviceError::DeviceLost);
+        };
+
+        let Some(block) = &mut inner.block else {
+            return Err(DeviceError::OutOfMemory);
+        };
+
+        assert!(
+            inner.mapped.is_none(),
+            "Buffer is already mapped, cannot map it again"
+        );
+
+        let result = unsafe { block.map(device.inner(), offset as u64, data.len()) };
+
+        let ptr = match result {
+            Ok(ptr) => ptr,
+            Err(gpu_alloc::MapError::AlreadyMapped) => {
+                panic!("Buffer is already mapped, cannot map it again");
+            }
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot map it");
+            }
+            Err(gpu_alloc::MapError::MapFailed) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+        };
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr(), data.len());
+        }
+
+        let result = unsafe { block.flush_range(device.inner(), offset as u64, data.len() as u64) };
+
+        unsafe {
+            block.unmap(device.inner());
+        }
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot invalidate it");
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[inline]
     fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError> {
-        let range = offset..offset + data.len();
-        self.map(range.clone())?;
-        let mapped = self.read_mapped_range(range)?;
-        mapped.read(0, data);
-        Ok(())
+        let inner = self.detatched_inner();
+
+        let Some(device) = inner.owner.upgrade() else {
+            return Err(DeviceError::DeviceLost);
+        };
+
+        let Some(block) = &mut inner.block else {
+            return Err(DeviceError::OutOfMemory);
+        };
+
+        assert!(
+            inner.mapped.is_none(),
+            "Buffer is already mapped, cannot map it again"
+        );
+
+        let result = unsafe { block.map(device.inner(), offset as u64, data.len()) };
+
+        let ptr = match result {
+            Ok(ptr) => ptr,
+            Err(gpu_alloc::MapError::AlreadyMapped) => {
+                panic!("Buffer is already mapped, cannot map it again");
+            }
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot map it");
+            }
+            Err(gpu_alloc::MapError::MapFailed) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+        };
+
+        let result =
+            unsafe { block.invalidate_range(device.inner(), offset as u64, data.len() as u64) };
+
+        if result.is_ok() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(ptr.as_ptr(), data.as_mut_ptr(), data.len());
+            }
+        }
+
+        unsafe {
+            block.unmap(device.inner());
+        }
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot invalidate it");
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

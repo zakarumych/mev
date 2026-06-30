@@ -1,6 +1,5 @@
-
 fn main() {
-    println!("cargo::rustc-check-cfg=cfg(mev_backend, values(\"metal, vulkan, webgl\"))");
+    println!("cargo::rustc-check-cfg=cfg(mev_backend, values(\"metal, vulkan, webgpu\"))");
 
     let windows = std::env::var_os("CARGO_CFG_WINDOWS").is_some();
     let unix = std::env::var_os("CARGO_CFG_UNIX").is_some();
@@ -9,7 +8,7 @@ fn main() {
     let wasm32 = std::env::var("CARGO_CFG_TARGET_ARCH").map_or(false, |os| os == "wasm32");
 
     if wasm32 {
-        println!("cargo::rustc-cfg=mev_backend=\"webgl\"");
+        println!("cargo::rustc-cfg=mev_backend=\"webgpu\"");
     } else if macos || ios {
         println!("cargo::rustc-cfg=mev_backend=\"metal\"");
     } else if windows || unix {

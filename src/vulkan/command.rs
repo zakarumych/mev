@@ -73,7 +73,7 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::CommandEncoder for CommandEncoder {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn present(&mut self, frame: Frame, after: PipelineStages) {
         // Always collect present frames even in OOM state so swapchain images are released.
         if !self.handle.is_null() {
@@ -105,7 +105,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         self.present.push(frame);
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn finish(self) -> CommandBuffer {
         if !self.handle.is_null() {
             let result = unsafe { self.device.ash().end_command_buffer(self.handle) };
@@ -127,7 +127,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy(&mut self) -> CopyCommandEncoder<'_> {
         CopyCommandEncoder {
             device: self.device.clone(),
@@ -136,7 +136,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn acceleration_structure(&mut self) -> AccelerationStructureCommandEncoder<'_> {
         AccelerationStructureCommandEncoder {
             device: self.device.clone(),
@@ -145,7 +145,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn compute(&mut self) -> ComputeCommandEncoder<'_> {
         ComputeCommandEncoder {
             device: self.device.clone(),
@@ -338,7 +338,7 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_pipeline(&mut self, pipeline: &ComputePipeline) {
         if self.handle.is_null() || pipeline.is_null() {
             return;
@@ -362,7 +362,7 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         arguments.bind_compute(group, self);
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_constants(&mut self, constants: &impl DeviceRepr) {
         if self.handle.is_null() {
             return;
@@ -384,7 +384,7 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn dispatch(&mut self, groups: Extent3) {
         if self.handle.is_null() {
             return;
@@ -440,7 +440,7 @@ impl Drop for RenderCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_pipeline(&mut self, pipeline: &RenderPipeline) {
         if self.handle.is_null() || pipeline.is_null() {
             return;
@@ -456,7 +456,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         self.refs.add_render_pipeline(pipeline.clone());
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_viewport(&mut self, offset: Offset3<f32>, extent: Extent3<f32>) {
         if self.handle.is_null() {
             return;
@@ -476,7 +476,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_scissor(&mut self, offset: Offset2<i32>, extent: Extent2<u32>) {
         if self.handle.is_null() {
             return;
@@ -506,7 +506,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         arguments.bind_render(group, self);
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn with_constants(&mut self, constants: &impl DeviceRepr) {
         if self.handle.is_null() {
             return;
@@ -528,7 +528,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn bind_vertex_buffers(&mut self, start: u32, slices: &[impl AsBufferSlice]) {
         if self.handle.is_null() {
             return;
@@ -549,7 +549,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn bind_index_buffer(&mut self, slice: impl AsBufferSlice) {
         if self.handle.is_null() {
             return;
@@ -566,7 +566,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         self.refs.add_buffer(slice.buffer.clone());
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
         if self.handle.is_null() {
             return;
@@ -582,7 +582,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
         if self.handle.is_null() {
             return;
@@ -628,7 +628,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy_buffer_to_buffer(
         &mut self,
         src: &Buffer,
@@ -658,7 +658,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy_buffer_to_image(
         &mut self,
         src: &Buffer,
@@ -717,7 +717,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn copy_image_region(
         &mut self,
         src: &Image,
@@ -777,7 +777,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
         let slice = slice.as_buffer_slice();
 
@@ -800,7 +800,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline]
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
         let slice = slice.as_buffer_slice();
 
@@ -875,7 +875,7 @@ impl crate::traits::AccelerationStructureCommandEncoder
     }
 }
 
-#[cfg_attr(feature = "inline-more", inline)]
+#[inline]
 fn barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,
@@ -897,7 +897,7 @@ fn barrier(
     }
 }
 
-#[cfg_attr(feature = "inline-more", inline)]
+#[inline]
 fn image_barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,
