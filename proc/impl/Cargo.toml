@@ -5,6 +5,7 @@ authors.workspace = true
 readme.workspace = true
 license.workspace = true
 version.workspace = true
+description = "mev procedural macros implementation"
 
 [dependencies]
 proc-macro2.workspace = true

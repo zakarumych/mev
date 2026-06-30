@@ -5,6 +5,7 @@ authors.workspace = true
 readme.workspace = true
 license.workspace = true
 version.workspace = true
+description = "mev procedural macros"
 
 [lib]
 proc-macro = true
