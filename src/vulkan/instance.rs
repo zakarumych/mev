@@ -37,11 +37,32 @@ impl Drop for InstanceGuard {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct VkDeviceFeatures {
+    pub features: vk::PhysicalDeviceFeatures,
+    pub features11: vk::PhysicalDeviceVulkan11Features<'static>,
+    pub features12: vk::PhysicalDeviceVulkan12Features<'static>,
+    pub features13: vk::PhysicalDeviceVulkan13Features<'static>,
+    pub features_swapchain_maintenance1:
+        ash::vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT<'static>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct VkDeviceProperties {
+    pub properties: vk::PhysicalDeviceProperties,
+    pub properties11: vk::PhysicalDeviceVulkan11Properties<'static>,
+    pub properties12: vk::PhysicalDeviceVulkan12Properties<'static>,
+    pub properties13: vk::PhysicalDeviceVulkan13Properties<'static>,
+    pub properties_pd: vk::PhysicalDevicePushDescriptorPropertiesKHR<'static>,
+}
+
 pub struct Instance {
     guard: Arc<InstanceGuard>,
     version: Version,
     instance: ash::Instance,
     devices: Vec<vk::PhysicalDevice>,
+    vk_features: Vec<VkDeviceFeatures>,
+    vk_properties: Vec<VkDeviceProperties>,
     capabilities: Capabilities,
 
     // # Extensions
@@ -84,11 +105,8 @@ unsafe fn find_layer<'a>(
     })
 }
 
-unsafe fn find_extension<'a>(
-    extensions: &'a [vk::ExtensionProperties],
-    name: &str,
-) -> Option<&'a vk::ExtensionProperties> {
-    extensions.iter().find(|extension| unsafe {
+unsafe fn has_extension<'a>(extensions: &'a [vk::ExtensionProperties], name: &str) -> bool {
+    extensions.iter().any(|extension| unsafe {
         CStr::from_ptr(extension.extension_name.as_ptr()).to_bytes() == name.as_bytes()
     })
 }
@@ -151,8 +169,8 @@ impl Instance {
         let mut has_debug_utils = false;
 
         #[cfg(any(debug_assertions, feature = "debug"))]
-        if let Some(extension) = unsafe { find_extension(&extensions, "VK_EXT_debug_utils") } {
-            enabled_extension_names.push(extension.extension_name.as_ptr());
+        if unsafe { has_extension(&extensions, "VK_EXT_debug_utils") } {
+            enabled_extension_names.push(extension_name!("VK_EXT_debug_utils"));
             has_debug_utils = true;
         }
 
@@ -168,12 +186,10 @@ impl Instance {
         #[cfg(all(unix, target_os = "android"))]
         let mut has_android_surface = false;
 
-        if let Some(surface_extension) = unsafe { find_extension(&extensions, "VK_KHR_surface") } {
+        if unsafe { has_extension(&extensions, "VK_KHR_surface") } {
             #[cfg(target_os = "windows")]
             {
-                if let Some(platform_extension) =
-                    unsafe { find_extension(&extensions, "VK_KHR_win32_surface") }
-                {
+                if unsafe { has_extension(&extensions, "VK_KHR_win32_surface") } {
                     has_win32_surface = true;
                     if !has_surface {
                         has_surface = true;
@@ -185,9 +201,7 @@ impl Instance {
 
             #[cfg(all(unix, not(target_os = "android")))]
             {
-                if let Some(platform_extension) =
-                    unsafe { find_extension(&extensions, "VK_KHR_xlib_surface") }
-                {
+                if unsafe { has_extension(&extensions, "VK_KHR_xlib_surface") } {
                     has_xlib_surface = true;
                     if !has_surface {
                         has_surface = true;
@@ -196,9 +210,7 @@ impl Instance {
                     enabled_extension_names.push(extension_name!("VK_KHR_xlib_surface"));
                 }
 
-                if let Some(platform_extension) =
-                    unsafe { find_extension(&extensions, "VK_KHR_xcb_surface") }
-                {
+                if unsafe { has_extension(&extensions, "VK_KHR_xcb_surface") } {
                     has_xcb_surface = true;
                     if !has_surface {
                         has_surface = true;
@@ -207,9 +219,7 @@ impl Instance {
                     enabled_extension_names.push(extension_name!("VK_KHR_xcb_surface"));
                 }
 
-                if let Some(platform_extension) =
-                    unsafe { find_extension(&extensions, "VK_KHR_wayland_surface") }
-                {
+                if unsafe { has_extension(&extensions, "VK_KHR_wayland_surface") } {
                     has_wayland_surface = true;
                     if !has_surface {
                         has_surface = true;
@@ -235,9 +245,9 @@ impl Instance {
         }
 
         if has_surface {
-            if let Some(surface_maintenance1) =
-                unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") }
-            {
+            if unsafe { has_extension(&extensions, "VK_KHR_surface_maintenance1") } {
+                enabled_extension_names.push(extension_name!("VK_KHR_surface_maintenance1"));
+            } else if unsafe { has_extension(&extensions, "VK_EXT_surface_maintenance1") } {
                 enabled_extension_names.push(extension_name!("VK_EXT_surface_maintenance1"));
             }
         }
@@ -262,9 +272,7 @@ impl Instance {
 
         let mut has_physical_device_properties2 = false;
         if version < Version::V1_1 {
-            if let Some(extension) =
-                unsafe { find_extension(&extensions, "VK_KHR_get_physical_device_properties2") }
-            {
+            if unsafe { has_extension(&extensions, "VK_KHR_get_physical_device_properties2") } {
                 has_physical_device_properties2 = true;
                 enabled_extension_names
                     .push(extension_name!("VK_KHR_get_physical_device_properties2"));
@@ -380,6 +388,8 @@ impl Instance {
         let mut filtered_device = Vec::new();
 
         let mut device_caps = Vec::with_capacity(devices.len());
+        let mut device_features = Vec::with_capacity(devices.len());
+        let mut device_properties = Vec::with_capacity(devices.len());
 
         for &device in &devices {
             let result = unsafe { instance.enumerate_device_extension_properties(device) };
@@ -399,16 +409,10 @@ impl Instance {
             let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
             let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
             let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+            let mut features_swapchain_maintenance1 =
+                ash::vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
 
-            if version < Version::V1_1 {
-                if get_physical_device_properties2.is_some() {
-                    unsafe {
-                        instance.get_physical_device_features2(device, &mut features);
-                    }
-                } else {
-                    features.features = unsafe { instance.get_physical_device_features(device) };
-                }
-            } else {
+            if version >= Version::V1_1 || has_physical_device_properties2 {
                 if version >= Version::V1_1 {
                     features = features.push_next(&mut features11);
                 }
@@ -418,51 +422,60 @@ impl Instance {
                 if version >= Version::V1_3 {
                     features = features.push_next(&mut features13);
                 }
+
+                if unsafe { has_extension(&extensions, "VK_KHR_swapchain_maintenance1") }
+                    || unsafe { has_extension(&extensions, "VK_EXT_swapchain_maintenance1") }
+                {
+                    features = features.push_next(&mut features_swapchain_maintenance1);
+                }
+
                 unsafe {
                     instance.get_physical_device_features2(device, &mut features);
                 }
+            } else {
+                features.features = unsafe { instance.get_physical_device_features(device) };
             }
 
+            let features = features.features;
+
             if version < Version::V1_1 {
-                if unsafe { find_extension(&extensions, "VK_KHR_descriptor_update_template") }
-                    .is_none()
-                {
+                if !unsafe { has_extension(&extensions, "VK_KHR_descriptor_update_template") } {
                     // Skip devices that don't support descriptor update templates.
                     continue;
                 }
             }
 
             if features13.dynamic_rendering == 0 {
-                if unsafe { find_extension(&extensions, "VK_KHR_dynamic_rendering") }.is_none() {
+                if !unsafe { has_extension(&extensions, "VK_KHR_dynamic_rendering") } {
                     // Skip devices that don't support dynamic rendering.
                     continue;
                 }
             }
 
             // if features13.inline_uniform_block == 0 {
-            //     if unsafe { find_extension(&extensions, "VK_EXT_inline_uniform_block") }.is_none() {
+            //     if !unsafe { has_extension(&extensions, "VK_EXT_inline_uniform_block") } {
             //         // Skip devices that don't support inline uniform blocks.
             //         continue;
             //     }
             // }
 
             // if features13.synchronization2 == 0 {
-            //     if unsafe { find_extension(&extensions, "VK_KHR_synchronization2") }.is_none() {
+            //     if !unsafe { has_extension(&extensions, "VK_KHR_synchronization2") } {
             //         // Skip devices that don't support synchronization2.
             //         continue;
             //     }
             // }
 
-            if unsafe { find_extension(&extensions, "VK_KHR_push_descriptor") }.is_none() {
+            if !unsafe { has_extension(&extensions, "VK_KHR_push_descriptor") } {
                 // Skip devices that don't support push descriptors.
                 continue;
             }
 
-            let mut features = Features::empty();
+            let mut mev_features = Features::empty();
 
             if has_surface {
-                if unsafe { find_extension(&extensions, "VK_KHR_swapchain") }.is_some() {
-                    features |= Features::SURFACE;
+                if unsafe { has_extension(&extensions, "VK_KHR_swapchain") } {
+                    mev_features |= Features::SURFACE;
                 }
             }
 
@@ -516,11 +529,27 @@ impl Instance {
                     .collect()
             };
 
+            filtered_device.push(device);
+
             device_caps.push(DeviceCapabilities {
-                features: Features::empty(),
+                features: mev_features,
                 families,
             });
-            filtered_device.push(device);
+
+            device_features.push(VkDeviceFeatures {
+                features,
+                features11,
+                features12,
+                features13,
+                features_swapchain_maintenance1,
+            });
+            device_properties.push(VkDeviceProperties {
+                properties: properties.properties,
+                properties11,
+                properties12,
+                properties13,
+                properties_pd,
+            });
         }
 
         // Build instance instance.
@@ -530,6 +559,8 @@ impl Instance {
             instance: instance.clone(),
             guard: Arc::new(InstanceGuard { entry, instance }),
             devices: filtered_device,
+            vk_features: device_features,
+            vk_properties: device_properties,
             capabilities: Capabilities {
                 devices: device_caps,
             },
@@ -614,10 +645,7 @@ impl crate::traits::Instance for Instance {
         }
 
         // Init memory allocator
-        let properties = unsafe {
-            self.instance
-                .get_physical_device_properties(physical_device)
-        };
+        let properties = self.vk_properties[desc.idx];
 
         let memory_properties = unsafe {
             self.instance
@@ -627,9 +655,12 @@ impl crate::traits::Instance for Instance {
         let allocator = gpu_alloc::GpuAllocator::<_>::new(
             gpu_alloc::Config::i_am_prototyping(),
             gpu_alloc::DeviceProperties {
-                max_memory_allocation_count: properties.limits.max_memory_allocation_count,
+                max_memory_allocation_count: properties
+                    .properties
+                    .limits
+                    .max_memory_allocation_count,
                 max_memory_allocation_size: u64::max_value(), // FIXME: Can query this information if instance is v1.1
-                non_coherent_atom_size: properties.limits.non_coherent_atom_size,
+                non_coherent_atom_size: properties.properties.limits.non_coherent_atom_size,
                 memory_types: memory_properties.memory_types
                     [..memory_properties.memory_type_count as usize]
                     .iter()
@@ -655,6 +686,8 @@ impl crate::traits::Instance for Instance {
         let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
         let mut features12 = vk::PhysicalDeviceVulkan12Features::default();
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+        let mut features_swapchain_maintenance1 =
+            ash::vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
 
         if self.version < Version::V1_1 {
             enabled_extension_names.push(extension_name!("VK_KHR_descriptor_update_template"));
@@ -667,39 +700,41 @@ impl crate::traits::Instance for Instance {
             // enabled_extension_names.push(extension_name!("VK_KHR_synchronization2"));
         } else {
             features13.dynamic_rendering = 1;
-            features13.inline_uniform_block = 1;
+            // features13.inline_uniform_block = 1;
             // features13.synchronization2 = 1;
+        }
+
+        if self.version >= Version::V1_1 || self.get_physical_device_properties2.is_some() {
+            if self.version >= Version::V1_1 {
+                features = features.push_next(&mut features11);
+            }
+            if self.version >= Version::V1_2 {
+                features = features.push_next(&mut features12);
+            }
+            if self.version >= Version::V1_3 {
+                features = features.push_next(&mut features13);
+            }
         }
 
         enabled_extension_names.push(extension_name!("VK_KHR_push_descriptor"));
 
-        let mut has_swapchain_maintenance1 = false;
         if desc.features.contains(Features::SURFACE) {
             enabled_extension_names.push(extension_name!("VK_KHR_swapchain"));
 
-            if let Some(extension) =
-                unsafe { find_extension(&extensions, "VK_EXT_swapchain_maintenance1") }
+            if self.vk_features[desc.idx]
+                .features_swapchain_maintenance1
+                .swapchain_maintenance1
+                != 0
             {
-                has_swapchain_maintenance1 = true;
-                enabled_extension_names.push(extension.extension_name.as_ptr());
-            }
-        }
+                features_swapchain_maintenance1.swapchain_maintenance1 = 1;
 
-        let mut info = vk::DeviceCreateInfo::default()
-            .enabled_extension_names(&enabled_extension_names)
-            .queue_create_infos(&queue_create_infos);
+                features = features.push_next(&mut features_swapchain_maintenance1);
 
-        if self.version < Version::V1_1 {
-            info.p_enabled_features = &features.features;
-        } else {
-            info = info.push_next(&mut features);
-            info = info.push_next(&mut features11);
-
-            if self.version >= Version::V1_2 {
-                info = info.push_next(&mut features12);
-            }
-            if self.version >= Version::V1_3 {
-                info = info.push_next(&mut features13);
+                if unsafe { has_extension(&extensions, "VK_KHR_swapchain_maintenance1") } {
+                    enabled_extension_names.push(extension_name!("VK_KHR_swapchain_maintenance1"));
+                } else if unsafe { has_extension(&extensions, "VK_EXT_swapchain_maintenance1") } {
+                    enabled_extension_names.push(extension_name!("VK_EXT_swapchain_maintenance1"));
+                }
             }
         }
 
@@ -707,6 +742,17 @@ impl crate::traits::Instance for Instance {
             "Enabled Device {physical_device:?} extensions:\n{}",
             ExtensionNames(&enabled_extension_names)
         );
+
+        let mut info = vk::DeviceCreateInfo::default()
+            .enabled_extension_names(&enabled_extension_names)
+            .queue_create_infos(&queue_create_infos);
+
+        if self.version >= Version::V1_1 || self.get_physical_device_properties2.is_some() {
+            dbg!(&features);
+            info = info.push_next(&mut features);
+        } else {
+            info.p_enabled_features = &features.features;
+        }
 
         let result = unsafe { self.instance.create_device(physical_device, &info, None) };
 
@@ -721,7 +767,9 @@ impl crate::traits::Instance for Instance {
             err => unexpected_error(err),
         })?;
 
-        let swapchain_maintenance1 = has_swapchain_maintenance1
+        let features = features.features;
+
+        let swapchain_maintenance1 = (features_swapchain_maintenance1.swapchain_maintenance1 != 0)
             .then(|| ash::ext::swapchain_maintenance1::Device::new(&self.instance, &device));
 
         let swapchain = desc
@@ -748,6 +796,13 @@ impl crate::traits::Instance for Instance {
                 .map(|info| info.queue_family_index)
                 .collect(),
             desc.features,
+            VkDeviceFeatures {
+                features,
+                features11,
+                features12,
+                features13,
+                features_swapchain_maintenance1,
+            },
             properties,
             allocator,
             push_descriptor,
@@ -903,3 +958,14 @@ impl fmt::Display for ExtensionNames<&Vec<vk::ExtensionProperties>> {
         Ok(())
     }
 }
+
+// unsafe fn print_ptr_next_chain<T>(ptr: *const T) {
+//     let mut ptr = ptr as *const vk::BaseOutStructure;
+
+//     while !ptr.is_null() {
+//         let header = unsafe { ptr.as_ref().unwrap() };
+//         let next = header.p_next;
+//         tracing::debug!("pNext: {:p} type: {:?}", ptr, header.s_type);
+//         ptr = next;
+//     }
+// }

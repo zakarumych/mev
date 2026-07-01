@@ -6,8 +6,8 @@ use parking_lot::Mutex;
 use crate::generic::{DeviceError, OutOfMemory, PipelineStages, QueueFlags};
 
 use super::{
-    device::Device, from::IntoAsh, handle_host_oom, map_device_error, map_oom, refs::Refs,
-    surface::Frame, unexpected_error, CommandBuffer, CommandEncoder,
+    CommandBuffer, CommandEncoder, device::Device, from::IntoAsh, handle_host_oom,
+    map_device_error, map_oom, refs::Refs, surface::Frame, unexpected_error,
 };
 
 /// Maximum number of pending epochs to keep in queue.

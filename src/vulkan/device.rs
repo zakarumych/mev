@@ -19,7 +19,6 @@ use smallvec::SmallVec;
 
 use crate::{
     BufferUsage,
-    backend::new_semaphore,
     generic::{
         BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError, Features,
         ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PrimitiveTopology,
@@ -40,11 +39,12 @@ use super::{
     from::{IntoAsh, TryIntoAsh},
     handle_host_oom,
     image::Image,
-    instance::InstanceGuard,
+    instance::{InstanceGuard, VkDeviceFeatures, VkDeviceProperties},
     layout::{
         DescriptorSetLayout, DescriptorSetLayoutDesc, PipelineLayout, PipelineLayoutDesc,
         WeakDescriptorSetLayout, WeakPipelineLayout,
     },
+    new_semaphore,
     // queue::PendingEpochs,
     render::RenderPipeline,
     sampler::WeakSampler,
@@ -314,7 +314,8 @@ pub(super) struct DeviceInner {
     version: Version,
     families: Vec<u32>,
     features: Features,
-    properties: ash::vk::PhysicalDeviceProperties,
+    vk_features: VkDeviceFeatures,
+    vk_properties: VkDeviceProperties,
 
     error_state: ErrorState,
 
@@ -654,7 +655,8 @@ impl Device {
         device: ash::Device,
         families: Vec<u32>,
         features: Features,
-        properties: ash::vk::PhysicalDeviceProperties,
+        vk_features: VkDeviceFeatures,
+        vk_properties: VkDeviceProperties,
         allocator: gpu_alloc::GpuAllocator<DeviceMemory>,
         push_descriptor: ash::khr::push_descriptor::Device,
         surface: Option<ash::khr::surface::Instance>,
@@ -678,7 +680,8 @@ impl Device {
                 version,
                 families,
                 features,
-                properties,
+                vk_features,
+                vk_properties,
                 memory: Mutex::new(Slab::with_capacity(64)),
                 error_state: ErrorState::new(),
                 buffers: Mutex::new(Slab::with_capacity(1024)),
@@ -813,7 +816,14 @@ impl Device {
 
     #[inline]
     fn new_sampler_slow(&self, count: usize, desc: SamplerDesc) -> Sampler {
-        if self.inner.properties.limits.max_sampler_allocation_count as usize <= count {
+        if self
+            .inner
+            .vk_properties
+            .properties
+            .limits
+            .max_sampler_allocation_count as usize
+            <= count
+        {
             self.set_oom();
             return Sampler::null();
         }
