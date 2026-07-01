@@ -643,7 +643,7 @@ impl crate::traits::Instance for Instance {
         if self.version < Version::V1_3 {
             // Dynamic rendering is required
             enabled_extension_names.push(extension_name!("VK_KHR_dynamic_rendering"));
-            enabled_extension_names.push(extension_name!("VK_EXT_inline_uniform_block"));
+            // enabled_extension_names.push(extension_name!("VK_EXT_inline_uniform_block"));
             // enabled_extension_names.push(extension_name!("VK_KHR_synchronization2"));
         } else {
             features13.dynamic_rendering = 1;
