@@ -4,14 +4,15 @@ use ash::vk::{self, Handle};
 use smallvec::SmallVec;
 
 use crate::{
+    DeviceError, ImageDesc,
     backend::new_semaphore,
     generic::{Extent2, ImageExtent, SurfaceError, Swizzle, ViewDesc},
-    DeviceError, ImageDesc,
 };
 
 use super::{
+    Device, Image,
     from::{AshInto, TryAshInto},
-    handle_host_oom, unexpected_error, Device, Image,
+    handle_host_oom, unexpected_error,
 };
 
 const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
@@ -268,11 +269,16 @@ impl Surface {
             self.caps.current_extent
         };
 
+        let image_count = match (self.caps.min_image_count, self.caps.max_image_count) {
+            (min, 0) => 3.max(min),
+            (min, max) => 3.clamp(min, max),
+        };
+
         let result = unsafe {
             self.device.swapchain().create_swapchain(
                 &vk::SwapchainCreateInfoKHR::default()
                     .surface(self.surface)
-                    .min_image_count(3.clamp(self.caps.min_image_count, self.caps.max_image_count))
+                    .min_image_count(image_count)
                     .image_format(self.preferred_format.format)
                     .image_color_space(self.preferred_format.color_space)
                     .image_extent(use_extent)
