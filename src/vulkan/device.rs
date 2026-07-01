@@ -4,8 +4,8 @@ use std::{
     hash::{Hash, Hasher},
     ptr::NonNull,
     sync::{
-        atomic::{AtomicU16, Ordering},
         Arc, Weak,
+        atomic::{AtomicU16, Ordering},
     },
 };
 
@@ -18,17 +18,22 @@ use slab::Slab;
 use smallvec::SmallVec;
 
 use crate::{
+    BufferUsage,
     backend::new_semaphore,
     generic::{
-        parse_shader, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError,
-        Features, ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
-        PrimitiveTopology, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError,
-        SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc,
+        BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError, Features,
+        ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PrimitiveTopology,
+        RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, Swizzle,
+        TlasDesc, VertexStepMode, ViewDesc, parse_shader,
     },
-    BufferUsage,
 };
 
 use super::{
+    Blas,
+    ComputePipeline,
+    Sampler,
+    Tlas,
+    Version,
     arguments::descriptor_type,
     buffer::Buffer,
     format_aspect,
@@ -46,11 +51,6 @@ use super::{
     shader::Library,
     surface::Surface,
     unexpected_error,
-    Blas,
-    ComputePipeline,
-    Sampler,
-    Tlas,
-    Version,
 };
 
 #[derive(Debug)]
@@ -676,6 +676,7 @@ impl Device {
                 allocator: Mutex::new(allocator),
                 push_descriptor,
                 surface,
+                #[cfg(target_os = "windows")]
                 win32_surface,
                 swapchain,
                 swapchain_maintenance1,
@@ -1290,13 +1291,15 @@ impl crate::traits::Device for Device {
         let vertex_shader_name;
         let fragment_shader_name;
 
-        let mut stages = vec![vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(desc.vertex_shader.library.module())
-            .name({
-                vertex_shader_name = ffi::CString::new(&*desc.vertex_shader.entry).unwrap();
-                &*vertex_shader_name
-            })];
+        let mut stages = vec![
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(desc.vertex_shader.library.module())
+                .name({
+                    vertex_shader_name = ffi::CString::new(&*desc.vertex_shader.entry).unwrap();
+                    &*vertex_shader_name
+                }),
+        ];
 
         let mut raster_state = vk::PipelineRasterizationStateCreateInfo::default();
         let mut depth_state = vk::PipelineDepthStencilStateCreateInfo::default();
