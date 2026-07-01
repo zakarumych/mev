@@ -1,0 +1,29 @@
+name: Test MSRV
+
+on:
+  pull_request:
+    types: [opened, reopened, edited]
+  push:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/msrv.yml"
+      - "proc/**"
+      - "examples/**"
+      - "src/**"
+      - "Cargo.toml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    matrix:
+      platform: 
+        - ubuntu-latest
+        - macos-latest
+        - windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Install MSRV
+      run: rustup install 1.92
+    - name: Test on MSRV
+      run: cargo +1.92 test
