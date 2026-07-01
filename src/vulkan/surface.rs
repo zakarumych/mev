@@ -426,10 +426,7 @@ impl Surface {
                 handle,
                 view,
                 view_idx,
-                Extent2::new(
-                    self.caps.current_extent.width,
-                    self.caps.current_extent.height,
-                ),
+                Extent2::new(use_extent.width, use_extent.height),
                 pixel_format,
                 usage,
             );
