@@ -377,6 +377,8 @@ impl Instance {
                 err => unexpected_error(err),
             })?;
 
+        let mut filtered_device = Vec::new();
+
         let mut device_caps = Vec::with_capacity(devices.len());
 
         for &device in &devices {
@@ -517,7 +519,8 @@ impl Instance {
             device_caps.push(DeviceCapabilities {
                 features: Features::empty(),
                 families,
-            })
+            });
+            filtered_device.push(device);
         }
 
         // Build instance instance.
@@ -526,7 +529,7 @@ impl Instance {
             version,
             instance: instance.clone(),
             guard: Arc::new(InstanceGuard { entry, instance }),
-            devices,
+            devices: filtered_device,
             capabilities: Capabilities {
                 devices: device_caps,
             },
