@@ -8,6 +8,7 @@
 /// # Example
 ///
 /// ```
+/// # use mev::with_metal;
 /// with_metal! {
 ///    // Metal-specific code
 /// }
@@ -26,6 +27,7 @@ macro_rules! with_metal {
 /// # Example
 ///
 /// ```
+/// # use mev::with_metal;
 /// with_metal! {
 ///    // Metal-specific code
 /// }
@@ -44,6 +46,7 @@ macro_rules! with_metal {
 /// # Example
 ///
 /// ```
+/// # use mev::with_vulkan;
 /// with_vulkan! {
 ///    // Vulkan-specific code
 /// }
@@ -62,6 +65,7 @@ macro_rules! with_vulkan {
 /// # Example
 ///
 /// ```
+/// # use mev::with_vulkan;
 /// with_vulkan! {
 ///    // Vulkan-specific code
 /// }
@@ -80,6 +84,7 @@ macro_rules! with_vulkan {
 // /// # Example
 // ///
 // /// ```
+// /// # use mev::with_webgl;
 // /// with_webgl! {
 // ///    // WebGL-specific code
 // /// }
@@ -98,6 +103,7 @@ macro_rules! with_vulkan {
 // /// # Example
 // ///
 // /// ```
+// /// # use mev::with_webgl;
 // /// with_webgl! {
 // ///    // WebGL-specific code
 // /// }
@@ -116,6 +122,7 @@ macro_rules! with_vulkan {
 /// # Example
 ///
 /// ```
+/// # use mev::with_webgpu;
 /// with_webgpu! {
 ///    // WebGPU-specific code
 /// }
@@ -134,6 +141,7 @@ macro_rules! with_webgpu {
 /// # Example
 ///
 /// ```
+/// # use mev::with_webgpu;
 /// with_webgpu! {
 ///    // WebGPU-specific code
 /// }
@@ -207,7 +215,7 @@ mod private {
 }
 
 pub use self::{backend::*, generic::*};
-pub use mev_proc::{match_backend, Arguments, AutoDeviceRepr, DeviceRepr, VertexBinding};
+pub use mev_proc::{Arguments, AutoDeviceRepr, DeviceRepr, VertexBinding, match_backend};
 
 #[doc(hidden)]
 pub mod for_macro {
@@ -215,7 +223,7 @@ pub mod for_macro {
 
     pub use std::{
         fmt,
-        mem::{align_of, offset_of, size_of, MaybeUninit},
+        mem::{MaybeUninit, align_of, offset_of, size_of},
         ptr::addr_of,
     };
 
