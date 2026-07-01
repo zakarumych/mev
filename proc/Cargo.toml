@@ -11,6 +11,6 @@ description = "mev procedural macros"
 proc-macro = true
 
 [dependencies]
-mev-proc-impl = { version = "=0.1.0", path = "impl" }
+mev-proc-impl = { version = "=0.1.1", path = "impl" }
 proc-macro2.workspace = true
 quote.workspace = true
