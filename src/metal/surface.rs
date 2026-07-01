@@ -2,7 +2,7 @@ use std::fmt;
 
 use core_graphics_types::{
     base::CGFloat,
-    geometry::{CGRect, CGSize},
+    geometry::{CGAffineTransform, CGRect, CGSize},
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
 
@@ -57,15 +57,28 @@ impl Surface {
     }
 }
 
-unsafe fn window_scale_factor(view: *mut Object) -> f64 {
-    let mut scale_factor: CGFloat = 1.0;
+unsafe fn window_scale_factor(view: *mut Object) -> (f64, f64) {
+    let mut scale_factor_x: CGFloat = 1.0;
+    let mut scale_factor_y: CGFloat = 1.0;
+
+    #[cfg(target_os = "macos")]
     unsafe {
         let window: *mut Object = msg_send![view, window];
         if !window.is_null() {
-            scale_factor = msg_send![window, backingScaleFactor];
+            let scale_factor: CGFloat = msg_send![window, backingScaleFactor];
+            scale_factor_x = scale_factor;
+            scale_factor_y = scale_factor;
         }
     }
-    scale_factor
+
+    #[cfg(not(target_os = "macos"))]
+    unsafe {
+        let transform: CGAffineTransform = msg_send![view, transform];
+        scale_factor_x = transform.tx;
+        scale_factor_y = transform.ty;
+    }
+
+    (scale_factor_x, scale_factor_y)
 }
 
 unsafe fn view_size(view: *mut Object) -> CGSize {
@@ -111,12 +124,12 @@ impl crate::traits::Surface for Surface {
                     let scale = window_scale_factor(self.view);
                     let size = view_size(self.view);
 
-                    if draw_size.width != size.width * scale
-                        || draw_size.height != size.height * scale
+                    if draw_size.width != size.width * scale.0
+                        || draw_size.height != size.height * scale.1
                     {
                         self.layer.set_drawable_size(CGSize {
-                            width: size.width * scale,
-                            height: size.height * scale,
+                            width: size.width * scale.0,
+                            height: size.height * scale.1,
                         });
 
                         self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;

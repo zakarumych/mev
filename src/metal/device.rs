@@ -389,7 +389,7 @@ impl crate::traits::Device for Device {
             (RawWindowHandle::UiKit(handle), RawDisplayHandle::UiKit(_)) => unsafe {
                 let layer = layer_from_view(handle.ui_view.cast().as_ptr());
                 layer.set_device(&self.device);
-                Ok(Surface::new(layer, std::ptr::null_mut()))
+                Ok(Surface::new(layer, handle.ui_view.cast().as_ptr()))
             },
             (RawWindowHandle::AppKit(handle), RawDisplayHandle::AppKit(_)) => unsafe {
                 let layer = layer_from_view(handle.ns_view.cast().as_ptr());
