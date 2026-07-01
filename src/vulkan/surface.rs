@@ -218,7 +218,12 @@ impl Surface {
     // Initialize the swapchain.
     // Retires any old swapchain.
     fn configure(&mut self) -> Result<(), SurfaceError> {
-        tracing::debug!("Surface '{:?}' init", self.surface);
+        if self.surface.is_null() {
+            // Fake swapchain does not need to be reconfigured.
+            return Ok(());
+        }
+
+        tracing::debug!("Surface '{:?}' configure", self.surface);
 
         self.handle_retired()?;
 
@@ -226,39 +231,35 @@ impl Surface {
             return Err(SurfaceError::SurfaceLost);
         }
 
-        if !self.surface.is_null() {
-            let result = unsafe {
-                self.device
-                    .surface()
-                    .get_physical_device_surface_capabilities(
-                        self.device.physical_device(),
-                        self.surface,
-                    )
-            };
+        let result = unsafe {
+            self.device
+                .surface()
+                .get_physical_device_surface_capabilities(
+                    self.device.physical_device(),
+                    self.surface,
+                )
+        };
 
-            self.caps = match result {
-                Ok(caps) => caps,
-                Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-                Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                    self.device.set_oom();
-                    return Err(SurfaceError::OutOfMemory);
-                }
-                Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                    self.lost = true;
-                    self.device.set_lost();
-                    return Err(SurfaceError::SurfaceLost);
-                }
-                Err(err) => unexpected_error(err),
-            };
+        self.caps = match result {
+            Ok(caps) => caps,
+            Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.device.set_oom();
+                return Err(SurfaceError::OutOfMemory);
+            }
+            Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                self.lost = true;
+                self.device.set_lost();
+                return Err(SurfaceError::SurfaceLost);
+            }
+            Err(err) => unexpected_error(err),
+        };
 
-            tracing::debug!(
-                "Surface '{:?}' capabilities: '{:?}'",
-                self.surface,
-                self.caps
-            );
-        }
-
-        let old = self.current.take();
+        tracing::debug!(
+            "Surface '{:?}' capabilities: '{:?}'",
+            self.surface,
+            self.caps
+        );
 
         let use_extent = if self.caps.current_extent.width == u32::MAX
             && self.caps.current_extent.height == u32::MAX
@@ -281,16 +282,17 @@ impl Surface {
             self.caps.current_extent
         };
 
-        if self.surface.is_null() || use_extent.width == 0 || use_extent.height == 0 {
-            match old {
+        if use_extent.width == 0 || use_extent.height == 0 {
+            if let Some(MaybeFakeSwapchain::Fake(swapchain)) = &self.current {
+                return Ok(());
+            }
+
+            match self.current.take() {
                 None => {}
                 Some(MaybeFakeSwapchain::Real(swapchain)) => {
                     self.retired.push_back(MaybeFakeSwapchain::Real(swapchain));
                 }
-                Some(MaybeFakeSwapchain::Fake(fake)) => {
-                    self.current = Some(MaybeFakeSwapchain::Fake(fake));
-                    return Ok(());
-                }
+                _ => unreachable!(),
             }
 
             let pixel_format = self.preferred_format.format.try_ash_into().unwrap();
@@ -322,6 +324,8 @@ impl Surface {
             (min, 0) => 3.max(min),
             (min, max) => 3.clamp(min, max),
         };
+
+        let old = self.current.take();
 
         let result = unsafe {
             self.device.swapchain().create_swapchain(
@@ -573,6 +577,7 @@ impl crate::traits::Surface for Surface {
     }
 
     fn preferred_extent(&mut self, extent: Extent2) {
+        dbg!(extent);
         if self.preferred_extent != Some(extent) {
             self.preferred_extent = Some(extent);
             self.reconfigure = true;
@@ -672,6 +677,13 @@ impl crate::traits::Surface for Surface {
                     });
                 }
                 MaybeFakeSwapchain::Fake(fake) => {
+                    if self.surface.is_null() {
+                        // Reconfigure each frame the fake swapchain in real surface.
+                        // Fake is only used here when maxExtent is {0,0}
+                        // As soon as it is not, we will reconfigure to real swapchain.
+                        self.reconfigure = true;
+                    }
+
                     let frame = Frame {
                         swapchain: vk::SwapchainKHR::null(),
                         image: fake.image.clone(),

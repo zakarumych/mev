@@ -71,7 +71,10 @@ impl ApplicationHandler for TriangleApp {
             }
 
             let window = event_loop.create_window(attributes).unwrap();
-            let surface = self.queue.new_surface(&window, &window).unwrap();
+            let mut surface = self.queue.new_surface(&window, &window).unwrap();
+
+            let size = window.inner_size();
+            surface.preferred_extent(mev::Extent2::new(size.width, size.height));
 
             self.window = Some(window);
             self.surface = Some(surface);
