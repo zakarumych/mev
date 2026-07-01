@@ -340,6 +340,18 @@ pub(super) struct DeviceInner {
     #[cfg(target_os = "windows")]
     win32_surface: Option<ash::khr::win32_surface::Instance>,
 
+    #[cfg(all(unix, not(target_os = "android")))]
+    xlib_surface: Option<ash::khr::xlib_surface::Instance>,
+
+    #[cfg(all(unix, not(target_os = "android")))]
+    xcb_surface: Option<ash::khr::xcb_surface::Instance>,
+
+    #[cfg(all(unix, not(target_os = "android")))]
+    wayland_surface: Option<ash::khr::wayland_surface::Instance>,
+
+    #[cfg(all(unix, target_os = "android"))]
+    android_surface: Option<ash::khr::android_surface::Instance>,
+
     #[cfg(any(debug_assertions, feature = "debug"))]
     debug_utils: Option<ash::ext::debug_utils::Device>,
 }
@@ -633,6 +645,7 @@ impl fmt::Debug for Device {
 }
 
 impl Device {
+    #[rustfmt::skip]
     pub(super) fn new(
         guard: Arc<InstanceGuard>,
         version: Version,
@@ -643,10 +656,13 @@ impl Device {
         features: Features,
         properties: ash::vk::PhysicalDeviceProperties,
         allocator: gpu_alloc::GpuAllocator<DeviceMemory>,
-        // epochs: Vec<Arc<PendingEpochs>>,
         push_descriptor: ash::khr::push_descriptor::Device,
         surface: Option<ash::khr::surface::Instance>,
         #[cfg(target_os = "windows")] win32_surface: Option<ash::khr::win32_surface::Instance>,
+        #[cfg(all(unix, not(target_os = "android")))] xlib_surface: Option<ash::khr::xlib_surface::Instance>,
+        #[cfg(all(unix, not(target_os = "android")))] xcb_surface: Option<ash::khr::xcb_surface::Instance>,
+        #[cfg(all(unix, not(target_os = "android")))] wayland_surface: Option<ash::khr::wayland_surface::Instance>,
+        #[cfg(all(unix, target_os = "android"))] android_surface: Option<ash::khr::android_surface::Instance>,
         swapchain: Option<ash::khr::swapchain::Device>,
         swapchain_maintenance1: Option<ash::ext::swapchain_maintenance1::Device>,
         #[cfg(any(debug_assertions, feature = "debug"))] debug_utils: Option<
@@ -676,13 +692,15 @@ impl Device {
                 allocator: Mutex::new(allocator),
                 push_descriptor,
                 surface,
-                #[cfg(target_os = "windows")]
-                win32_surface,
+                #[cfg(target_os = "windows")] win32_surface,
+                #[cfg(all(unix, not(target_os = "android")))] xlib_surface,
+                #[cfg(all(unix, not(target_os = "android")))] xcb_surface,
+                #[cfg(all(unix, not(target_os = "android")))] wayland_surface,
+                #[cfg(all(unix, target_os = "android"))] android_surface,
                 swapchain,
                 swapchain_maintenance1,
                 // epochs,
-                #[cfg(any(debug_assertions, feature = "debug"))]
-                debug_utils,
+                #[cfg(any(debug_assertions, feature = "debug"))] debug_utils,
             }),
         }
     }
@@ -1779,10 +1797,13 @@ impl crate::traits::Device for Device {
             .display_handle()
             .map_err(|_| SurfaceError::SurfaceLost)?;
 
-        match (window.as_raw(), display.as_raw()) {
+        let surface_handle = match (window.as_raw(), display.as_raw()) {
             #[cfg(target_os = "windows")]
             (RawWindowHandle::Win32(window), RawDisplayHandle::Windows(_)) => {
-                let win32_surface = me.win32_surface.as_ref().unwrap();
+                let win32_surface = me
+                    .win32_surface
+                    .as_ref()
+                    .expect("Win32 surface not available");
                 let result = unsafe {
                     win32_surface.create_win32_surface(
                         &ash::vk::Win32SurfaceCreateInfoKHR::default()
@@ -1791,7 +1812,7 @@ impl crate::traits::Device for Device {
                         None,
                     )
                 };
-                let surface = match result {
+                match result {
                     Ok(surface) => surface,
                     Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
                     Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
@@ -1799,86 +1820,243 @@ impl crate::traits::Device for Device {
                         return Err(SurfaceError::OutOfMemory);
                     }
                     Err(err) => unexpected_error(err),
-                };
-
-                let result = unsafe {
-                    self.surface()
-                        .get_physical_device_surface_formats(self.physical_device(), surface)
-                };
-                let formats = match result {
-                    Ok(formats) => formats,
-                    Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-                    Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                        self.set_oom();
-                        return Err(SurfaceError::OutOfMemory);
-                    }
-                    Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                        return Err(SurfaceError::SurfaceLost);
-                    }
-                    Err(err) => unexpected_error(err),
-                };
-
-                let result = unsafe {
-                    self.surface()
-                        .get_physical_device_surface_present_modes(self.physical_device(), surface)
-                };
-                let modes = match result {
-                    Ok(modes) => modes,
-                    Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-                    Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                        self.set_oom();
-                        return Err(SurfaceError::OutOfMemory);
-                    }
-                    Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                        return Err(SurfaceError::SurfaceLost);
-                    }
-                    Err(err) => unexpected_error(err),
-                };
-
-                let family_supports =
-                    self.queue_families()
-                        .iter()
-                        .try_fold(Vec::new(), |mut supports, &idx| {
-                            let result = unsafe {
-                                self.surface().get_physical_device_surface_support(
-                                    self.physical_device(),
-                                    idx,
-                                    surface,
-                                )
-                            };
-
-                            let support = match result {
-                                Ok(support) => support,
-                                Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-                                Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                                    self.set_oom();
-                                    return Err(SurfaceError::OutOfMemory);
-                                }
-                                Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                                    return Err(SurfaceError::SurfaceLost);
-                                }
-                                Err(err) => unexpected_error(err),
-                            };
-
-                            supports.push(support);
-                            Ok::<_, SurfaceError>(supports)
-                        })?;
-
-                Ok(Surface::new(
-                    self.clone(),
-                    surface,
-                    formats,
-                    modes,
-                    family_supports,
-                ))
+                }
             }
+            #[cfg(target_os = "windows")]
             (RawWindowHandle::Win32(_), _) => {
                 panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xlib(window), RawDisplayHandle::Xlib(display)) => {
+                let xlib_surface = me
+                    .xlib_surface
+                    .as_ref()
+                    .expect("Xlib surface not available");
+
+                let display = display.display.ok_or(SurfaceError::SurfaceLost)?;
+
+                let result = unsafe {
+                    xlib_surface.create_xlib_surface(
+                        &vk::XlibSurfaceCreateInfoKHR::default()
+                            .dpy(display.as_ptr())
+                            .window(window.window),
+                        None,
+                    )
+                };
+
+                match result {
+                    Ok(surface) => surface,
+                    Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                        self.set_oom();
+                        return Err(SurfaceError::OutOfMemory);
+                    }
+                    Err(vk::Result::ERROR_UNKNOWN) => {
+                        tracing::error!("Failed to create Xlib surface: ERROR_UNKNOWN");
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(vk::Result::ERROR_VALIDATION_FAILED_EXT) => {
+                        tracing::error!(
+                            "Failed to create Xlib surface: ERROR_VALIDATION_FAILED_EXT"
+                        );
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(err) => unexpected_error(err),
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xlib(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xcb(window), RawDisplayHandle::Xcb(display)) => {
+                let xcb_surface = me.xcb_surface.as_ref().expect("Xcb surface not available");
+
+                let connection = display.connection.ok_or(SurfaceError::SurfaceLost)?;
+
+                let result = unsafe {
+                    xcb_surface.create_xcb_surface(
+                        &vk::XcbSurfaceCreateInfoKHR::default()
+                            .connection(connection.as_ptr())
+                            .window(window.window.get()),
+                        None,
+                    )
+                };
+
+                match result {
+                    Ok(surface) => surface,
+                    Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                        self.set_oom();
+                        return Err(SurfaceError::OutOfMemory);
+                    }
+                    Err(vk::Result::ERROR_UNKNOWN) => {
+                        tracing::error!("Failed to create Xcb surface: ERROR_UNKNOWN");
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(vk::Result::ERROR_VALIDATION_FAILED_EXT) => {
+                        tracing::error!(
+                            "Failed to create Xcb surface: ERROR_VALIDATION_FAILED_EXT"
+                        );
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(err) => unexpected_error(err),
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xcb(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Wayland(window), RawDisplayHandle::Wayland(display)) => {
+                let wayland_surface = me
+                    .wayland_surface
+                    .as_ref()
+                    .expect("Wayland surface not available");
+
+                let result = unsafe {
+                    wayland_surface.create_wayland_surface(
+                        &vk::WaylandSurfaceCreateInfoKHR::default()
+                            .display(display.display.as_ptr())
+                            .surface(window.surface.as_ptr()),
+                        None,
+                    )
+                };
+
+                match result {
+                    Ok(surface) => surface,
+                    Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                        self.set_oom();
+                        return Err(SurfaceError::OutOfMemory);
+                    }
+                    Err(vk::Result::ERROR_UNKNOWN) => {
+                        tracing::error!("Failed to create Wayland surface: ERROR_UNKNOWN");
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(vk::Result::ERROR_VALIDATION_FAILED_EXT) => {
+                        tracing::error!(
+                            "Failed to create Wayland surface: ERROR_VALIDATION_FAILED_EXT"
+                        );
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(err) => unexpected_error(err),
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Wayland(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, target_os = "android"))]
+            (RawWindowHandle::AndroidNdk(window), RawDisplayHandle::Android(_)) => {
+                let android_surface = me
+                    .android_surface
+                    .as_ref()
+                    .expect("Android surface not available");
+
+                let result = unsafe {
+                    android_surface.create_android_surface(
+                        &vk::AndroidSurfaceCreateInfoKHR::default()
+                            .window(window.a_native_window.as_ptr()),
+                        None,
+                    )
+                };
+
+                match result {
+                    Ok(surface) => surface,
+                    Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                    Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                        self.set_oom();
+                        return Err(SurfaceError::OutOfMemory);
+                    }
+                    Err(vk::Result::ERROR_UNKNOWN) => {
+                        tracing::error!("Failed to create Android surface: ERROR_UNKNOWN");
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(vk::Result::ERROR_VALIDATION_FAILED_EXT) => {
+                        tracing::error!(
+                            "Failed to create Android surface: ERROR_VALIDATION_FAILED_EXT"
+                        );
+                        return Err(SurfaceError::SurfaceLost);
+                    }
+                    Err(err) => unexpected_error(err),
+                }
             }
             _ => {
                 unreachable!("Unsupported window type for this platform")
             }
-        }
+        };
+
+        let result = unsafe {
+            self.surface()
+                .get_physical_device_surface_formats(self.physical_device(), surface_handle)
+        };
+        let formats = match result {
+            Ok(formats) => formats,
+            Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.set_oom();
+                return Err(SurfaceError::OutOfMemory);
+            }
+            Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                return Err(SurfaceError::SurfaceLost);
+            }
+            Err(err) => unexpected_error(err),
+        };
+
+        let result = unsafe {
+            self.surface()
+                .get_physical_device_surface_present_modes(self.physical_device(), surface_handle)
+        };
+        let modes = match result {
+            Ok(modes) => modes,
+            Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+            Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.set_oom();
+                return Err(SurfaceError::OutOfMemory);
+            }
+            Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                return Err(SurfaceError::SurfaceLost);
+            }
+            Err(err) => unexpected_error(err),
+        };
+
+        let family_supports =
+            self.queue_families()
+                .iter()
+                .try_fold(Vec::new(), |mut supports, &idx| {
+                    let result = unsafe {
+                        self.surface().get_physical_device_surface_support(
+                            self.physical_device(),
+                            idx,
+                            surface_handle,
+                        )
+                    };
+
+                    let support = match result {
+                        Ok(support) => support,
+                        Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                        Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                            self.set_oom();
+                            return Err(SurfaceError::OutOfMemory);
+                        }
+                        Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                            return Err(SurfaceError::SurfaceLost);
+                        }
+                        Err(err) => unexpected_error(err),
+                    };
+
+                    supports.push(support);
+                    Ok::<_, SurfaceError>(supports)
+                })?;
+
+        Ok(Surface::new(
+            self.clone(),
+            surface_handle,
+            formats,
+            modes,
+            family_supports,
+        ))
     }
 
     fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {

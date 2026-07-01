@@ -1,7 +1,7 @@
 use std::{
     alloc::Layout,
     convert::identity,
-    ffi::{c_void, CStr},
+    ffi::{CStr, c_void},
     fmt,
     sync::Arc,
 };
@@ -10,17 +10,17 @@ use ash::*;
 use hashbrown::HashMap;
 
 use crate::{
+    DeviceError,
     generic::{
         Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, OutOfMemory,
     },
-    DeviceError,
 };
 
-use super::{device::Device, from::*, handle_host_oom, unexpected_error, Queue, Version};
+use super::{Queue, Version, device::Device, from::*, handle_host_oom, unexpected_error};
 
 macro_rules! extension_name {
     ($name:literal) => {
-        str::as_ptr(concat!($name, "\0")) as *const i8
+        str::as_ptr(concat!($name, "\0")) as *const std::ffi::c_char
     };
 }
 
@@ -54,6 +54,14 @@ pub struct Instance {
 
     #[cfg(target_os = "windows")]
     win32_surface: Option<ash::khr::win32_surface::Instance>,
+    #[cfg(all(unix, not(target_os = "android")))]
+    xlib_surface: Option<ash::khr::xlib_surface::Instance>,
+    #[cfg(all(unix, not(target_os = "android")))]
+    xcb_surface: Option<ash::khr::xcb_surface::Instance>,
+    #[cfg(all(unix, not(target_os = "android")))]
+    wayland_surface: Option<ash::khr::wayland_surface::Instance>,
+    #[cfg(all(unix, target_os = "android"))]
+    android_surface: Option<ash::khr::android_surface::Instance>,
 }
 
 impl fmt::Debug for Instance {
@@ -144,20 +152,88 @@ impl Instance {
         }
 
         let mut has_surface = false;
+        #[cfg(target_os = "windows")]
+        let mut has_win32_surface = false;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut has_xlib_surface = false;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut has_xcb_surface = false;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut has_wayland_surface = false;
+        #[cfg(all(unix, target_os = "android"))]
+        let mut has_android_surface = false;
+
         if let Some(surface_extension) = unsafe { find_extension(&extensions, "VK_KHR_surface") } {
             #[cfg(target_os = "windows")]
-            let name = "VK_KHR_win32_surface";
-
-            if let Some(platform_extension) = unsafe { find_extension(&extensions, name) } {
-                has_surface = true;
-                enabled_extension_names.push(surface_extension.extension_name.as_ptr());
-                enabled_extension_names.push(platform_extension.extension_name.as_ptr());
-
-                if let Some(surface_maintenance1) =
-                    unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") }
+            {
+                if let Some(platform_extension) =
+                    unsafe { find_extension(&extensions, "VK_KHR_win32_surface") }
                 {
-                    enabled_extension_names.push(surface_maintenance1.extension_name.as_ptr());
+                    has_win32_surface = true;
+                    if !has_surface {
+                        has_surface = true;
+                        enabled_extension_names.push(extension_name!("VK_KHR_surface"));
+                    }
+                    enabled_extension_names.push(extension_name!("VK_KHR_win32_surface"));
                 }
+            }
+
+            #[cfg(all(unix, not(target_os = "android")))]
+            {
+                if let Some(platform_extension) =
+                    unsafe { find_extension(&extensions, "VK_KHR_xlib_surface") }
+                {
+                    has_xlib_surface = true;
+                    if !has_surface {
+                        has_surface = true;
+                        enabled_extension_names.push(extension_name!("VK_KHR_surface"));
+                    }
+                    enabled_extension_names.push(extension_name!("VK_KHR_xlib_surface"));
+                }
+
+                if let Some(platform_extension) =
+                    unsafe { find_extension(&extensions, "VK_KHR_xcb_surface") }
+                {
+                    has_xcb_surface = true;
+                    if !has_surface {
+                        has_surface = true;
+                        enabled_extension_names.push(extension_name!("VK_KHR_surface"));
+                    }
+                    enabled_extension_names.push(extension_name!("VK_KHR_xcb_surface"));
+                }
+
+                if let Some(platform_extension) =
+                    unsafe { find_extension(&extensions, "VK_KHR_wayland_surface") }
+                {
+                    has_wayland_surface = true;
+                    if !has_surface {
+                        has_surface = true;
+                        enabled_extension_names.push(extension_name!("VK_KHR_surface"));
+                    }
+                    enabled_extension_names.push(extension_name!("VK_KHR_wayland_surface"));
+                }
+            }
+
+            #[cfg(all(unix, target_os = "android"))]
+            {
+                if let Some(platform_extension) =
+                    unsafe { find_extension(&extensions, "VK_KHR_android_surface") }
+                {
+                    has_android_surface = true;
+                    if !has_surface {
+                        has_surface = true;
+                        enabled_extension_names.push(extension_name!("VK_KHR_surface"));
+                    }
+                    enabled_extension_names.push(extension_name!("VK_KHR_android_surface"));
+                }
+            }
+        }
+
+        if has_surface {
+            if let Some(surface_maintenance1) =
+                unsafe { find_extension(&extensions, "VK_EXT_surface_maintenance1") }
+            {
+                enabled_extension_names.push(extension_name!("VK_EXT_surface_maintenance1"));
             }
         }
 
@@ -183,7 +259,8 @@ impl Instance {
                 unsafe { find_extension(&extensions, "VK_KHR_get_physical_device_properties2") }
             {
                 has_physical_device_properties2 = true;
-                enabled_extension_names.push(extension.extension_name.as_ptr());
+                enabled_extension_names
+                    .push(extension_name!("VK_KHR_get_physical_device_properties2"));
             }
         }
 
@@ -240,12 +317,41 @@ impl Instance {
 
         #[cfg(target_os = "windows")]
         let mut win32_surface = None;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut xlib_surface = None;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut xcb_surface = None;
+        #[cfg(all(unix, not(target_os = "android")))]
+        let mut wayland_surface = None;
+        #[cfg(all(unix, target_os = "android"))]
+        let mut android_surface = None;
+
         if has_surface {
             surface = Some(ash::khr::surface::Instance::new(&entry, &instance));
 
             #[cfg(target_os = "windows")]
-            {
+            if has_win32_surface {
                 win32_surface = Some(ash::khr::win32_surface::Instance::new(&entry, &instance));
+            }
+
+            #[cfg(all(unix, not(target_os = "android")))]
+            if has_xlib_surface {
+                xlib_surface = Some(ash::khr::xlib_surface::Instance::new(&entry, &instance));
+            }
+
+            #[cfg(all(unix, not(target_os = "android")))]
+            if has_xcb_surface {
+                xcb_surface = Some(ash::khr::xcb_surface::Instance::new(&entry, &instance));
+            }
+
+            #[cfg(all(unix, not(target_os = "android")))]
+            if has_wayland_surface {
+                wayland_surface = Some(ash::khr::wayland_surface::Instance::new(&entry, &instance));
+            }
+
+            #[cfg(all(unix, target_os = "android"))]
+            if has_android_surface {
+                android_surface = Some(ash::khr::android_surface::Instance::new(&entry, &instance));
             }
         }
 
@@ -314,12 +420,12 @@ impl Instance {
                 }
             }
 
-            if features13.inline_uniform_block == 0 {
-                if unsafe { find_extension(&extensions, "VK_EXT_inline_uniform_block") }.is_none() {
-                    // Skip devices that don't support inline uniform blocks.
-                    continue;
-                }
-            }
+            // if features13.inline_uniform_block == 0 {
+            //     if unsafe { find_extension(&extensions, "VK_EXT_inline_uniform_block") }.is_none() {
+            //         // Skip devices that don't support inline uniform blocks.
+            //         continue;
+            //     }
+            // }
 
             // if features13.synchronization2 == 0 {
             //     if unsafe { find_extension(&extensions, "VK_KHR_synchronization2") }.is_none() {
@@ -415,6 +521,14 @@ impl Instance {
 
             #[cfg(target_os = "windows")]
             win32_surface,
+            #[cfg(all(unix, not(target_os = "android")))]
+            xlib_surface,
+            #[cfg(all(unix, not(target_os = "android")))]
+            xcb_surface,
+            #[cfg(all(unix, not(target_os = "android")))]
+            wayland_surface,
+            #[cfg(all(unix, target_os = "android"))]
+            android_surface,
         })
     }
 }
@@ -615,6 +729,14 @@ impl crate::traits::Instance for Instance {
             self.surface.clone(),
             #[cfg(target_os = "windows")]
             self.win32_surface.clone(),
+            #[cfg(all(unix, not(target_os = "android")))]
+            self.xlib_surface.clone(),
+            #[cfg(all(unix, not(target_os = "android")))]
+            self.xcb_surface.clone(),
+            #[cfg(all(unix, not(target_os = "android")))]
+            self.wayland_surface.clone(),
+            #[cfg(all(unix, target_os = "android"))]
+            self.android_surface.clone(),
             swapchain,
             swapchain_maintenance1,
             #[cfg(any(debug_assertions, feature = "debug"))]
