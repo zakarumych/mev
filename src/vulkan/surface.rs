@@ -577,7 +577,6 @@ impl crate::traits::Surface for Surface {
     }
 
     fn preferred_extent(&mut self, extent: Extent2) {
-        dbg!(extent);
         if self.preferred_extent != Some(extent) {
             self.preferred_extent = Some(extent);
             self.reconfigure = true;
