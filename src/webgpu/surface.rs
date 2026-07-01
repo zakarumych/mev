@@ -1,23 +1,24 @@
 use std::fmt;
 
-use crate::generic::{PixelFormat, SurfaceError};
+use crate::{
+    Extent2,
+    generic::{PixelFormat, SurfaceError},
+};
 
-use super::{image::Image, Device};
+use super::{
+    Device, Image,
+    from::{IntoWgpu, WgpuInto},
+};
 
-const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SuboptimalRetire {
-    Cooldown(u64),
-    Retire,
-}
+const RECONFIGURE_COOLDOWN: u64 = 10;
 
 pub struct Surface {
     surface: wgpu::Surface<'static>,
     device: Device,
-    format: PixelFormat,
     config: wgpu::SurfaceConfiguration,
-    suboptimal_retire: SuboptimalRetire,
+    available_formats: Vec<PixelFormat>,
+    reconfigure_cooldown: u64,
+    reconfigure: bool,
 }
 
 impl fmt::Debug for Surface {
@@ -36,12 +37,16 @@ impl Surface {
             return Err(SurfaceError::SurfaceLost);
         }
 
-        let wgpu_format = caps.formats[0];
-        let format = wgpu_format_to_pixel(wgpu_format).unwrap_or(PixelFormat::Bgra8Unorm);
+        let preferred_format = pick_format(&caps.formats, None);
+        let available_formats = caps
+            .formats
+            .iter()
+            .map(|&f| f.wgpu_into())
+            .collect::<Vec<_>>();
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu_format,
+            format: preferred_format,
             width: 800,
             height: 600,
             present_mode: wgpu::PresentMode::Fifo,
@@ -55,25 +60,17 @@ impl Surface {
         Ok(Surface {
             surface,
             device,
-            format,
+            available_formats,
             config,
-            suboptimal_retire: SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN),
+            reconfigure_cooldown: RECONFIGURE_COOLDOWN,
+            reconfigure: false,
         })
     }
 
     fn configure(&mut self) -> Result<(), SurfaceError> {
-        let caps = self.surface.get_capabilities(self.device.wgpu_adapter());
-        if caps.formats.is_empty() {
-            return Err(SurfaceError::SurfaceLost);
-        }
-
-        let wgpu_format = caps.formats[0];
-        let format = wgpu_format_to_pixel(wgpu_format).unwrap_or(PixelFormat::Bgra8Unorm);
-
-        self.config.format = wgpu_format;
         self.surface.configure(self.device.wgpu(), &self.config);
-        self.format = format;
-        self.suboptimal_retire = SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN);
+        self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
+        self.reconfigure = false;
 
         Ok(())
     }
@@ -83,8 +80,27 @@ impl crate::traits::Resource for Surface {}
 
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
+    fn available_formats(&self) -> &[PixelFormat] {
+        &self.available_formats
+    }
+
+    fn preferred_format(&mut self, format: PixelFormat) {
+        if self.available_formats.contains(&format) {
+            self.config.format = format.into_wgpu();
+        }
+    }
+
+    fn preferred_extent(&mut self, extent: Extent2) {
+        if self.config.width != extent.width() || self.config.height != extent.height() {
+            self.config.width = extent.width();
+            self.config.height = extent.height();
+            self.reconfigure = true;
+        }
+    }
+
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
-        if let SuboptimalRetire::Retire = self.suboptimal_retire {
+        self.reconfigure_cooldown = self.reconfigure_cooldown.saturating_sub(1);
+        if self.reconfigure && self.reconfigure_cooldown == 0 {
             self.configure()?;
         }
 
@@ -92,16 +108,7 @@ impl crate::traits::Surface for Surface {
             match self.surface.get_current_texture() {
                 wgpu::CurrentSurfaceTexture::Success(t) => break t,
                 wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
-                    match self.suboptimal_retire {
-                        SuboptimalRetire::Retire => {}
-                        SuboptimalRetire::Cooldown(0) => {
-                            self.suboptimal_retire = SuboptimalRetire::Retire;
-                        }
-                        SuboptimalRetire::Cooldown(n) => {
-                            self.suboptimal_retire = SuboptimalRetire::Cooldown(n - 1);
-                        }
-                    }
-
+                    self.reconfigure = true;
                     break t;
                 }
                 wgpu::CurrentSurfaceTexture::Outdated => {
@@ -151,13 +158,38 @@ impl crate::traits::Frame for Frame {
     }
 }
 
-fn wgpu_format_to_pixel(f: wgpu::TextureFormat) -> Option<PixelFormat> {
-    Some(match f {
-        wgpu::TextureFormat::Bgra8Unorm => PixelFormat::Bgra8Unorm,
-        wgpu::TextureFormat::Bgra8UnormSrgb => PixelFormat::Bgra8Srgb,
-        wgpu::TextureFormat::Rgba8Unorm => PixelFormat::Rgba8Unorm,
-        wgpu::TextureFormat::Rgba8UnormSrgb => PixelFormat::Rgba8Srgb,
-        wgpu::TextureFormat::Rgba16Float => PixelFormat::Rgba16Float,
-        _ => return None,
-    })
+fn pick_format(
+    formats: &[wgpu::TextureFormat],
+    pixel_format: Option<PixelFormat>,
+) -> wgpu::TextureFormat {
+    if let Some(pixel_format) = pixel_format {
+        let wgpu_format = pixel_format.into_wgpu();
+        for &format in formats {
+            if format == wgpu_format {
+                return format;
+            }
+        }
+    }
+    for &format in formats {
+        if format == wgpu::TextureFormat::Bgra8UnormSrgb {
+            return format;
+        }
+    }
+    for &format in formats {
+        if format == wgpu::TextureFormat::Rgba8UnormSrgb {
+            return format;
+        }
+    }
+    for &format in formats {
+        if format == wgpu::TextureFormat::Rgba8Unorm {
+            return format;
+        }
+    }
+    for &format in formats {
+        if format == wgpu::TextureFormat::Bgra8Unorm {
+            return format;
+        }
+    }
+
+    return formats[0];
 }

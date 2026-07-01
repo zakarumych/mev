@@ -8,6 +8,7 @@ use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
+    BufferMappedRange, BufferMappedRangeMut,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
         Capabilities, ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3,
@@ -15,7 +16,6 @@ use crate::{
         PipelineStages, PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader,
         ShaderLibraryError, SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
     },
-    BufferMappedRange, BufferMappedRangeMut,
 };
 
 // match_backend! {
@@ -225,7 +225,7 @@ pub trait CommandEncoder: SyncCommandEncoder {
     fn copy(&mut self) -> crate::backend::CopyCommandEncoder<'_>;
 
     fn acceleration_structure(&mut self)
-        -> crate::backend::AccelerationStructureCommandEncoder<'_>;
+    -> crate::backend::AccelerationStructureCommandEncoder<'_>;
 
     fn compute(&mut self) -> crate::backend::ComputeCommandEncoder<'_>;
 
@@ -344,6 +344,12 @@ pub trait AccelerationStructureCommandEncoder {
 }
 
 pub trait Surface: Resource {
+    fn available_formats(&self) -> &[PixelFormat];
+
+    fn preferred_format(&mut self, format: PixelFormat);
+
+    fn preferred_extent(&mut self, extent: Extent2);
+
     /// Acquires next frame from the surface.
     fn next_frame(&mut self) -> Result<crate::backend::Frame, SurfaceError>;
 }

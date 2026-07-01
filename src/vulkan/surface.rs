@@ -4,8 +4,11 @@ use ash::vk::{self, Handle};
 use smallvec::SmallVec;
 
 use crate::{
-    DeviceError, ImageDesc,
-    backend::new_semaphore,
+    DeviceError, ImageDesc, PixelFormat,
+    backend::{
+        from::{IntoAsh, TryFromAsh, TryIntoAsh},
+        new_semaphore,
+    },
     generic::{Extent2, ImageExtent, SurfaceError, Swizzle, ViewDesc},
 };
 
@@ -15,7 +18,7 @@ use super::{
     handle_host_oom, unexpected_error,
 };
 
-const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
+const RECONFIGURE_COOLDOWN: u64 = 10;
 
 struct SwachainFences {
     array: SmallVec<[vk::Fence; 4]>,
@@ -40,12 +43,6 @@ enum MaybeFakeSwapchain {
     Fake(FakeSwapchain),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SuboptimalRetire {
-    Cooldown(u64),
-    Retire,
-}
-
 pub struct Surface {
     device: Device,
     surface: vk::SurfaceKHR,
@@ -53,16 +50,19 @@ pub struct Surface {
     retired: VecDeque<MaybeFakeSwapchain>,
     caps: vk::SurfaceCapabilitiesKHR,
     formats: Vec<vk::SurfaceFormatKHR>,
+    pixel_formats: Vec<PixelFormat>,
     modes: Vec<vk::PresentModeKHR>,
     family_supports: Vec<bool>,
 
     preferred_format: vk::SurfaceFormatKHR,
     preferred_mode: vk::PresentModeKHR,
     preferred_usage: vk::ImageUsageFlags,
+    preferred_extent: Option<Extent2>,
+
     bound_queue_family: Option<u32>,
 
-    /// Number of frames to wait before retiring a suboptimal swapchain.
-    suboptimal_retire: SuboptimalRetire,
+    reconfigure_cooldown: u64,
+    reconfigure: bool,
 
     /// Signals that surface or device was lost.
     lost: bool,
@@ -127,8 +127,21 @@ impl Surface {
         modes: Vec<vk::PresentModeKHR>,
         family_supports: Vec<bool>,
     ) -> Self {
-        let preferred_format = pick_format(&formats);
+        let preferred_format = pick_format(&formats, None);
         let preferred_mode = pick_mode(&modes);
+
+        let mut pixel_formats = formats
+            .iter()
+            .filter_map(|f| match f.format.try_ash_into() {
+                Some(pixel_format) => Some(pixel_format),
+                None => {
+                    tracing::debug!("Surface format '{:?}' is not supported by mev", f.format);
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        dedup_vec(&mut pixel_formats);
 
         tracing::debug!(
             "New surface preferred format: '{:?}' and mode: '{:?}'",
@@ -143,47 +156,68 @@ impl Surface {
             retired: VecDeque::new(),
             caps: vk::SurfaceCapabilitiesKHR::default(),
             formats,
+            pixel_formats,
             modes,
             family_supports,
 
             preferred_format,
             preferred_mode,
             preferred_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            preferred_extent: None,
+
             bound_queue_family: None,
 
-            suboptimal_retire: SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN),
+            reconfigure_cooldown: 0,
+            reconfigure: true,
+
             lost: false,
         }
     }
 
     pub(super) fn fake(device: Device, image: Image, semaphore: vk::Semaphore) -> Self {
+        let surface_format = vk::SurfaceFormatKHR {
+            format: image
+                .format()
+                .try_into_ash()
+                .expect("Existing image format should be convertible to ash format"),
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        };
+
+        let preferred_usage = (image.usage(), image.format()).into_ash();
+
         Surface {
             device,
             surface: vk::SurfaceKHR::null(),
+            retired: VecDeque::new(),
+            caps: vk::SurfaceCapabilitiesKHR::default(),
+            formats: vec![surface_format],
+            pixel_formats: vec![image.format()],
+            modes: Vec::new(),
+            family_supports: Vec::new(),
+
+            preferred_format: surface_format,
+            preferred_mode: vk::PresentModeKHR::IMMEDIATE,
+            preferred_usage,
+            preferred_extent: Some(image.extent().expect_2d()),
+
+            bound_queue_family: None,
+
+            reconfigure_cooldown: 0,
+            reconfigure: false,
+
+            lost: false,
+
             current: Some(MaybeFakeSwapchain::Fake(FakeSwapchain {
                 image,
                 semaphore,
                 frame_idx: 0,
             })),
-            retired: VecDeque::new(),
-            caps: vk::SurfaceCapabilitiesKHR::default(),
-            formats: Vec::new(),
-            modes: Vec::new(),
-            family_supports: Vec::new(),
-
-            preferred_format: vk::SurfaceFormatKHR::default(),
-            preferred_mode: vk::PresentModeKHR::default(),
-            preferred_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-            bound_queue_family: None,
-
-            suboptimal_retire: SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN),
-            lost: false,
         }
     }
 
     // Initialize the swapchain.
     // Retires any old swapchain.
-    fn init(&mut self) -> Result<(), SurfaceError> {
+    fn configure(&mut self) -> Result<(), SurfaceError> {
         tracing::debug!("Surface '{:?}' init", self.surface);
 
         self.handle_retired()?;
@@ -191,7 +225,6 @@ impl Surface {
         if self.lost {
             return Err(SurfaceError::SurfaceLost);
         }
-        self.suboptimal_retire = SuboptimalRetire::Cooldown(SUBOPTIMAL_RETIRE_COOLDOWN);
 
         if !self.surface.is_null() {
             let result = unsafe {
@@ -217,14 +250,38 @@ impl Surface {
                 }
                 Err(err) => unexpected_error(err),
             };
+
+            tracing::debug!(
+                "Surface '{:?}' capabilities: '{:?}'",
+                self.surface,
+                self.caps
+            );
         }
 
         let old = self.current.take();
 
-        if self.surface.is_null()
-            || self.caps.current_extent.width == 0
-            || self.caps.current_extent.height == 0
+        let use_extent = if self.caps.current_extent.width == u32::MAX
+            && self.caps.current_extent.height == u32::MAX
         {
+            match self.preferred_extent {
+                None => self.caps.min_image_extent,
+                Some(preferred) => {
+                    let width = preferred
+                        .width()
+                        .min(self.caps.max_image_extent.width)
+                        .max(self.caps.min_image_extent.width);
+                    let height = preferred
+                        .height()
+                        .min(self.caps.max_image_extent.height)
+                        .max(self.caps.min_image_extent.height);
+                    vk::Extent2D { width, height }
+                }
+            }
+        } else {
+            self.caps.current_extent
+        };
+
+        if self.surface.is_null() || use_extent.width == 0 || use_extent.height == 0 {
             match old {
                 None => {}
                 Some(MaybeFakeSwapchain::Real(swapchain)) => {
@@ -240,8 +297,8 @@ impl Surface {
 
             let image = self.device.new_image(ImageDesc {
                 extent: ImageExtent::D2(Extent2::new(
-                    self.caps.current_extent.width.max(1),
-                    self.caps.current_extent.height.max(1),
+                    use_extent.width.max(1),
+                    use_extent.height.max(1),
                 )),
                 format: pixel_format,
                 usage: self.preferred_usage.ash_into(),
@@ -260,14 +317,6 @@ impl Surface {
 
             return Ok(());
         }
-
-        let use_extent = if self.caps.current_extent.width == u32::MAX
-            && self.caps.current_extent.height == u32::MAX
-        {
-            self.caps.max_image_extent
-        } else {
-            self.caps.current_extent
-        };
 
         let image_count = match (self.caps.min_image_count, self.caps.max_image_count) {
             (min, 0) => 3.max(min),
@@ -340,7 +389,11 @@ impl Surface {
             Err(err) => unexpected_error(err),
         };
 
-        let pixel_format = self.preferred_format.format.try_ash_into().unwrap();
+        let pixel_format = self
+            .preferred_format
+            .format
+            .try_ash_into()
+            .expect("Only covertible format can be picked");
         let usage = self.preferred_usage.ash_into();
 
         let mut swapchain_images = SmallVec::new();
@@ -393,6 +446,10 @@ impl Surface {
                     next: 0,
                 }),
         }));
+
+        self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
+        self.reconfigure = false;
+
         Ok(())
     }
 
@@ -503,15 +560,35 @@ impl crate::traits::Resource for Surface {}
 
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
+    fn available_formats(&self) -> &[PixelFormat] {
+        &self.pixel_formats
+    }
+
+    fn preferred_format(&mut self, format: PixelFormat) {
+        let format = pick_format(&self.formats, Some(format));
+        if self.preferred_format != format {
+            self.preferred_format = format;
+            self.reconfigure = true;
+        }
+    }
+
+    fn preferred_extent(&mut self, extent: Extent2) {
+        if self.preferred_extent != Some(extent) {
+            self.preferred_extent = Some(extent);
+            self.reconfigure = true;
+        }
+    }
+
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
         self.clear_retired(true)?;
 
-        if let SuboptimalRetire::Retire = self.suboptimal_retire {
-            self.init()?;
+        self.reconfigure_cooldown = self.reconfigure_cooldown.saturating_sub(1);
+        if self.reconfigure && self.reconfigure_cooldown == 0 {
+            self.configure()?;
         }
 
         if self.current.is_none() {
-            self.init()?;
+            self.configure()?;
         }
 
         loop {
@@ -531,15 +608,7 @@ impl crate::traits::Surface for Surface {
                         Ok((idx, false)) => idx,
                         Ok((idx, true)) => {
                             tracing::debug!("Surface '{:?}' is suboptimal", self.surface);
-                            match self.suboptimal_retire {
-                                SuboptimalRetire::Cooldown(0) => {
-                                    self.suboptimal_retire = SuboptimalRetire::Retire;
-                                }
-                                SuboptimalRetire::Cooldown(n) => {
-                                    self.suboptimal_retire = SuboptimalRetire::Cooldown(n - 1);
-                                }
-                                SuboptimalRetire::Retire => {}
-                            }
+                            self.reconfigure = true;
                             idx
                         }
                         Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
@@ -561,7 +630,7 @@ impl crate::traits::Surface for Surface {
                         }
                         Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                             tracing::debug!("Surface '{:?}' is out of date", self.surface);
-                            self.init()?;
+                            self.configure()?;
                             continue;
                         }
                         Err(err) => unexpected_error(err),
@@ -603,10 +672,6 @@ impl crate::traits::Surface for Surface {
                     });
                 }
                 MaybeFakeSwapchain::Fake(fake) => {
-                    if self.suboptimal_retire == SuboptimalRetire::Cooldown(0) {
-                        self.suboptimal_retire = SuboptimalRetire::Retire;
-                    }
-
                     let frame = Frame {
                         swapchain: vk::SwapchainKHR::null(),
                         image: fake.image.clone(),
@@ -664,28 +729,52 @@ impl crate::traits::Frame for Frame {
     }
 }
 
-fn pick_format(formats: &[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR {
-    for &format in formats {
-        if format.format == vk::Format::R8G8B8A8_UNORM {
-            return format;
+fn pick_format(
+    formats: &[vk::SurfaceFormatKHR],
+    pixel_format: Option<PixelFormat>,
+) -> vk::SurfaceFormatKHR {
+    if let Some(pixel_format) = pixel_format.and_then(|f| f.try_into_ash()) {
+        for &format in formats {
+            if format.format == pixel_format {
+                return format;
+            }
         }
     }
-    for &format in formats {
-        if format.format == vk::Format::B8G8R8A8_UNORM {
-            return format;
-        }
-    }
+
     for &format in formats {
         if format.format == vk::Format::B8G8R8A8_SRGB {
             return format;
         }
     }
+
     for &format in formats {
         if format.format == vk::Format::R8G8B8A8_SRGB {
             return format;
         }
     }
-    panic!("Can't pick present mode");
+
+    for &format in formats {
+        if format.format == vk::Format::R8G8B8A8_UNORM {
+            return format;
+        }
+    }
+
+    for &format in formats {
+        if format.format == vk::Format::B8G8R8A8_UNORM {
+            return format;
+        }
+    }
+
+    for &format in formats {
+        if PixelFormat::try_from_ash(format.format).is_some() {
+            return format;
+        }
+    }
+
+    panic!(
+        "No usable format found for surface. Available formats: {:?}",
+        formats
+    );
 }
 
 fn pick_mode(modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
@@ -705,4 +794,23 @@ fn pick_mode(modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
         }
     }
     panic!("Can't pick present mode");
+}
+
+fn dedup_vec<T>(vec: &mut Vec<T>)
+where
+    T: Copy + Eq,
+{
+    let mut i = 0;
+    while i < vec.len() {
+        let elem = vec[i];
+        let mut j = i + 1;
+        while j < vec.len() {
+            if vec[j] == elem {
+                vec.remove(j);
+            } else {
+                j += 1;
+            }
+        }
+        i += 1;
+    }
 }

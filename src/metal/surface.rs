@@ -6,16 +6,22 @@ use core_graphics_types::{
 };
 use objc::{msg_send, runtime::Object, sel, sel_impl};
 
-use crate::generic::{PipelineStages, SurfaceError};
+use crate::{
+    Extent2, PixelFormat,
+    backend::from::{IntoMetal, TryIntoMetal, TryMetalInto},
+    generic::{PipelineStages, SurfaceError},
+};
 
 use super::{Image, Queue};
 
-const SUBOPTIMAL_RETIRE_COOLDOWN: u64 = 10;
+const RECONFIGURE_COOLDOWN: u64 = 10;
 
 pub struct Surface {
     layer: metal::MetalLayer,
     view: *mut objc::runtime::Object,
-    suboptimal_retire_cooldown: u64,
+    preferred_extent: Option<Extent2>,
+    reconfigure_cooldown: u64,
+    reconfigure: bool,
 }
 
 unsafe impl Sync for Surface {}
@@ -44,7 +50,9 @@ impl Surface {
         Surface {
             layer,
             view,
-            suboptimal_retire_cooldown: SUBOPTIMAL_RETIRE_COOLDOWN,
+            preferred_extent: None,
+            reconfigure_cooldown: 0,
+            reconfigure: false,
         }
     }
 }
@@ -69,8 +77,33 @@ unsafe fn view_size(view: *mut Object) -> CGSize {
 
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
+    fn available_formats(&self) -> &[PixelFormat] {
+        supported_formats()
+    }
+
+    fn preferred_format(&mut self, format: PixelFormat) {
+        if supported_formats().contains(&format) {
+            let metal_format = format.expect_into_metal();
+            if self.layer.pixel_format() != metal_format {
+                self.layer.set_pixel_format(metal_format);
+                self.reconfigure = true;
+            }
+        }
+    }
+
+    fn preferred_extent(&mut self, extent: Extent2) {
+        let draw_size = self.layer.drawable_size();
+
+        if draw_size.width != extent.width() as f64 || draw_size.height != extent.height() as f64 {
+            self.reconfigure = true;
+        }
+
+        self.preferred_extent = Some(extent);
+    }
+
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
-        if self.suboptimal_retire_cooldown == 0 {
+        self.reconfigure_cooldown = self.reconfigure_cooldown.saturating_sub(1);
+        if self.reconfigure && self.reconfigure_cooldown == 0 {
             if !self.view.is_null() {
                 unsafe {
                     let draw_size = self.layer.drawable_size();
@@ -85,12 +118,19 @@ impl crate::traits::Surface for Surface {
                             width: size.width * scale,
                             height: size.height * scale,
                         });
-                        self.suboptimal_retire_cooldown = SUBOPTIMAL_RETIRE_COOLDOWN;
+
+                        self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
+                        self.reconfigure = false;
                     }
                 }
+            } else {
+                if let Some(preferred_extent) = self.preferred_extent {
+                    self.layer.set_drawable_size(CGSize {
+                        width: preferred_extent.width() as f64,
+                        height: preferred_extent.height() as f64,
+                    });
+                }
             }
-        } else {
-            self.suboptimal_retire_cooldown -= 1;
         }
 
         let drawable = self
@@ -126,4 +166,12 @@ impl crate::traits::Frame for Frame {
     fn image(&self) -> &Image {
         &self.image
     }
+}
+
+const fn supported_formats() -> &'static [PixelFormat] {
+    &[
+        PixelFormat::Bgra8Unorm,
+        PixelFormat::Bgra8Srgb,
+        PixelFormat::Rgba16Float,
+    ]
 }

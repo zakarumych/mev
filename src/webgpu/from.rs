@@ -1,11 +1,12 @@
 use crate::{
+    ArgumentKind, Blend, BlendDesc, ClearColor, Extent1, PrimitiveTopology, VertexStepMode,
     generic::{
         AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, ComponentSwizzle, Culling,
         Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
         MipMapMode, Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags,
         ShaderStage, ShaderStages, Swizzle, VertexFormat, WriteMask,
     },
-    mat, ArgumentKind, Blend, BlendDesc, ClearColor, Extent1, PrimitiveTopology, VertexStepMode,
+    mat,
 };
 
 macro_rules! from_flags {

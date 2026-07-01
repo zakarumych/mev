@@ -1,6 +1,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(target_arch = "wasm32")]
 use web_time::Instant;
 
@@ -34,6 +36,10 @@ impl ApplicationHandler for TriangleApp {
         match event {
             winit::event::WindowEvent::CloseRequested => {
                 event_loop.exit();
+            }
+            winit::event::WindowEvent::Resized(size) => {
+                let surface = self.surface.as_mut().unwrap();
+                surface.preferred_extent(mev::Extent2::new(size.width, size.height));
             }
             winit::event::WindowEvent::RedrawRequested => {
                 self.render();
@@ -191,12 +197,10 @@ fn main() {
         }
     }
 
-    tracing::subscriber::set_global_default(
-        tracing_subscriber::fmt()
-            .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
-            .finish(), // .with(toaster.tracing_layer()),
-    )
-    .expect("Global subscriber is set only once");
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env())
+        .init();
 
     let instance = mev::Instance::load().expect("Failed to init graphics");
 
