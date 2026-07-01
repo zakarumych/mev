@@ -6,7 +6,7 @@ use hashbrown::HashMap;
 use metal::{CAMetalLayer, NSUInteger, SamplerDescriptor};
 use objc::{
     class, msg_send,
-    runtime::{Object, BOOL, YES},
+    runtime::{BOOL, Object, YES},
     sel, sel_impl,
 };
 
@@ -14,20 +14,20 @@ use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::{
-    generic::{
-        parse_shader, ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc,
-        ImageDesc, ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
-        RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError,
-        TlasDesc, VertexStepMode,
-    },
     Extent3,
+    generic::{
+        ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc,
+        ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, RenderPipelineDesc,
+        SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc, VertexStepMode,
+        parse_shader,
+    },
 };
 
 use super::{
+    Blas, Buffer, ComputePipeline, Image, Library, MAX_VERTEX_BUFFERS, RenderPipeline, Sampler,
+    Surface, Tlas,
     from::{IntoMetal, TryIntoMetal},
     shader::{Bindings, EntryPointData},
-    Blas, Buffer, ComputePipeline, Image, Library, RenderPipeline, Sampler, Surface, Tlas,
-    MAX_VERTEX_BUFFERS,
 };
 
 #[derive(Clone)]
@@ -462,7 +462,7 @@ unsafe fn layer_from_view(view: *mut Object) -> metal::MetalLayer {
 
 #[cfg(target_os = "macos")]
 #[link(name = "QuartzCore", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     #[allow(non_upper_case_globals)]
     static kCAGravityTopLeft: *mut Object;
 }
@@ -507,8 +507,8 @@ fn compile_shader(
                 continue;
             }
 
-            if let naga::AddressSpace::PushConstant = global_variable.space {
-                map.push_constant_buffer = Some(next_buffer_slot);
+            if let naga::AddressSpace::Immediate = global_variable.space {
+                map.immediates_buffer = Some(next_buffer_slot);
                 bindings.set_push_constants(next_buffer_slot);
                 next_buffer_slot += 1;
                 continue;
@@ -516,7 +516,7 @@ fn compile_shader(
 
             if let Some(binding) = global_variable.binding.clone() {
                 match global_variable.space {
-                    naga::AddressSpace::PushConstant => unreachable!(),
+                    naga::AddressSpace::Immediate => unreachable!(),
                     naga::AddressSpace::Uniform => {
                         map.resources.insert(
                             binding.clone(),

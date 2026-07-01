@@ -21,6 +21,8 @@ pub struct Surface {
 unsafe impl Sync for Surface {}
 unsafe impl Send for Surface {}
 
+impl crate::traits::Resource for Surface {}
+
 impl Drop for Surface {
     fn drop(&mut self) {
         if !self.view.is_null() {
@@ -108,6 +110,8 @@ pub struct Frame {
     image: Image,
     drawable: Option<metal::MetalDrawable>,
 }
+
+impl crate::traits::Resource for Frame {}
 
 impl Frame {
     #[inline]
