@@ -46,7 +46,7 @@ wgpu.workspace = true
 
 [dev-dependencies]
 winit = "0.30.12"
-tracing-subscriber = "0.3.23"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 js-sys = { workspace = true }

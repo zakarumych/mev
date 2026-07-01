@@ -133,6 +133,11 @@ impl Instance {
             },
         )?;
 
+        tracing::debug!(
+            "Available Instance extensions:\n{}",
+            ExtensionNames(&extensions)
+        );
+
         // Enable layers and instance extensions.
 
         let mut enabled_extension_names = Vec::new();
@@ -253,6 +258,8 @@ impl Instance {
             patch: vk::api_version_patch(api_version),
         };
 
+        tracing::debug!("Vulkan API version: {version:?}");
+
         let mut has_physical_device_properties2 = false;
         if version < Version::V1_1 {
             if let Some(extension) =
@@ -263,6 +270,11 @@ impl Instance {
                     .push(extension_name!("VK_KHR_get_physical_device_properties2"));
             }
         }
+
+        tracing::debug!(
+            "Enabled Instance extensions:\n{}",
+            ExtensionNames(&enabled_extension_names)
+        );
 
         // Create the Vulkan instance.
 
@@ -375,6 +387,11 @@ impl Instance {
                 vk::Result::ERROR_LAYER_NOT_PRESENT => unreachable!("No layer specified"),
                 err => unexpected_error(err),
             })?;
+
+            tracing::debug!(
+                "Available Device {device:?} extensions:\n{}",
+                ExtensionNames(&extensions)
+            );
 
             let mut features = vk::PhysicalDeviceFeatures2::default();
             let mut features11 = vk::PhysicalDeviceVulkan11Features::default();
@@ -683,6 +700,11 @@ impl crate::traits::Instance for Instance {
             }
         }
 
+        tracing::debug!(
+            "Enabled Device {physical_device:?} extensions:\n{}",
+            ExtensionNames(&enabled_extension_names)
+        );
+
         let result = unsafe { self.instance.create_device(physical_device, &info, None) };
 
         let device = result.map_err(|err| match err {
@@ -853,4 +875,28 @@ pub fn memory_properties_from_ash(
         result |= gpu_alloc::MemoryPropertyFlags::LAZILY_ALLOCATED;
     }
     result
+}
+
+struct ExtensionNames<T>(T);
+
+impl fmt::Display for ExtensionNames<&Vec<*const std::ffi::c_char>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for name in self.0 {
+            let cstr = unsafe { CStr::from_ptr(*name) };
+            let str = cstr.to_str().unwrap_or("<Non-UTF8>");
+            writeln!(f, "{}", str)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Display for ExtensionNames<&Vec<vk::ExtensionProperties>> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for prop in self.0 {
+            let cstr = unsafe { CStr::from_ptr(prop.extension_name.as_ptr()) };
+            let str = cstr.to_str().unwrap_or("<Non-UTF8>");
+            writeln!(f, "{}", str)?;
+        }
+        Ok(())
+    }
 }
