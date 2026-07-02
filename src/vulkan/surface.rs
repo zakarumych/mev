@@ -328,26 +328,34 @@ impl Surface {
         let old = self.current.take();
 
         let result = unsafe {
-            self.device.swapchain().create_swapchain(
-                &vk::SwapchainCreateInfoKHR::default()
-                    .surface(self.surface)
-                    .min_image_count(image_count)
-                    .image_format(self.preferred_format.format)
-                    .image_color_space(self.preferred_format.color_space)
-                    .image_extent(use_extent)
-                    .image_array_layers(1)
-                    .image_usage(self.caps.supported_usage_flags & self.preferred_usage)
-                    .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .present_mode(self.preferred_mode)
-                    .clipped(true)
-                    .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-                    .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
-                    .old_swapchain(match old {
-                        Some(MaybeFakeSwapchain::Real(ref swapchain)) => swapchain.handle,
-                        _ => vk::SwapchainKHR::null(),
-                    }),
-                None,
-            )
+            let mut info = vk::SwapchainCreateInfoKHR::default();
+            let mut present_modes_info = vk::SwapchainPresentModesCreateInfoEXT::default();
+            let modes = [self.preferred_mode];
+
+            if self.device.swapchain_maintenance1().is_some() {
+                present_modes_info = present_modes_info.present_modes(&modes);
+                info = info.push_next(&mut present_modes_info)
+            }
+
+            info = info
+                .surface(self.surface)
+                .min_image_count(image_count)
+                .image_format(self.preferred_format.format)
+                .image_color_space(self.preferred_format.color_space)
+                .image_extent(use_extent)
+                .image_array_layers(1)
+                .image_usage(self.caps.supported_usage_flags & self.preferred_usage)
+                .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .present_mode(self.preferred_mode)
+                .clipped(true)
+                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+                .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+                .old_swapchain(match old {
+                    Some(MaybeFakeSwapchain::Real(ref swapchain)) => swapchain.handle,
+                    _ => vk::SwapchainKHR::null(),
+                });
+
+            self.device.swapchain().create_swapchain(&info, None)
         };
 
         // Old swapchain is retired even if the creation of the new one fails.
@@ -750,18 +758,6 @@ fn pick_format(
     }
 
     for &format in formats {
-        if format.format == vk::Format::B8G8R8A8_SRGB {
-            return format;
-        }
-    }
-
-    for &format in formats {
-        if format.format == vk::Format::R8G8B8A8_SRGB {
-            return format;
-        }
-    }
-
-    for &format in formats {
         if format.format == vk::Format::R8G8B8A8_UNORM {
             return format;
         }
@@ -769,6 +765,18 @@ fn pick_format(
 
     for &format in formats {
         if format.format == vk::Format::B8G8R8A8_UNORM {
+            return format;
+        }
+    }
+
+    for &format in formats {
+        if format.format == vk::Format::B8G8R8A8_SRGB {
+            return format;
+        }
+    }
+
+    for &format in formats {
+        if format.format == vk::Format::R8G8B8A8_SRGB {
             return format;
         }
     }

@@ -162,6 +162,10 @@ impl TriangleApp {
         {
             let mut copy = encoder.copy();
 
+            copy.barrier(
+                mev::PipelineStages::VERTEX_SHADER,
+                mev::PipelineStages::TRANSFER,
+            );
             copy.write_buffer(
                 &self.pc,
                 &TriangleConstants {
@@ -170,7 +174,6 @@ impl TriangleApp {
                     height: target_extent.height(),
                 },
             );
-
             copy.barrier(
                 mev::PipelineStages::TRANSFER,
                 mev::PipelineStages::VERTEX_SHADER,

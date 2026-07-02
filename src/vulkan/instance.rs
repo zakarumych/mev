@@ -245,10 +245,14 @@ impl Instance {
         }
 
         if has_surface {
-            if unsafe { has_extension(&extensions, "VK_KHR_surface_maintenance1") } {
-                enabled_extension_names.push(extension_name!("VK_KHR_surface_maintenance1"));
-            } else if unsafe { has_extension(&extensions, "VK_EXT_surface_maintenance1") } {
-                enabled_extension_names.push(extension_name!("VK_EXT_surface_maintenance1"));
+            if unsafe { has_extension(&extensions, "VK_KHR_get_surface_capabilities2") } {
+                enabled_extension_names.push(extension_name!("VK_KHR_get_surface_capabilities2"));
+
+                if unsafe { has_extension(&extensions, "VK_KHR_surface_maintenance1") } {
+                    enabled_extension_names.push(extension_name!("VK_KHR_surface_maintenance1"));
+                } else if unsafe { has_extension(&extensions, "VK_EXT_surface_maintenance1") } {
+                    enabled_extension_names.push(extension_name!("VK_EXT_surface_maintenance1"));
+                }
             }
         }
 
@@ -748,7 +752,6 @@ impl crate::traits::Instance for Instance {
             .queue_create_infos(&queue_create_infos);
 
         if self.version >= Version::V1_1 || self.get_physical_device_properties2.is_some() {
-            dbg!(&features);
             info = info.push_next(&mut features);
         } else {
             info.p_enabled_features = &features.features;

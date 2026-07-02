@@ -16,7 +16,7 @@ use super::{
 ///
 /// The number is chosen to minimize waiting (ideally epoch would be already complete when it's recycled)
 /// and to minimize memory usage (epoch contains resources that are not released until it's complete).
-const MAX_EPOCHS: usize = 3;
+const MAX_EPOCHS: usize = 2;
 
 /// Maximum number of command pools to keep in queue.
 /// When new command buffer is needed it will allocate from the oldest used pool if it was reset.
