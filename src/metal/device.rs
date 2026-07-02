@@ -13,14 +13,11 @@ use objc::{
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
-use crate::{
-    Extent3,
-    generic::{
-        ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc,
-        ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, RenderPipelineDesc,
-        SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc, VertexStepMode,
-        parse_shader,
-    },
+use crate::generic::{
+    ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, Extent3, ImageDesc,
+    ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, RenderPipelineDesc,
+    SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc, VertexStepMode,
+    parse_shader,
 };
 
 use super::{

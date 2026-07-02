@@ -17,16 +17,30 @@ struct TriangleArguments {
 }
 
 struct TriangleApp {
+    start: Instant,
+    last_format: Option<mev::PixelFormat>,
+    pc: mev::Buffer,
+    pipeline: Option<mev::RenderPipeline>,
+    surface: Option<mev::Surface>,
     queue: mev::Queue,
     window: Option<winit::window::Window>,
-    surface: Option<mev::Surface>,
-    last_format: Option<mev::PixelFormat>,
-    pipeline: Option<mev::RenderPipeline>,
-    pc: mev::Buffer,
-    start: Instant,
 }
 
 impl ApplicationHandler for TriangleApp {
+    fn suspended(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.queue.wait_idle().unwrap();
+        self.pipeline = None;
+        self.surface = None;
+        self.window = None;
+    }
+
+    fn exiting(&mut self, _event_loop: &winit::event_loop::ActiveEventLoop) {
+        self.queue.wait_idle().unwrap();
+        self.pipeline = None;
+        self.surface = None;
+        self.window = None;
+    }
+
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -156,6 +170,11 @@ impl TriangleApp {
                     height: target_extent.height(),
                 },
             );
+
+            copy.barrier(
+                mev::PipelineStages::TRANSFER,
+                mev::PipelineStages::VERTEX_SHADER,
+            );
         }
         {
             let mut render = encoder.render(mev::RenderPassDesc {
@@ -178,7 +197,7 @@ impl TriangleApp {
             render.draw(0..3, 0..1);
         }
 
-        encoder.present(frame, mev::PipelineStages::FRAGMENT_SHADER);
+        encoder.present(frame, mev::PipelineStages::COLOR_OUTPUT);
         let cbuf = encoder.finish();
 
         self.window.as_ref().unwrap().pre_present_notify();
