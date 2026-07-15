@@ -1,10 +1,11 @@
 use std::{marker::PhantomData, ops::Range, sync::Arc};
 
 use metal::{NSRange, NSUInteger};
-use objc::{msg_send, Message};
+use objc::{Message, msg_send};
 use smallvec::SmallVec;
 
 use crate::{
+    AutoDeviceRepr,
     generic::{
         AccelerationStructureBuildFlags, AccelerationStructurePerformance, Arguments,
         AsBufferSlice, BlasBuildDesc, BlasGeometryDesc, ClearColor, ClearDepthStencil, DeviceRepr,
@@ -15,7 +16,7 @@ use crate::{
 };
 
 use super::{
-    from::TryIntoMetal, shader::Bindings, Blas, Buffer, Frame, Image, RenderPipeline, Tlas,
+    Blas, Buffer, Frame, Image, RenderPipeline, Tlas, from::TryIntoMetal, shader::Bindings,
 };
 
 pub struct CommandBuffer {
@@ -355,13 +356,13 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline(always)]
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
-        self.write_buffer_slice(slice, bytemuck::bytes_of(data))
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr) {
+        self.write_buffer_raw(slice, bytemuck::bytes_of(&data.as_repr()))
     }
 
     /// Writes data to the buffer.
     #[inline(always)]
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
 
@@ -703,7 +704,7 @@ impl crate::traits::AccelerationStructureCommandEncoder
     fn build_blas(&mut self, blas: &Blas, desc: BlasBuildDesc, scratch: impl AsBufferSlice) {
         use objc::{
             class, msg_send,
-            runtime::{Object, BOOL, YES},
+            runtime::{BOOL, Object, YES},
             sel, sel_impl,
         };
 

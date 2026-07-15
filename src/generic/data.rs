@@ -1,7 +1,8 @@
 use std::{
-    any::{type_name, TypeId},
+    any::{TypeId, type_name},
     fmt::Debug,
-    mem::{align_of, size_of, transmute, transmute_copy, MaybeUninit},
+    mem::{MaybeUninit, align_of, size_of, transmute, transmute_copy},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign},
     ptr::copy_nonoverlapping,
 };
 
@@ -25,21 +26,36 @@ pub trait DeviceRepr: Sized + 'static {
     /// Construct a `Self::Repr` from `&self`.
     fn as_repr(&self) -> Self::Repr;
 
-    #[inline(always)]
-    #[cold]
-    fn make_array_repr(&self) -> Self::ArrayRepr {
-        unimplemented!("<{} as DeviceRepr>::make_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`", type_name::<Self>());
-    }
+    // /// Copy data from `Self::Repr` to `&mut self`.
+    // fn copy_from_repr(&mut self, repr: &Self::Repr);
 
     /// Construct a `Self::ArrayRepr` from `&self`.
     #[inline(always)]
     fn as_array_repr(&self) -> Self::ArrayRepr {
-        if size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() {
+        if const { size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() } {
             // Safety: transmuting between POD types with same size is safe.
             unsafe { bytemuck::cast(self.as_repr()) }
+        } else {
+            unimplemented!(
+                "<{} as DeviceRepr>::as_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`",
+                type_name::<Self>()
+            );
         }
-        self.make_array_repr()
     }
+
+    // /// Copy data from `Self::ArrayRepr` to `&mut self`.
+    // fn copy_from_array_repr(&mut self, repr: &Self::ArrayRepr) {
+    //     if const { size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() } {
+    //         // Safety: transmuting between POD types with same size is safe.
+    //         let repr: &Self::Repr = unsafe { bytemuck::cast_ref(repr) };
+    //         self.copy_from_repr(repr);
+    //     } else {
+    //         unimplemented!(
+    //             "<{} as DeviceRepr>::copy_from_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`",
+    //             type_name::<Self>()
+    //         );
+    //     }
+    // }
 
     /// Return byte representation of `Repr`.
     #[inline(always)]
@@ -54,7 +70,7 @@ pub trait DeviceRepr: Sized + 'static {
     }
 
     /// Alignment of repr type.
-    const ALIGN: usize;
+    const ALIGN: usize = align_of::<Self::Repr>();
 
     /// Size of repr type.
     const SIZE: usize = size_of::<Self::Repr>();
@@ -110,6 +126,12 @@ where
 
         array_as_repr_slow(self)
     }
+
+    // fn copy_from_repr(&mut self, repr: &[T::ArrayRepr; N]) {
+    //     for idx in 0..N {
+    //         self[idx].copy_from_array_repr(&repr[idx]);
+    //     }
+    // }
 
     #[inline(always)]
     fn as_array_repr(&self) -> [T::ArrayRepr; N] {
@@ -462,6 +484,7 @@ where
 
 /// Matrix data type.
 /// Element type should be `Scalar`, then it can be used as device data type.
+/// `N` is the number of columns and `M` is the number of rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[allow(non_camel_case_types)]
 pub struct mat<T, const N: usize, const M: usize>(pub [vec<T, M>; N]);
@@ -751,7 +774,7 @@ where
     }
 
     #[inline(always)]
-    fn make_array_repr(&self) -> vec4<T::ScalarRepr> {
+    fn as_array_repr(&self) -> vec4<T::ScalarRepr> {
         let [a, b, c] = self.0.as_repr();
         vec([a, b, c, Zeroable::zeroed()])
     }
@@ -1058,3 +1081,155 @@ pub type dmat4x3 = mat4x3<f64>;
 /// Square double precision floating point matrix type of four columns and four rows.
 #[allow(non_camel_case_types)]
 pub type dmat4x4 = mat4x4<f64>;
+
+impl<T, const N: usize> Add for vec<T, N>
+where
+    T: Add<Output = T> + Copy,
+{
+    type Output = vec<T, N>;
+
+    #[inline(always)]
+    fn add(self, rhs: Self) -> vec<T, N> {
+        let mut result = self;
+        for i in 0..N {
+            result.0[i] = result.0[i] + rhs.0[i];
+        }
+        result
+    }
+}
+
+impl<T, const N: usize> AddAssign for vec<T, N>
+where
+    T: AddAssign + Copy,
+{
+    #[inline(always)]
+    fn add_assign(&mut self, rhs: vec<T, N>) {
+        for i in 0..N {
+            self.0[i] += rhs.0[i];
+        }
+    }
+}
+
+impl<T, const N: usize> Sub for vec<T, N>
+where
+    T: Sub<Output = T> + Copy,
+{
+    type Output = vec<T, N>;
+
+    #[inline(always)]
+    fn sub(self, rhs: Self) -> vec<T, N> {
+        let mut result = self;
+        for i in 0..N {
+            result.0[i] = result.0[i] - rhs.0[i];
+        }
+        result
+    }
+}
+
+impl<T, const N: usize> SubAssign for vec<T, N>
+where
+    T: SubAssign + Copy,
+{
+    #[inline(always)]
+    fn sub_assign(&mut self, rhs: vec<T, N>) {
+        for i in 0..N {
+            self.0[i] -= rhs.0[i];
+        }
+    }
+}
+
+impl<T, const N: usize> Mul for vec<T, N>
+where
+    T: Mul<Output = T> + Copy,
+{
+    type Output = vec<T, N>;
+
+    #[inline(always)]
+    fn mul(self, rhs: Self) -> vec<T, N> {
+        let mut result = self;
+        for i in 0..N {
+            result.0[i] = result.0[i] * rhs.0[i];
+        }
+        result
+    }
+}
+
+impl<T, const N: usize> MulAssign for vec<T, N>
+where
+    T: MulAssign + Copy,
+{
+    #[inline(always)]
+    fn mul_assign(&mut self, rhs: vec<T, N>) {
+        for i in 0..N {
+            self.0[i] *= rhs.0[i];
+        }
+    }
+}
+
+impl<T, const N: usize> Div for vec<T, N>
+where
+    T: Div<Output = T> + Copy,
+{
+    type Output = vec<T, N>;
+
+    #[inline(always)]
+    fn div(self, rhs: Self) -> vec<T, N> {
+        let mut result = self;
+        for i in 0..N {
+            result.0[i] = result.0[i] / rhs.0[i];
+        }
+        result
+    }
+}
+
+impl<T, const N: usize> DivAssign for vec<T, N>
+where
+    T: DivAssign + Copy,
+{
+    #[inline(always)]
+    fn div_assign(&mut self, rhs: vec<T, N>) {
+        for i in 0..N {
+            self.0[i] /= rhs.0[i];
+        }
+    }
+}
+
+// mat4x3 x vec4 = vec3
+impl<T, const N: usize, const M: usize> Mul<vec<T, N>> for mat<T, N, M>
+where
+    T: Add<Output = T> + Mul<Output = T> + Copy + Zero,
+{
+    type Output = vec<T, M>;
+
+    #[inline(always)]
+    fn mul(self, rhs: vec<T, N>) -> vec<T, M> {
+        let mut result: vec<T, M> = vec::ZERO;
+        for m in 0..M {
+            for n in 0..N {
+                result.0[m] = result.0[m] + self.0[n].0[m] * rhs.0[n];
+            }
+        }
+        result
+    }
+}
+
+// mat4x3 x vec4 = vec3
+impl<T, const N: usize, const M: usize, const K: usize> Mul<mat<T, K, N>> for mat<T, N, M>
+where
+    T: Add<Output = T> + Mul<Output = T> + Copy + Zero,
+{
+    type Output = mat<T, K, M>;
+
+    #[inline(always)]
+    fn mul(self, rhs: mat<T, K, N>) -> mat<T, K, M> {
+        let mut result: mat<T, K, M> = mat::ZERO;
+        for m in 0..M {
+            for n in 0..N {
+                for k in 0..K {
+                    result.0[k].0[m] = result.0[k].0[m] + self.0[n].0[m] * rhs.0[k].0[n];
+                }
+            }
+        }
+        result
+    }
+}

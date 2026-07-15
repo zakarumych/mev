@@ -4,15 +4,19 @@ use ash::vk;
 use ash::vk::Handle;
 use smallvec::SmallVec;
 
-use crate::generic::{
-    Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent2,
-    Extent3, LoadOp, Offset2, Offset3, PipelineStages, RenderPassDesc, StoreOp, TlasBuildDesc,
+use crate::{
+    AutoDeviceRepr,
+    generic::{
+        Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr,
+        Extent2, Extent3, LoadOp, Offset2, Offset3, PipelineStages, RenderPassDesc, StoreOp,
+        TlasBuildDesc,
+    },
 };
 
 use super::{
+    Blas, Buffer, ComputePipeline, Device, Frame, Image, RenderPipeline, Tlas,
     access::access_for_stages, format_aspect, from::IntoAsh, handle_host_oom,
-    layout::PipelineLayout, refs::Refs, unexpected_error, Blas, Buffer, ComputePipeline, Device,
-    Frame, Image, RenderPipeline, Tlas,
+    layout::PipelineLayout, refs::Refs, unexpected_error,
 };
 
 pub struct CommandBuffer {
@@ -845,13 +849,13 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline]
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
-        self.write_buffer_slice(slice, bytemuck::bytes_of(data))
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr) {
+        self.write_buffer_slice(slice, bytemuck::bytes_of(&data.as_repr()))
     }
 
     /// Writes data to the buffer.
     #[inline]
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
 }

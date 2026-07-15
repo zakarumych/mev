@@ -8,7 +8,7 @@ use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
-    BufferMappedRange, BufferMappedRangeMut,
+    AutoDeviceRepr, BufferMappedRange, BufferMappedRangeMut,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
         Capabilities, ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3,
@@ -255,10 +255,10 @@ pub trait CopyCommandEncoder: SyncCommandEncoder {
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]);
 
     /// Writes data to the buffer.
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod);
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr);
 
     /// Writes data to the buffer.
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]);
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]);
 
     /// Copies bytes from src buffer to dst buffer.
     fn copy_buffer_to_buffer(

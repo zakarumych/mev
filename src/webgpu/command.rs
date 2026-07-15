@@ -4,6 +4,7 @@ use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
+    AutoDeviceRepr,
     backend::from::IntoWgpu,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr,
@@ -13,13 +14,13 @@ use crate::{
 };
 
 use super::{
+    Device,
     acst::{Blas, Tlas},
     buffer::Buffer,
     compute::ComputePipeline,
     image::{Image, ImageInner},
     render::RenderPipeline,
     surface::Frame,
-    Device,
 };
 
 pub struct CommandBuffer {
@@ -236,11 +237,11 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::Pod) {
-        self.write_buffer_raw(slice, bytemuck::bytes_of(data));
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr) {
+        self.write_buffer_raw(slice, bytemuck::bytes_of(&data.as_repr()));
     }
 
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::Pod]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data));
     }
 
