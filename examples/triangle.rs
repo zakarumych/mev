@@ -128,7 +128,7 @@ impl TriangleApp {
                     primitive_topology: mev::PrimitiveTopology::Triangle,
                     raster: Some(mev::RasterDesc {
                         fragment_shader: Some(mev::Shader {
-                            library: library,
+                            library,
                             entry: "fs_main".into(),
                         }),
                         color_targets: vec![mev::ColorTargetDesc {
