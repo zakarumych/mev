@@ -1,8 +1,8 @@
 use std::{convert::Infallible, fmt};
 
 use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
-    QueueFlags,
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
+    Features, QueueFlags,
 };
 
 use super::{Device, Queue};
@@ -19,31 +19,39 @@ impl Instance {
     {
         let devices = metal::Device::all();
 
-        let mut features = vec![Features::empty(); devices.len()];
-
-        // Any device can be used to create surfaces, so we can always enable this feature.
-        for feature in &mut features {
-            *feature |= Features::SURFACE;
-        }
-
-        for (device, feature) in devices.iter().zip(features.iter_mut()) {
-            if device.supports_BC_texture_compression() {
-                *feature |= Features::TEXTURE_COMPRESSION_BC;
-            }
-        }
-
         let capabilities = Capabilities {
             devices: devices
                 .iter()
-                .zip(features.iter())
-                .map(|(device, &features)| DeviceCapabilities {
-                    features,
-                    families: vec![FamilyCapabilities {
-                        queue_flags: QueueFlags::GRAPHICS
-                            | QueueFlags::COMPUTE
-                            | QueueFlags::TRANSFER,
-                        queue_count: 32,
-                    }],
+                .map(|device| {
+                    let mut features = Features::empty();
+
+                    if !device.is_headless() {
+                        features |= Features::SURFACE;
+                    }
+
+                    if device.supports_BC_texture_compression() {
+                        features |= Features::TEXTURE_COMPRESSION_BC;
+                    }
+
+                    let device_type = if device.is_low_power() {
+                        DeviceType::IntegratedGpu
+                    } else {
+                        DeviceType::DiscreteGpu
+                    };
+
+                    let name = device.name().to_owned();
+
+                    DeviceCapabilities {
+                        name,
+                        device_type,
+                        features,
+                        families: vec![FamilyCapabilities {
+                            queue_flags: QueueFlags::GRAPHICS
+                                | QueueFlags::COMPUTE
+                                | QueueFlags::TRANSFER,
+                            queue_count: 32,
+                        }],
+                    }
                 })
                 .collect(),
         };

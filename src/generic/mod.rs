@@ -40,7 +40,7 @@ pub use self::{
     feature::Features,
     format::{PixelFormat, VertexFormat},
     image::{ComponentSwizzle, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
-    instance::{Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities},
+    instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
     queue::QueueFlags,
     render::{
         AttachmentDesc, Blend, BlendDesc, BlendFactor, BlendOp, ClearColor, ClearDepthStencil,

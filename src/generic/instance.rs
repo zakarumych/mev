@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{feature::Features, queue::QueueFlags, OutOfMemory, SurfaceError};
+use super::{OutOfMemory, SurfaceError, feature::Features, queue::QueueFlags};
 
 /// Capabilities of a queue family of specific device.
 #[derive(Clone, Debug)]
@@ -12,9 +12,33 @@ pub struct FamilyCapabilities {
     pub queue_count: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DeviceType {
+    /// Unknown device type.
+    Unknown = 0,
+
+    /// Integrated GPU device type.
+    IntegratedGpu = 1,
+
+    /// Discrete GPU device type.
+    DiscreteGpu = 2,
+
+    /// Virtual GPU device type.
+    VirtualGpu = 3,
+
+    /// CPU device type.
+    Cpu = 4,
+}
+
 /// Capabilities of the specific device.
 #[derive(Clone, Debug)]
 pub struct DeviceCapabilities {
+    /// Name of the device.
+    pub name: String,
+
+    /// Performance profile of the device.
+    pub device_type: DeviceType,
+
     /// List of features that are supported by the device.
     pub features: Features,
 

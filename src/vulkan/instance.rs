@@ -10,7 +10,7 @@ use ash::*;
 use hashbrown::HashMap;
 
 use crate::{
-    DeviceError,
+    DeviceError, DeviceType,
     generic::{
         Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, OutOfMemory,
     },
@@ -533,9 +533,24 @@ impl Instance {
                     .collect()
             };
 
-            filtered_device.push(device);
+            let device_type = match properties.properties.device_type {
+                vk::PhysicalDeviceType::DISCRETE_GPU => DeviceType::DiscreteGpu,
+                vk::PhysicalDeviceType::INTEGRATED_GPU => DeviceType::IntegratedGpu,
+                vk::PhysicalDeviceType::VIRTUAL_GPU => DeviceType::VirtualGpu,
+                vk::PhysicalDeviceType::CPU => DeviceType::Cpu,
+                _ => DeviceType::Unknown,
+            };
+
+            let device_power = filtered_device.push(device);
+
+            let name = match properties.properties.device_name_as_c_str() {
+                Ok(name) => name.to_str().unwrap_or("Unknown Device").to_owned(),
+                Err(_) => "Unknown Device".to_owned(),
+            };
 
             device_caps.push(DeviceCapabilities {
+                name,
+                device_type,
                 features: mev_features,
                 families,
             });

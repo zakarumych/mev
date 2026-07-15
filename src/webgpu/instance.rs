@@ -1,15 +1,20 @@
 use std::{fmt, rc::Rc};
 
-use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
-    QueueFlags,
+use wgpu::MemoryHints::Performance;
+
+use crate::{
+    DeviceType,
+    generic::{
+        Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
+        QueueFlags,
+    },
 };
 
 use super::{Device, Queue};
 
 pub struct Instance {
     instance: Rc<wgpu::Instance>,
-    adapter: wgpu::Adapter,
+    adapters: Vec<wgpu::Adapter>,
     capabilities: Capabilities,
 }
 
@@ -23,31 +28,47 @@ impl Instance {
             display: None,
         });
 
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|err| {
-                tracing::error!("Failed to request adapter: {err:?}");
-                DeviceError::DeviceLost
-            })?;
+        let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
 
         let capabilities = Capabilities {
-            devices: vec![DeviceCapabilities {
-                features: Features::empty(),
-                families: vec![FamilyCapabilities {
-                    queue_flags: QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER,
-                    queue_count: 1,
-                }],
-            }],
+            devices: adapters
+                .iter()
+                .map(|adapter| {
+                    let mut features = Features::SURFACE;
+
+                    if adapter
+                        .features()
+                        .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+                    {
+                        features |= Features::TEXTURE_COMPRESSION_BC;
+                    }
+
+                    let device_type = match adapter.get_info().device_type {
+                        wgpu::DeviceType::IntegratedGpu => DeviceType::IntegratedGpu,
+                        wgpu::DeviceType::DiscreteGpu => DeviceType::DiscreteGpu,
+                        wgpu::DeviceType::VirtualGpu => DeviceType::VirtualGpu,
+                        wgpu::DeviceType::Cpu => DeviceType::Cpu,
+                        _ => DeviceType::Unknown,
+                    };
+
+                    DeviceCapabilities {
+                        name: adapter.get_info().name.clone(),
+                        device_type,
+                        features,
+                        families: vec![FamilyCapabilities {
+                            queue_flags: QueueFlags::GRAPHICS
+                                | QueueFlags::COMPUTE
+                                | QueueFlags::TRANSFER,
+                            queue_count: 1,
+                        }],
+                    }
+                })
+                .collect(),
         };
 
         Ok(Instance {
             instance: Rc::new(instance),
-            adapter,
+            adapters,
             capabilities,
         })
     }
@@ -68,8 +89,8 @@ impl Instance {
         self.instance.clone()
     }
 
-    pub(super) fn wgpu_adapter(&self) -> &wgpu::Adapter {
-        &self.adapter
+    pub(super) fn wgpu_adapters(&self) -> &[wgpu::Adapter] {
+        &self.adapters
     }
 }
 
@@ -95,8 +116,15 @@ impl crate::traits::Instance for Instance {
             "Only one queue is supported for now"
         );
 
-        let available_features = self.adapter.features();
-        let available_limits = self.adapter.limits();
+        assert!(
+            info.idx < self.capabilities.devices.len(),
+            "Device index out of bounds"
+        );
+
+        let adapter = &self.adapters[info.idx];
+
+        let available_features = adapter.features();
+        let available_limits = adapter.limits();
 
         let mut required_features = wgpu::Features::empty();
 
@@ -114,8 +142,7 @@ impl crate::traits::Instance for Instance {
             required_features |= wgpu::Features::TEXTURE_COMPRESSION_BC;
         }
 
-        let (wgpu_device, wgpu_queue) = self
-            .adapter
+        let (wgpu_device, wgpu_queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features,
@@ -129,7 +156,7 @@ impl crate::traits::Instance for Instance {
                 DeviceError::DeviceLost
             })?;
 
-        let device = Device::new(wgpu_device, self.instance.clone(), self.adapter.clone());
+        let device = Device::new(wgpu_device, self.instance.clone(), adapter.clone());
 
         let queue_count = info.queues.len().max(1);
         let queues = (0..queue_count)
@@ -142,7 +169,9 @@ impl crate::traits::Instance for Instance {
     fn new_device(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
         #[cfg(target_arch = "wasm32")]
         {
-            panic!("Synchronous device creation is not supported on wasm32. Use `new_device_async` instead.");
+            panic!(
+                "Synchronous device creation is not supported on wasm32. Use `new_device_async` instead."
+            );
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
