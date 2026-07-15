@@ -8,6 +8,7 @@ use crate::generic::{
 use super::{Device, Queue};
 
 pub struct Instance {
+    devices: Vec<metal::Device>,
     capabilities: Capabilities,
 }
 
@@ -16,18 +17,40 @@ impl Instance {
     where
         Self: Sized,
     {
-        Ok(Instance {
-            capabilities: Capabilities {
-                devices: vec![DeviceCapabilities {
-                    features: Features::empty(),
+        let devices = metal::Device::all();
+
+        let mut features = vec![Features::empty(); devices.len()];
+
+        // Any device can be used to create surfaces, so we can always enable this feature.
+        for feature in &mut features {
+            *feature |= Features::SURFACE;
+        }
+
+        for (device, feature) in devices.iter().zip(features.iter_mut()) {
+            if device.supports_BC_texture_compression() {
+                *feature |= Features::TEXTURE_COMPRESSION_BC;
+            }
+        }
+
+        let capabilities = Capabilities {
+            devices: devices
+                .iter()
+                .zip(features.iter())
+                .map(|(device, &features)| DeviceCapabilities {
+                    features,
                     families: vec![FamilyCapabilities {
                         queue_flags: QueueFlags::GRAPHICS
                             | QueueFlags::COMPUTE
                             | QueueFlags::TRANSFER,
                         queue_count: 32,
                     }],
-                }],
-            },
+                })
+                .collect(),
+        };
+
+        Ok(Instance {
+            devices,
+            capabilities,
         })
     }
 }
@@ -53,9 +76,12 @@ impl crate::traits::Instance for Instance {
             "Only one queue family is supported"
         );
 
-        let device = metal::Device::system_default().ok_or(DeviceError::DeviceLost)?;
+        assert!(
+            info.idx < self.capabilities.devices.len(),
+            "Device index out of bounds"
+        );
 
-        let device = Device::new(device, info.queues.len());
+        let device = Device::new(self.devices[info.idx].clone(), info.queues.len());
 
         let queues = (0..info.queues.len())
             .map(|_| Queue::new(device.clone(), device.metal().new_command_queue()))
