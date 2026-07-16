@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::MTLComputePipelineState;
+
 use super::shader::Bindings;
 
 #[derive(Clone)]
 pub struct ComputePipeline {
-    state: metal::ComputePipelineState,
+    state: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
     bindings: Option<Arc<Bindings>>,
     workgroup_size: Option<[u32; 3]>,
 }
@@ -15,7 +18,7 @@ unsafe impl Sync for ComputePipeline {}
 impl ComputePipeline {
     #[inline(always)]
     pub(super) fn new(
-        state: metal::ComputePipelineState,
+        state: Retained<ProtocolObject<dyn MTLComputePipelineState>>,
         bindings: Option<Arc<Bindings>>,
         workgroup_size: Option<[u32; 3]>,
     ) -> Self {
@@ -27,7 +30,7 @@ impl ComputePipeline {
     }
 
     #[inline(always)]
-    pub(super) fn metal(&self) -> &metal::ComputePipelineState {
+    pub(super) fn metal(&self) -> &ProtocolObject<dyn MTLComputePipelineState> {
         &self.state
     }
 

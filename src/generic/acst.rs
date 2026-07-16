@@ -53,7 +53,7 @@ bitflags::bitflags! {
 }
 
 /// Description of a bottom-level acceleration structure triangle-based geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlasTriangles<'a> {
     /// Flag to indicate if geometry is opaque.
     /// If true, tracing will stop on hit to this geometry.
@@ -80,7 +80,7 @@ pub struct BlasTriangles<'a> {
 }
 
 /// Description of a bottom-level acceleration structure axis-aligned bounding box-based geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlasAABBs<'a> {
     /// Flag to indicate if geometry is opaque.
     pub opaque: bool,
@@ -93,7 +93,7 @@ pub struct BlasAABBs<'a> {
 }
 
 /// Description of a bottom-level acceleration structure geometry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BlasGeometryDesc<'a> {
     /// Triangle-based geometry.
     Triangles(BlasTriangles<'a>),

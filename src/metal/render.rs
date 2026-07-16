@@ -1,11 +1,14 @@
 use std::{fmt, sync::Arc};
 
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{MTLPrimitiveType, MTLRenderPipelineState};
+
 use super::shader::Bindings;
 
 #[derive(Clone)]
 pub struct RenderPipeline {
-    state: metal::RenderPipelineState,
-    primitive: metal::MTLPrimitiveType,
+    state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+    primitive: MTLPrimitiveType,
     vertex_bindings: Option<Arc<Bindings>>,
     fragment_bindings: Option<Arc<Bindings>>,
     vertex_buffers_count: u32,
@@ -16,8 +19,8 @@ unsafe impl Sync for RenderPipeline {}
 
 impl RenderPipeline {
     pub(super) fn new(
-        state: metal::RenderPipelineState,
-        primitive: metal::MTLPrimitiveType,
+        state: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
+        primitive: MTLPrimitiveType,
         vertex_bindings: Option<Arc<Bindings>>,
         fragment_bindings: Option<Arc<Bindings>>,
         vertex_buffers_count: u32,
@@ -31,11 +34,11 @@ impl RenderPipeline {
         }
     }
 
-    pub(super) fn metal(&self) -> &metal::RenderPipelineState {
+    pub(super) fn metal(&self) -> &ProtocolObject<dyn MTLRenderPipelineState> {
         &self.state
     }
 
-    pub(super) fn primitive(&self) -> metal::MTLPrimitiveType {
+    pub(super) fn primitive(&self) -> MTLPrimitiveType {
         self.primitive
     }
 

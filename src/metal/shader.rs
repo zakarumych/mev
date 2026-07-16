@@ -1,6 +1,9 @@
 use std::{borrow::Cow, fmt, hash::Hash, sync::Arc};
 
 use hashbrown::HashMap;
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::NSString;
+use objc2_metal::{MTLFunction, MTLLibrary};
 
 use crate::generic::{Shader, ShaderLibraryError};
 
@@ -73,13 +76,13 @@ impl PartialEq for EntryPointData {
 
 #[derive(Clone, Debug)]
 pub struct Library {
-    library: metal::Library,
+    library: Retained<ProtocolObject<dyn MTLLibrary>>,
     entry_point_data: HashMap<String, EntryPointData>,
 }
 
 impl Library {
     #[inline]
-    pub(super) fn new(library: metal::Library) -> Self {
+    pub(super) fn new(library: Retained<ProtocolObject<dyn MTLLibrary>>) -> Self {
         Library {
             library,
             entry_point_data: HashMap::new(),
@@ -88,7 +91,7 @@ impl Library {
 
     #[inline]
     pub(super) fn with_entry_point_data(
-        library: metal::Library,
+        library: Retained<ProtocolObject<dyn MTLLibrary>>,
         entry_point_data: HashMap<String, EntryPointData>,
     ) -> Self {
         Library {
@@ -98,13 +101,18 @@ impl Library {
     }
 
     #[inline]
-    pub(super) fn get_function(&self, entry: &str) -> Option<metal::Function> {
+    pub(super) fn get_function(
+        &self,
+        entry: &str,
+    ) -> Option<Retained<ProtocolObject<dyn MTLFunction>>> {
         match self.entry_point_data.get(entry) {
             Some(ep) => match &ep.name {
-                Ok(name) => self.library.get_function(name, None).ok(),
+                Ok(name) => self.library.newFunctionWithName(&NSString::from_str(name)),
                 Err(_) => None,
             },
-            None => self.library.get_function(entry, None).ok(),
+            None => self
+                .library
+                .newFunctionWithName(&NSString::from_str(entry)),
         }
     }
 

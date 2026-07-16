@@ -4,38 +4,37 @@ use std::{
     ptr::NonNull,
 };
 
-use foreign_types::ForeignType;
-use metal::{NSRange, NSUInteger};
-use objc::*;
+use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::{NSRange, NSUInteger};
+use objc2_metal::{MTLBuffer, MTLComputeCommandEncoder, MTLRenderCommandEncoder};
 
 use crate::{
+    BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferSlice, BufferUsage, DeviceError,
     generic::{ArgumentKind, Automatic, Storage, Uniform},
-    BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferUsage, DeviceError,
 };
 
 use super::arguments::ArgumentsField;
 
 #[derive(Clone)]
 pub struct Buffer {
-    buffer: metal::Buffer,
+    buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     usage: BufferUsage,
 }
 
 impl Buffer {
     #[inline(always)]
-    pub(super) fn new(buffer: metal::Buffer, usage: BufferUsage) -> Self {
+    pub(super) fn new(buffer: Retained<ProtocolObject<dyn MTLBuffer>>, usage: BufferUsage) -> Self {
         Buffer { buffer, usage }
     }
 
     #[inline(always)]
-    pub(super) fn metal(&self) -> &metal::BufferRef {
+    pub(super) fn metal(&self) -> &ProtocolObject<dyn MTLBuffer> {
         &self.buffer
     }
 
     #[inline]
     pub(crate) fn flush_range(&mut self, offset: usize, size: usize) -> Result<(), DeviceError> {
-        self.buffer
-            .did_modify_range(NSRange::new(offset as u64, size as u64));
+        self.buffer.didModifyRange(NSRange::new(offset, size));
         Ok(())
     }
 }
@@ -53,18 +52,20 @@ impl fmt::Debug for Buffer {
 impl Hash for Buffer {
     #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.buffer.as_ptr().hash(state);
+        Retained::as_ptr(&self.buffer).hash(state);
     }
 }
 
 impl PartialEq for Buffer {
     #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
-        self.buffer.as_ptr() == other.buffer.as_ptr()
+        self.buffer == other.buffer
     }
 }
 
 impl Eq for Buffer {}
+
+unsafe impl Sync for Buffer {}
 
 impl crate::traits::Resource for Buffer {}
 
@@ -82,7 +83,7 @@ impl crate::traits::Buffer for Buffer {
 
     #[inline(always)]
     fn detached(&self) -> bool {
-        let count: NSUInteger = unsafe { msg_send![(self.buffer.as_ptr()), retainCount] };
+        let count: NSUInteger = unsafe { msg_send![&self.buffer, retainCount] };
         count == 1
     }
 
@@ -92,7 +93,10 @@ impl crate::traits::Buffer for Buffer {
         R: BufferRange,
     {
         assert!(self.detached());
-        assert!(!self.buffer.contents().is_null());
+        assert!(
+            self.usage
+                .intersects(BufferUsage::HOST_READ | BufferUsage::HOST_WRITE)
+        );
         Ok(())
     }
 
@@ -107,9 +111,7 @@ impl crate::traits::Buffer for Buffer {
 
         let ptr = self.buffer.contents();
 
-        assert!(!ptr.is_null());
-
-        let length = self.buffer.length() as usize;
+        let length = self.buffer.length();
 
         let range = range.range(length);
         assert!(range.start <= range.end, "Invalid range");
@@ -122,7 +124,7 @@ impl crate::traits::Buffer for Buffer {
 
             Ok(BufferMappedRange::new(
                 self,
-                NonNull::new_unchecked(ptr),
+                ptr,
                 range.start,
                 range.end - range.start,
             ))
@@ -137,9 +139,7 @@ impl crate::traits::Buffer for Buffer {
 
         let ptr = self.buffer.contents();
 
-        assert!(!ptr.is_null());
-
-        let length = self.buffer.length() as usize;
+        let length = self.buffer.length();
 
         let range = range.range(length);
         assert!(range.start <= range.end, "Invalid range");
@@ -152,7 +152,7 @@ impl crate::traits::Buffer for Buffer {
 
             Ok(BufferMappedRangeMut::new(
                 self,
-                NonNull::new_unchecked(ptr),
+                ptr,
                 range.start,
                 range.end - range.start,
             ))
@@ -167,7 +167,7 @@ impl crate::traits::Buffer for Buffer {
 
         unsafe {
             let ptr = self.buffer.contents().cast::<u8>().add(offset);
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr, data.len());
+            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr(), data.len());
         }
 
         Ok(())
@@ -181,7 +181,7 @@ impl crate::traits::Buffer for Buffer {
 
         unsafe {
             let ptr = self.buffer.contents().cast::<u8>().add(offset);
-            std::ptr::copy_nonoverlapping(ptr, data.as_mut_ptr(), data.len());
+            std::ptr::copy_nonoverlapping(ptr.as_ptr(), data.as_mut_ptr(), data.len());
         }
 
         Ok(())
@@ -193,18 +193,24 @@ impl ArgumentsField<Automatic> for Buffer {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 }
 
@@ -213,18 +219,24 @@ impl ArgumentsField<Uniform> for Buffer {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 }
 
@@ -233,17 +245,61 @@ impl ArgumentsField<Storage> for Buffer {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_buffer(slot.into(), Some(&self.buffer), 0)
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(&self.buffer), 0, slot as NSUInteger);
+        }
+    }
+}
+
+impl ArgumentsField<Automatic> for BufferSlice<'static> {
+    const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
+    const SIZE: usize = 1;
+
+    #[inline(always)]
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexBuffer_offset_atIndex(
+                Some(&self.buffer().buffer),
+                self.offset() as NSUInteger,
+                slot as NSUInteger,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentBuffer_offset_atIndex(
+                Some(&self.buffer().buffer),
+                self.offset() as NSUInteger,
+                slot as NSUInteger,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setBuffer_offset_atIndex(
+                Some(&self.buffer().buffer),
+                self.offset() as NSUInteger,
+                slot as NSUInteger,
+            );
+        }
     }
 }

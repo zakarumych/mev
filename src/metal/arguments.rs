@@ -1,6 +1,9 @@
+use objc2::runtime::ProtocolObject;
+use objc2_metal::{MTLComputeCommandEncoder, MTLRenderCommandEncoder};
+
 use crate::generic::{ArgumentGroupLayout, ArgumentKind, ArgumentsSealed};
 
-use super::{shader::Bindings, ComputeCommandEncoder, RenderCommandEncoder};
+use super::{ComputeCommandEncoder, RenderCommandEncoder, shader::Bindings};
 
 pub trait Arguments: 'static {
     const LAYOUT: ArgumentGroupLayout<'static>;
@@ -39,9 +42,9 @@ pub trait ArgumentsField<T>: 'static {
     const KIND: ArgumentKind;
     const SIZE: usize;
 
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef);
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef);
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef);
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>);
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>);
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>);
 
     #[inline]
     fn bind_vertex_argument(
@@ -49,7 +52,7 @@ pub trait ArgumentsField<T>: 'static {
         group: u32,
         index: u32,
         bindings: Option<&Bindings>,
-        encoder: &metal::RenderCommandEncoderRef,
+        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     ) {
         match bindings {
             Some(bindings) => {
@@ -67,7 +70,7 @@ pub trait ArgumentsField<T>: 'static {
         group: u32,
         index: u32,
         bindings: Option<&Bindings>,
-        encoder: &metal::RenderCommandEncoderRef,
+        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     ) {
         match bindings {
             Some(bindings) => {
@@ -85,7 +88,7 @@ pub trait ArgumentsField<T>: 'static {
         group: u32,
         index: u32,
         bindings: Option<&Bindings>,
-        encoder: &metal::ComputeCommandEncoderRef,
+        encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
     ) {
         match bindings {
             Some(bindings) => {

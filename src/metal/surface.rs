@@ -1,10 +1,10 @@
 use std::fmt;
 
-use core_graphics_types::{
-    base::CGFloat,
-    geometry::{CGAffineTransform, CGRect, CGSize},
-};
-use objc::{msg_send, runtime::Object, sel, sel_impl};
+use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
+use objc2_core_foundation::{CGFloat, CGRect, CGSize};
+use objc2_foundation::NSObject;
+use objc2_metal::MTLDrawable;
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
 use crate::{
     Extent2, PixelFormat,
@@ -16,12 +16,22 @@ use super::{Image, Queue};
 
 const RECONFIGURE_COOLDOWN: u64 = 10;
 
+enum Backing {
+    Layer {
+        layer: Retained<CAMetalLayer>,
+        view: Option<Retained<NSObject>>,
+    },
+    Fake {
+        image: Image,
+        format: PixelFormat,
+    },
+}
+
 pub struct Surface {
-    layer: metal::MetalLayer,
-    view: *mut objc::runtime::Object,
     preferred_extent: Option<Extent2>,
     reconfigure_cooldown: u64,
     reconfigure: bool,
+    backing: Backing,
 }
 
 unsafe impl Sync for Surface {}
@@ -29,41 +39,34 @@ unsafe impl Send for Surface {}
 
 impl crate::traits::Resource for Surface {}
 
-impl Drop for Surface {
-    fn drop(&mut self) {
-        if !self.view.is_null() {
-            unsafe {
-                let () = msg_send![self.view, release];
-            }
-        }
-    }
-}
-
 impl Surface {
-    pub(super) fn new(layer: metal::MetalLayer, view: *mut Object) -> Self {
-        if !view.is_null() {
-            unsafe {
-                let () = msg_send![view, retain];
-            }
-        }
-
+    pub(super) fn new(layer: Retained<CAMetalLayer>, view: Option<Retained<NSObject>>) -> Self {
         Surface {
-            layer,
-            view,
             preferred_extent: None,
             reconfigure_cooldown: 0,
             reconfigure: false,
+            backing: Backing::Layer { layer, view },
+        }
+    }
+
+    pub(super) fn fake(image: Image) -> Self {
+        let format = image.format();
+        Surface {
+            preferred_extent: None,
+            reconfigure_cooldown: 0,
+            reconfigure: false,
+            backing: Backing::Fake { image, format },
         }
     }
 }
 
-unsafe fn window_scale_factor(view: *mut Object) -> (f64, f64) {
+unsafe fn window_scale_factor(view: *const NSObject) -> (f64, f64) {
     let mut scale_factor_x: CGFloat = 1.0;
     let mut scale_factor_y: CGFloat = 1.0;
 
     #[cfg(target_os = "macos")]
     unsafe {
-        let window: *mut Object = msg_send![view, window];
+        let window: *const NSObject = msg_send![view, window];
         if !window.is_null() {
             let scale_factor: CGFloat = msg_send![window, backingScaleFactor];
             scale_factor_x = scale_factor;
@@ -81,7 +84,7 @@ unsafe fn window_scale_factor(view: *mut Object) -> (f64, f64) {
     (scale_factor_x, scale_factor_y)
 }
 
-unsafe fn view_size(view: *mut Object) -> CGSize {
+unsafe fn view_size(view: *const NSObject) -> CGSize {
     unsafe {
         let frame: CGRect = msg_send![view, bounds];
         frame.size
@@ -91,21 +94,34 @@ unsafe fn view_size(view: *mut Object) -> CGSize {
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
     fn available_formats(&self) -> &[PixelFormat] {
-        supported_formats()
+        match &self.backing {
+            Backing::Layer { .. } => supported_formats(),
+            Backing::Fake { format, .. } => std::slice::from_ref(format),
+        }
     }
 
     fn preferred_format(&mut self, format: PixelFormat) {
+        let Backing::Layer { layer, .. } = &self.backing else {
+            // Fake surface has a fixed format tied to its backing image.
+            return;
+        };
+
         if supported_formats().contains(&format) {
             let metal_format = format.expect_into_metal();
-            if self.layer.pixel_format() != metal_format {
-                self.layer.set_pixel_format(metal_format);
+            if layer.pixelFormat() != metal_format {
+                layer.setPixelFormat(metal_format);
                 self.reconfigure = true;
             }
         }
     }
 
     fn preferred_extent(&mut self, extent: Extent2) {
-        let draw_size = self.layer.drawable_size();
+        let Backing::Layer { layer, .. } = &self.backing else {
+            // Fake surface has a fixed extent tied to its backing image.
+            return;
+        };
+
+        let draw_size = layer.drawableSize();
 
         if draw_size.width != extent.width() as f64 || draw_size.height != extent.height() as f64 {
             self.reconfigure = true;
@@ -115,19 +131,29 @@ impl crate::traits::Surface for Surface {
     }
 
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
+        let (layer, view) = match &self.backing {
+            Backing::Fake { image, .. } => {
+                return Ok(Frame {
+                    image: image.clone(),
+                    drawable: None,
+                });
+            }
+            Backing::Layer { layer, view } => (layer, view),
+        };
+
         self.reconfigure_cooldown = self.reconfigure_cooldown.saturating_sub(1);
         if self.reconfigure && self.reconfigure_cooldown == 0 {
-            if !self.view.is_null() {
+            if let Some(view) = view {
                 unsafe {
-                    let draw_size = self.layer.drawable_size();
+                    let draw_size = layer.drawableSize();
 
-                    let scale = window_scale_factor(self.view);
-                    let size = view_size(self.view);
+                    let scale = window_scale_factor(Retained::as_ptr(view));
+                    let size = view_size(Retained::as_ptr(view));
 
                     if draw_size.width != size.width * scale.0
                         || draw_size.height != size.height * scale.1
                     {
-                        self.layer.set_drawable_size(CGSize {
+                        layer.setDrawableSize(CGSize {
                             width: size.width * scale.0,
                             height: size.height * scale.1,
                         });
@@ -138,7 +164,7 @@ impl crate::traits::Surface for Surface {
                 }
             } else {
                 if let Some(preferred_extent) = self.preferred_extent {
-                    self.layer.set_drawable_size(CGSize {
+                    layer.setDrawableSize(CGSize {
                         width: preferred_extent.width() as f64,
                         height: preferred_extent.height() as f64,
                     });
@@ -146,14 +172,11 @@ impl crate::traits::Surface for Surface {
             }
         }
 
-        let drawable = self
-            .layer
-            .next_drawable()
-            .ok_or(SurfaceError::SurfaceLost)?;
+        let drawable = layer.nextDrawable().ok_or(SurfaceError::SurfaceLost)?;
 
-        let image = Image::new(drawable.texture().to_owned());
+        let image = Image::new(drawable.texture());
         Ok(Frame {
-            drawable: Some(drawable.to_owned()),
+            drawable: Some(drawable),
             image,
         })
     }
@@ -161,15 +184,18 @@ impl crate::traits::Surface for Surface {
 
 pub struct Frame {
     image: Image,
-    drawable: Option<metal::MetalDrawable>,
+    drawable: Option<Retained<ProtocolObject<dyn CAMetalDrawable>>>,
 }
+
+unsafe impl Send for Frame {}
+unsafe impl Sync for Frame {}
 
 impl crate::traits::Resource for Frame {}
 
 impl Frame {
     #[inline]
-    pub(super) fn drawable(&self) -> Option<&metal::MetalDrawableRef> {
-        self.drawable.as_deref()
+    pub(super) fn drawable(&self) -> Option<&ProtocolObject<dyn MTLDrawable>> {
+        self.drawable.as_deref().map(AsRef::as_ref)
     }
 }
 

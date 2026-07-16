@@ -1,4 +1,7 @@
-use std::{convert::Infallible, fmt};
+use std::fmt;
+
+use objc2::{Message, rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{MTLCopyAllDevices, MTLDevice};
 
 use crate::generic::{
     Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
@@ -8,7 +11,7 @@ use crate::generic::{
 use super::{Device, Queue};
 
 pub struct Instance {
-    devices: Vec<metal::Device>,
+    devices: Vec<Retained<ProtocolObject<dyn MTLDevice>>>,
     capabilities: Capabilities,
 }
 
@@ -17,7 +20,7 @@ impl Instance {
     where
         Self: Sized,
     {
-        let devices = metal::Device::all();
+        let devices = MTLCopyAllDevices();
 
         let capabilities = Capabilities {
             devices: devices
@@ -25,21 +28,21 @@ impl Instance {
                 .map(|device| {
                     let mut features = Features::empty();
 
-                    if !device.is_headless() {
+                    if !device.isHeadless() {
                         features |= Features::SURFACE;
                     }
 
-                    if device.supports_BC_texture_compression() {
+                    if device.supportsBCTextureCompression() {
                         features |= Features::TEXTURE_COMPRESSION_BC;
                     }
 
-                    let device_type = if device.is_low_power() {
+                    let device_type = if device.isLowPower() {
                         DeviceType::IntegratedGpu
                     } else {
                         DeviceType::DiscreteGpu
                     };
 
-                    let name = device.name().to_owned();
+                    let name = device.name().to_string();
 
                     DeviceCapabilities {
                         name,
@@ -55,6 +58,8 @@ impl Instance {
                 })
                 .collect(),
         };
+
+        let devices = devices.iter().map(|device| device.retain()).collect();
 
         Ok(Instance {
             devices,
@@ -92,7 +97,13 @@ impl crate::traits::Instance for Instance {
         let device = Device::new(self.devices[info.idx].clone(), info.queues.len());
 
         let queues = (0..info.queues.len())
-            .map(|_| Queue::new(device.clone(), device.metal().new_command_queue()))
+            .map(|_| {
+                let queue = device
+                    .metal()
+                    .newCommandQueue()
+                    .expect("Failed to create command queue");
+                Queue::new(device.clone(), queue)
+            })
             .collect();
 
         Ok((device, queues))

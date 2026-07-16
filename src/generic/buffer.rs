@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     mem::ManuallyDrop,
     ops::{Range, RangeFrom, RangeFull, RangeTo},
     ptr::NonNull,
@@ -219,9 +220,9 @@ impl<'a> AsMut<[u8]> for BufferMappedRangeMut<'a> {
 
 /// Slice of a buffer is a reference to a buffer with offset and size.
 /// Mostly found in function arguments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BufferSlice<'a> {
-    pub(crate) buffer: &'a Buffer,
+    pub(crate) buffer: Cow<'a, Buffer>,
     pub(crate) offset: usize,
     pub(crate) size: usize,
 }
@@ -243,7 +244,7 @@ impl PartialEq<BufferSlice<'_>> for Buffer {
 impl BufferSlice<'_> {
     #[inline(always)]
     pub fn buffer(&self) -> &Buffer {
-        self.buffer
+        self.buffer.as_ref()
     }
 
     #[inline(always)]
@@ -254,6 +255,15 @@ impl BufferSlice<'_> {
     #[inline(always)]
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    #[inline(always)]
+    pub fn into_owned(self) -> BufferSlice<'static> {
+        BufferSlice {
+            buffer: Cow::Owned(self.buffer.into_owned()),
+            offset: self.offset,
+            size: self.size,
+        }
     }
 }
 
@@ -266,7 +276,7 @@ impl Buffer {
     {
         let range = range.range(self.size());
         BufferSlice {
-            buffer: self,
+            buffer: Cow::Borrowed(self),
             offset: range.start,
             size: range.end - range.start,
         }
@@ -280,12 +290,12 @@ impl Buffer {
         let at = at.min(size);
 
         let before = BufferSlice {
-            buffer: self,
+            buffer: Cow::Borrowed(self),
             offset: 0,
             size: at,
         };
         let after = BufferSlice {
-            buffer: self,
+            buffer: Cow::Borrowed(self),
             offset: at,
             size: size - at,
         };
@@ -317,13 +327,13 @@ impl<'a> BufferSlice<'a> {
         let at = at.min(size);
 
         let before = BufferSlice {
-            buffer: self.buffer,
+            buffer: self.buffer.clone(),
             offset: self.offset,
             size: at,
         };
 
         let after = BufferSlice {
-            buffer: self.buffer,
+            buffer: self.buffer.clone(),
             offset: self.offset + at,
             size: size - at,
         };
@@ -339,7 +349,7 @@ impl<'a> From<&'a Buffer> for BufferSlice<'a> {
         BufferSlice {
             offset: 0,
             size: buffer.size(),
-            buffer,
+            buffer: Cow::Borrowed(buffer),
         }
     }
 }
@@ -353,7 +363,7 @@ pub trait AsBufferSlice {
 impl AsBufferSlice for BufferSlice<'_> {
     #[inline(always)]
     fn as_buffer_slice(&self) -> BufferSlice<'_> {
-        *self
+        self.clone()
     }
 }
 
@@ -363,7 +373,7 @@ impl AsBufferSlice for Buffer {
         BufferSlice {
             offset: 0,
             size: self.size(),
-            buffer: self,
+            buffer: Cow::Borrowed(self),
         }
     }
 }

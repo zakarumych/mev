@@ -1,11 +1,9 @@
 use std::{fmt, ops::Deref};
 
-use foreign_types::ForeignType;
+use objc2::{Message, rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
 
-use crate::{
-    backend::from::MetalInto,
-    generic::{DeviceError, OutOfMemory, PipelineStages},
-};
+use crate::generic::{DeviceError, PipelineStages};
 
 use super::{CommandBuffer, CommandEncoder, Device, Frame};
 
@@ -18,13 +16,13 @@ use super::{CommandBuffer, CommandEncoder, Device, Frame};
 const MAX_EPOCHS: usize = 3;
 
 struct Epoch {
-    last_command_buffer: Option<metal::CommandBuffer>,
+    last_command_buffer: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     epoch_id: u64,
 }
 
 pub struct Queue {
     device: Device,
-    queue: metal::CommandQueue,
+    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
     next_epoch_id: u64,
     current_epoch: Option<Epoch>,
     pending_epochs: Vec<Epoch>,
@@ -38,13 +36,13 @@ impl fmt::Debug for Queue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Queue")
             .field("device", &self.device.metal())
-            .field("queue", &self.queue.as_ptr())
+            .field("queue", &Retained::as_ptr(&self.queue))
             .finish()
     }
 }
 
 impl Queue {
-    pub(super) fn new(device: Device, queue: metal::CommandQueue) -> Self {
+    pub(super) fn new(device: Device, queue: Retained<ProtocolObject<dyn MTLCommandQueue>>) -> Self {
         Queue {
             device,
             queue,
@@ -63,7 +61,7 @@ impl Queue {
             if self.current_epoch.is_none() {
                 if self.pending_epochs.len() >= MAX_EPOCHS {
                     if let Some(cbuf) = &self.pending_epochs[0].last_command_buffer {
-                        cbuf.wait_until_completed();
+                        cbuf.waitUntilCompleted();
                     }
                     self.last_finished_epoch = self.pending_epochs[0].epoch_id;
                     self.pending_epochs.remove(0);
@@ -121,8 +119,10 @@ impl crate::traits::Queue for Queue {
 
     fn new_command_encoder(&mut self) -> CommandEncoder {
         CommandEncoder::new(
-            self.device.metal().to_owned(),
-            self.queue.new_command_buffer().to_owned(),
+            self.device.metal().retain(),
+            self.queue
+                .commandBuffer()
+                .expect("Failed to create command buffer"),
         )
     }
 
@@ -145,7 +145,7 @@ impl crate::traits::Queue for Queue {
     fn wait_idle(&self) -> Result<(), DeviceError> {
         for epoch in &self.pending_epochs {
             if let Some(cbuf) = &epoch.last_command_buffer {
-                cbuf.wait_until_completed();
+                cbuf.waitUntilCompleted();
             }
         }
         Ok(())

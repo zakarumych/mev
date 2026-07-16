@@ -1,33 +1,38 @@
-use std::{
-    hash::{Hash, Hasher},
-    ops::Mul,
+use std::hash::{Hash, Hasher};
+
+use objc2::{
+    msg_send,
+    rc::{Retained, autoreleasepool},
+    runtime::ProtocolObject,
+};
+use objc2_foundation::{NSRange, NSUInteger};
+use objc2_metal::{
+    MTLComputeCommandEncoder, MTLRenderCommandEncoder, MTLTexture, MTLTextureSwizzle,
+    MTLTextureSwizzleChannels, MTLTextureType,
 };
 
-use foreign_types::ForeignType;
-use metal::MTLTextureType;
-
 use crate::{
+    ImageUsage,
     generic::{
         ArgumentKind, Automatic, ComponentSwizzle, Extent1, Extent2, Extent3, ImageExtent,
         OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
     },
-    ImageUsage,
 };
 
 use super::{
+    Device,
     arguments::ArgumentsField,
     from::{MetalInto, TryIntoMetal, TryMetalInto},
-    Device,
 };
 
 #[derive(Clone, Debug)]
 pub struct Image {
-    texture: metal::Texture,
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
 }
 
 impl PartialEq for Image {
     fn eq(&self, other: &Self) -> bool {
-        self.texture.as_ptr() == other.texture.as_ptr()
+        self.texture == other.texture
     }
 }
 
@@ -35,7 +40,7 @@ impl Eq for Image {}
 
 impl Hash for Image {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.texture.as_ptr().hash(state);
+        Retained::as_ptr(&self.texture).hash(state);
     }
 }
 
@@ -43,12 +48,12 @@ unsafe impl Send for Image {}
 unsafe impl Sync for Image {}
 
 impl Image {
-    pub(super) fn new(texture: metal::Texture) -> Self {
+    pub(super) fn new(texture: Retained<ProtocolObject<dyn MTLTexture>>) -> Self {
         Image { texture }
     }
 
-    pub(super) fn metal(&self) -> &metal::TextureRef {
-        &self.texture
+    pub(super) fn metal(&self) -> &ProtocolObject<dyn MTLTexture> {
+        self.texture.as_ref()
     }
 }
 
@@ -57,39 +62,43 @@ impl crate::traits::Resource for Image {}
 #[hidden_trait::expose]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {
-        self.texture.pixel_format().expect_metal_into()
+        self.texture.pixelFormat().expect_metal_into()
     }
 
     fn extent(&self) -> ImageExtent {
-        match self.texture.texture_type() {
-            MTLTextureType::D1 | MTLTextureType::D1Array => {
+        match self.texture.textureType() {
+            MTLTextureType::Type1D | MTLTextureType::Type1DArray => {
                 let width = self.texture.width();
                 ImageExtent::D1(Extent1::new(width as u32))
             }
-            MTLTextureType::D2 | MTLTextureType::D2Array => {
+            MTLTextureType::Type2D | MTLTextureType::Type2DArray => {
                 let width = self.texture.width();
                 let height = self.texture.height();
                 ImageExtent::D2(Extent2::new(width as u32, height as u32))
             }
-            MTLTextureType::D2Multisample => unimplemented!(),
-            MTLTextureType::D2MultisampleArray => unimplemented!(),
-            MTLTextureType::Cube => unimplemented!(),
-            MTLTextureType::CubeArray => unimplemented!(),
-            MTLTextureType::D3 => {
+            MTLTextureType::Type2DMultisample => unimplemented!(),
+            MTLTextureType::Type2DMultisampleArray => unimplemented!(),
+            MTLTextureType::TypeCube => unimplemented!(),
+            MTLTextureType::TypeCubeArray => unimplemented!(),
+            MTLTextureType::Type3D => {
                 let width = self.texture.width();
                 let height = self.texture.height();
                 let depth = self.texture.depth();
                 ImageExtent::D3(Extent3::new(width as u32, height as u32, depth as u32))
             }
+            MTLTextureType::TypeTextureBuffer => {
+                unreachable!("TypeTextureBuffer is not a valid texture type for an image")
+            }
+            _ => unreachable!("Unknown texture type"),
         }
     }
 
     fn layers(&self) -> u32 {
-        self.texture.array_length() as u32
+        self.texture.arrayLength() as u32
     }
 
     fn levels(&self) -> u32 {
-        self.texture.mipmap_level_count() as u32
+        self.texture.mipmapLevelCount() as u32
     }
 
     fn usage(&self) -> ImageUsage {
@@ -97,105 +106,81 @@ impl crate::traits::Image for Image {
     }
 
     fn view(&self, _device: &Device, desc: ViewDesc) -> Image {
-        use foreign_types::{ForeignType, ForeignTypeRef};
-        use objc::*;
-
         let pixel_format = desc.format.expect_into_metal();
-        let root_texture = self.texture.parent_texture().unwrap_or(&self.texture);
+        let root_texture = self
+            .texture
+            .parentTexture()
+            .unwrap_or_else(|| self.texture.clone());
 
         if desc.swizzle == Swizzle::IDENTITY {
             if desc.base_layer == 0 && desc.base_level == 0 {
-                let texture = root_texture.new_texture_view(desc.format.expect_into_metal());
+                let texture = root_texture
+                    .newTextureViewWithPixelFormat(desc.format.expect_into_metal())
+                    .expect("Failed to create texture view");
                 Image { texture }
             } else {
-                let base_layer = self.texture.parent_relative_slice() as u32 + desc.base_layer;
-                let base_level = self.texture.mipmap_level_count() as u32 + desc.base_level;
+                let base_layer = self.texture.parentRelativeSlice() as u32 + desc.base_layer;
+                let base_level = self.texture.mipmapLevelCount() as u32 + desc.base_level;
 
-                let texture = root_texture.new_texture_view_from_slice(
-                    pixel_format,
-                    self.texture.texture_type(),
-                    metal::NSRange::new(base_level.into(), desc.levels.into()),
-                    metal::NSRange::new(base_layer.into(), desc.layers.into()),
-                );
+                let texture = unsafe {
+                    root_texture.newTextureViewWithPixelFormat_textureType_levels_slices(
+                        pixel_format,
+                        self.texture.textureType(),
+                        NSRange::new(base_level as NSUInteger, desc.levels as NSUInteger),
+                        NSRange::new(base_layer as NSUInteger, desc.layers as NSUInteger),
+                    )
+                }
+                .expect("Failed to create texture view");
                 Image { texture }
             }
         } else {
-            let base_layer = self.texture.parent_relative_slice() as u32 + desc.base_layer;
-            let base_level = self.texture.parent_relative_level() as u32 + desc.base_level;
-            let swizzle: MTLTextureSwizzleChannels =
-                unsafe { msg_send![self.texture.as_ptr(), swizzle] };
+            let base_layer = self.texture.parentRelativeSlice() as u32 + desc.base_layer;
+            let base_level = self.texture.parentRelativeLevel() as u32 + desc.base_level;
+            let swizzle = self.texture.swizzle();
 
-            let new_swizzle = swizzle * desc.swizzle;
+            let new_swizzle = swizzle_mul(swizzle, desc.swizzle);
 
             let texture = unsafe {
-                msg_send![root_texture.as_ptr(), newTextureViewWithPixelFormat:pixel_format
-                                                textureType:self.texture.texture_type()
-                                                levels:metal::NSRange::new(base_level.into(), desc.levels.into())
-                                                slices:metal::NSRange::new(base_layer.into(), desc.layers.into())
-                                                swizzle:new_swizzle
-
-                ]
-            };
+                root_texture.newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
+                    pixel_format,
+                    self.texture.textureType(),
+                    NSRange::new(base_level as NSUInteger, desc.levels as NSUInteger),
+                    NSRange::new(base_layer as NSUInteger, desc.layers as NSUInteger),
+                    new_swizzle,
+                )
+            }
+            .expect("Failed to create texture view");
 
             Image { texture }
         }
     }
 
     fn detached(&self) -> bool {
-        use foreign_types::ForeignType;
-        use metal::NSUInteger;
-        use objc::*;
-
-        let count: NSUInteger = unsafe { msg_send![(self.texture.as_ptr()), retainCount] };
+        let count: NSUInteger = unsafe { msg_send![Retained::as_ptr(&self.texture), retainCount] };
         count == 1
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-enum MTLTextureSwizzle {
-    Zero = 0,
-    One = 1,
-    Red = 2,
-    Green = 3,
-    Blue = 4,
-    Alpha = 5,
-}
+fn swizzle_mul(channels: MTLTextureSwizzleChannels, rhs: Swizzle) -> MTLTextureSwizzleChannels {
+    use ComponentSwizzle::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(C)]
-struct MTLTextureSwizzleChannels {
-    r: MTLTextureSwizzle,
-    g: MTLTextureSwizzle,
-    b: MTLTextureSwizzle,
-    a: MTLTextureSwizzle,
-}
+    let mul = |rhs: ComponentSwizzle, i: MTLTextureSwizzle| -> MTLTextureSwizzle {
+        match rhs {
+            Identity => i,
+            Zero => MTLTextureSwizzle::Zero,
+            One => MTLTextureSwizzle::One,
+            R => channels.red,
+            G => channels.green,
+            B => channels.blue,
+            A => channels.alpha,
+        }
+    };
 
-impl Mul<Swizzle> for MTLTextureSwizzleChannels {
-    type Output = Self;
-
-    fn mul(self, rhs: Swizzle) -> Self {
-        use ComponentSwizzle::*;
-
-        let mul = |rhs: ComponentSwizzle, i: MTLTextureSwizzle| -> MTLTextureSwizzle {
-            match rhs {
-                Identity => i,
-                Zero => MTLTextureSwizzle::Zero,
-                One => MTLTextureSwizzle::One,
-                R => self.r,
-                G => self.g,
-                B => self.b,
-                A => self.a,
-            }
-        };
-
-        let r = mul(rhs.r, self.r);
-        let g = mul(rhs.g, self.g);
-        let b = mul(rhs.b, self.b);
-        let a = mul(rhs.a, self.a);
-
-        MTLTextureSwizzleChannels { r, g, b, a }
+    MTLTextureSwizzleChannels {
+        red: mul(rhs.r, channels.red),
+        green: mul(rhs.g, channels.green),
+        blue: mul(rhs.b, channels.blue),
+        alpha: mul(rhs.a, channels.alpha),
     }
 }
 
@@ -204,18 +189,24 @@ impl ArgumentsField<Automatic> for Image {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_texture(slot.into(), Some(&self.texture));
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_texture(slot.into(), Some(&self.texture));
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_texture(slot.into(), Some(&self.texture));
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 }
 
@@ -224,18 +215,24 @@ impl ArgumentsField<Sampled> for Image {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_texture(slot.into(), Some(&self.texture));
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_texture(slot.into(), Some(&self.texture));
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_texture(slot.into(), Some(&self.texture));
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 }
 
@@ -244,17 +241,23 @@ impl ArgumentsField<Storage> for Image {
     const SIZE: usize = 1;
 
     #[inline(always)]
-    fn bind_vertex(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_vertex_texture(slot.into(), Some(&self.texture));
+    fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setVertexTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_fragment(&self, slot: u32, encoder: &metal::RenderCommandEncoderRef) {
-        encoder.set_fragment_texture(slot.into(), Some(&self.texture));
+    fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
+        unsafe {
+            encoder.setFragmentTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 
     #[inline(always)]
-    fn bind_compute(&self, slot: u32, encoder: &metal::ComputeCommandEncoderRef) {
-        encoder.set_texture(slot.into(), Some(&self.texture));
+    fn bind_compute(&self, slot: u32, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>) {
+        unsafe {
+            encoder.setTexture_atIndex(Some(&self.texture), slot as NSUInteger);
+        }
     }
 }

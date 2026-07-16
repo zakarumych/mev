@@ -1,16 +1,22 @@
 use std::{fmt, sync::Arc};
 
-use core_graphics_types::{base::CGFloat, geometry::CGRect};
-use foreign_types::ForeignType;
 use hashbrown::HashMap;
-use metal::{CAMetalLayer, NSUInteger, SamplerDescriptor};
-use objc::{
+use objc2::{
     class, msg_send,
-    runtime::{BOOL, Object, YES},
-    sel, sel_impl,
+    rc::Retained,
+    runtime::{AnyObject, Bool, ProtocolObject},
 };
+use objc2_core_foundation::{CGFloat, CGRect};
+use objc2_foundation::{NSObject, NSString, NSUInteger};
+use objc2_metal::{
+    MTLCompileOptions, MTLComputePipelineDescriptor, MTLDevice, MTLLanguageVersion, MTLLibrary,
+    MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions,
+    MTLSamplerDescriptor, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
+    MTLVertexAttributeDescriptor, MTLVertexBufferLayoutDescriptor, MTLVertexDescriptor,
+    MTLVertexStepFunction,
+};
+use objc2_quartz_core::CAMetalLayer;
 
-use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::generic::{
@@ -29,7 +35,7 @@ use super::{
 
 #[derive(Clone)]
 pub struct Device {
-    device: metal::Device,
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
 }
 
 unsafe impl Sync for Device {}
@@ -38,33 +44,33 @@ unsafe impl Send for Device {}
 impl fmt::Debug for Device {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Device")
-            .field(&self.device.as_ptr())
+            .field(&Retained::as_ptr(&self.device))
             .finish()
     }
 }
 
 impl PartialEq for Device {
     fn eq(&self, other: &Self) -> bool {
-        self.device.as_ptr() == other.device.as_ptr()
+        Retained::as_ptr(&self.device) == Retained::as_ptr(&other.device)
     }
 }
 
 impl Eq for Device {}
 
 impl Device {
-    pub(super) fn new(device: metal::Device, queues: usize) -> Self {
+    pub(super) fn new(device: Retained<ProtocolObject<dyn MTLDevice>>, queues: usize) -> Self {
         Device { device }
     }
 
-    pub(super) fn set_last_cbuf(device: metal::Device, queues: usize) -> Self {
+    pub(super) fn set_last_cbuf(device: Retained<ProtocolObject<dyn MTLDevice>>, queues: usize) -> Self {
         Device { device }
     }
 }
 
 impl Device {
     #[inline(always)]
-    pub(crate) fn metal(&self) -> &metal::DeviceRef {
-        self.device.as_ref()
+    pub(crate) fn metal(&self) -> &ProtocolObject<dyn MTLDevice> {
+        &self.device
     }
 }
 
@@ -75,8 +81,8 @@ impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
             LibraryInput::Source(source) => {
-                let options = metal::CompileOptions::new();
-                options.set_language_version(metal::MTLLanguageVersion::V2_2);
+                let options = MTLCompileOptions::new();
+                options.setLanguageVersion(MTLLanguageVersion::Version2_2);
 
                 match source.language {
                     ShaderLanguage::Msl => {
@@ -85,7 +91,10 @@ impl crate::traits::Device for Device {
 
                         let library = self
                             .device
-                            .new_library_with_source(&source, &options)
+                            .newLibraryWithSource_options_error(
+                                &NSString::from_str(source),
+                                Some(&options),
+                            )
                             .unwrap();
 
                         Ok(Library::new(library))
@@ -96,7 +105,10 @@ impl crate::traits::Device for Device {
 
                         let library = self
                             .device
-                            .new_library_with_source(&compiled.code, &options)
+                            .newLibraryWithSource_options_error(
+                                &NSString::from_str(&compiled.code),
+                                Some(&options),
+                            )
                             .unwrap();
 
                         Ok(Library::with_entry_point_data(
@@ -113,8 +125,8 @@ impl crate::traits::Device for Device {
         &self,
         desc: ComputePipelineDesc,
     ) -> Result<ComputePipeline, PipelineError> {
-        let mdesc = metal::ComputePipelineDescriptor::new();
-        mdesc.set_label(desc.name);
+        let mdesc = MTLComputePipelineDescriptor::new();
+        mdesc.setLabel(Some(&NSString::from_str(desc.name)));
 
         let compute_function = desc
             .shader
@@ -122,12 +134,16 @@ impl crate::traits::Device for Device {
             .get_function(&desc.shader.entry)
             .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
-        mdesc.set_compute_function(Some(&compute_function));
+        mdesc.setComputeFunction(Some(&compute_function));
 
         let pipeline = self
             .device
-            .new_compute_pipeline_state(&mdesc)
-            .map_err(|err| PipelineError::Failure(err))?;
+            .newComputePipelineStateWithDescriptor_options_reflection_error(
+                &mdesc,
+                MTLPipelineOption::None,
+                None,
+            )
+            .map_err(|err| PipelineError::Failure(err.to_string()))?;
 
         Ok(ComputePipeline::new(
             pipeline,
@@ -140,8 +156,8 @@ impl crate::traits::Device for Device {
         &self,
         desc: RenderPipelineDesc,
     ) -> Result<RenderPipeline, PipelineError> {
-        let mdesc = metal::RenderPipelineDescriptor::new();
-        mdesc.set_label(desc.name);
+        let mdesc = MTLRenderPipelineDescriptor::new();
+        mdesc.setLabel(Some(&NSString::from_str(desc.name)));
 
         let vertex_function = desc
             .vertex_shader
@@ -149,7 +165,7 @@ impl crate::traits::Device for Device {
             .get_function(&desc.vertex_shader.entry)
             .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
-        mdesc.set_vertex_function(Some(&vertex_function));
+        mdesc.setVertexFunction(Some(&vertex_function));
 
         let vertex_bindings = desc
             .vertex_shader
@@ -181,40 +197,53 @@ impl crate::traits::Device for Device {
 
         let mut fragment_bindings = None;
 
-        let vertex_desc = metal::VertexDescriptor::new();
+        let vertex_desc = MTLVertexDescriptor::new();
 
         let layouts = vertex_desc.layouts();
         for (idx, vertex_layout) in desc.vertex_layouts.iter().enumerate() {
-            let layout_desc = metal::VertexBufferLayoutDescriptor::new();
-            layout_desc.set_stride(vertex_layout.stride as _);
+            let layout_desc = MTLVertexBufferLayoutDescriptor::new();
+            unsafe {
+                layout_desc.setStride(vertex_layout.stride as _);
+            }
             match vertex_layout.step_mode {
                 VertexStepMode::Vertex => {
-                    layout_desc.set_step_function(metal::MTLVertexStepFunction::PerVertex)
+                    layout_desc.setStepFunction(MTLVertexStepFunction::PerVertex)
                 }
                 VertexStepMode::Instance { rate } => {
-                    layout_desc.set_step_rate(rate as _);
-                    layout_desc.set_step_function(metal::MTLVertexStepFunction::PerInstance)
+                    unsafe {
+                        layout_desc.setStepRate(rate as _);
+                    }
+                    layout_desc.setStepFunction(MTLVertexStepFunction::PerInstance)
                 }
                 VertexStepMode::Constant => {
-                    layout_desc.set_step_function(metal::MTLVertexStepFunction::Constant)
+                    layout_desc.setStepFunction(MTLVertexStepFunction::Constant)
                 }
             }
-            layouts.set_object_at((vertex_buffers_count + idx) as _, Some(&layout_desc));
+            unsafe {
+                layouts.setObject_atIndexedSubscript(
+                    Some(&layout_desc),
+                    (vertex_buffers_count + idx) as _,
+                );
+            }
         }
 
         let attributes = vertex_desc.attributes();
         for (idx, vertex_attribute) in desc.vertex_attributes.iter().enumerate() {
-            let attribute_desc = metal::VertexAttributeDescriptor::new();
-            attribute_desc.set_format(vertex_attribute.format.try_into_metal().unwrap());
-            attribute_desc.set_offset(vertex_attribute.offset as _);
-            attribute_desc.set_buffer_index(
-                (vertex_buffers_count as u32 + vertex_attribute.buffer_index) as _,
-            );
-            attributes.set_object_at(idx as _, Some(&attribute_desc));
+            let attribute_desc = MTLVertexAttributeDescriptor::new();
+            attribute_desc.setFormat(vertex_attribute.format.try_into_metal().unwrap());
+            unsafe {
+                attribute_desc.setOffset(vertex_attribute.offset as _);
+                attribute_desc.setBufferIndex(
+                    (vertex_buffers_count as u32 + vertex_attribute.buffer_index) as _,
+                );
+                attributes.setObject_atIndexedSubscript(Some(&attribute_desc), idx as _);
+            }
         }
 
-        mdesc.set_vertex_descriptor(Some(&vertex_desc));
-        mdesc.set_input_primitive_topology(desc.primitive_topology.into_metal());
+        mdesc.setVertexDescriptor(Some(&vertex_desc));
+        unsafe {
+            mdesc.setInputPrimitiveTopology(desc.primitive_topology.into_metal());
+        }
 
         if let Some(raster) = desc.raster {
             if let Some(fragment_shader) = raster.fragment_shader {
@@ -223,48 +252,50 @@ impl crate::traits::Device for Device {
                     .get_function(&fragment_shader.entry)
                     .ok_or_else(|| PipelineError::InvalidShaderEntry)?;
 
-                mdesc.set_fragment_function(Some(&fragment_function));
+                mdesc.setFragmentFunction(Some(&fragment_function));
 
                 fragment_bindings = fragment_shader.library.get_bindings(&fragment_shader.entry);
             }
 
-            let color_attachments = mdesc.color_attachments();
+            let color_attachments = mdesc.colorAttachments();
             for (idx, color_desc) in raster.color_targets.iter().enumerate() {
-                let color_attachment = color_attachments.object_at(idx as _).unwrap();
-                color_attachment.set_pixel_format(color_desc.format.try_into_metal().unwrap());
+                let color_attachment = unsafe { color_attachments.objectAtIndexedSubscript(idx as _) };
+                color_attachment.setPixelFormat(color_desc.format.try_into_metal().unwrap());
 
                 if let Some(blend_desc) = &color_desc.blend {
-                    color_attachment.set_blending_enabled(true);
-                    color_attachment.set_write_mask(blend_desc.mask.into_metal());
-                    color_attachment.set_rgb_blend_operation(blend_desc.color.op.into_metal());
-                    color_attachment.set_source_rgb_blend_factor(blend_desc.color.src.into_metal());
+                    color_attachment.setBlendingEnabled(true);
+                    color_attachment.setWriteMask(blend_desc.mask.into_metal());
+                    color_attachment.setRgbBlendOperation(blend_desc.color.op.into_metal());
+                    color_attachment.setSourceRGBBlendFactor(blend_desc.color.src.into_metal());
                     color_attachment
-                        .set_destination_rgb_blend_factor(blend_desc.color.dst.into_metal());
-                    color_attachment.set_alpha_blend_operation(blend_desc.alpha.op.into_metal());
+                        .setDestinationRGBBlendFactor(blend_desc.color.dst.into_metal());
+                    color_attachment.setAlphaBlendOperation(blend_desc.alpha.op.into_metal());
                     color_attachment
-                        .set_source_alpha_blend_factor(blend_desc.alpha.src.into_metal());
+                        .setSourceAlphaBlendFactor(blend_desc.alpha.src.into_metal());
                     color_attachment
-                        .set_destination_alpha_blend_factor(blend_desc.alpha.dst.into_metal());
+                        .setDestinationAlphaBlendFactor(blend_desc.alpha.dst.into_metal());
                 } else {
-                    color_attachment.set_blending_enabled(false);
+                    color_attachment.setBlendingEnabled(false);
                 }
-                color_attachments.set_object_at(idx as _, Some(&color_attachment));
+                unsafe {
+                    color_attachments.setObject_atIndexedSubscript(Some(&color_attachment), idx as _);
+                }
             }
 
             if let Some(depth_stencil) = raster.depth_stencil {
                 let format = depth_stencil.format.try_into_metal().unwrap();
                 if depth_stencil.format.is_depth() {
-                    mdesc.set_depth_attachment_pixel_format(format);
+                    mdesc.setDepthAttachmentPixelFormat(format);
                 }
                 if depth_stencil.format.is_stencil() {
-                    mdesc.set_stencil_attachment_pixel_format(format);
+                    mdesc.setStencilAttachmentPixelFormat(format);
                 }
             }
         }
 
         let pipeline = self
             .device
-            .new_render_pipeline_state(&mdesc)
+            .newRenderPipelineStateWithDescriptor_error(&mdesc)
             .map_err(|err| PipelineError::Failure(err.to_string()))?;
 
         Ok(RenderPipeline::new(
@@ -277,22 +308,25 @@ impl crate::traits::Device for Device {
     }
 
     fn new_buffer(&self, desc: BufferDesc) -> Buffer {
-        let mut options = metal::MTLResourceOptions::empty();
+        let mut options = MTLResourceOptions::empty();
 
         if desc
             .usage
             .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
         {
             if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
-                options |= metal::MTLResourceOptions::CPUCacheModeWriteCombined;
+                options |= MTLResourceOptions::CPUCacheModeWriteCombined;
             }
-            options |= metal::MTLResourceOptions::StorageModeShared;
+            options |= MTLResourceOptions::StorageModeShared;
         } else {
-            options |= metal::MTLResourceOptions::StorageModePrivate;
+            options |= MTLResourceOptions::StorageModePrivate;
         }
 
-        let buffer = self.device.new_buffer(desc.size as _, options);
-        buffer.set_label(desc.name);
+        let buffer = self
+            .device
+            .newBufferWithLength_options(desc.size as NSUInteger, options)
+            .expect("Failed to create buffer");
+        buffer.setLabel(Some(&NSString::from_str(desc.name)));
         Buffer::new(buffer, desc.usage)
     }
 
@@ -301,73 +335,86 @@ impl crate::traits::Device for Device {
             size_exceeds_u64();
         };
 
-        let mut options = metal::MTLResourceOptions::empty();
+        let mut options = MTLResourceOptions::empty();
 
         if desc
             .usage
             .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
         {
             if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
-                options |= metal::MTLResourceOptions::CPUCacheModeWriteCombined;
+                options |= MTLResourceOptions::CPUCacheModeWriteCombined;
             }
-            options |= metal::MTLResourceOptions::StorageModeShared;
+            options |= MTLResourceOptions::StorageModeShared;
         } else {
-            options |= metal::MTLResourceOptions::StorageModePrivate;
+            options |= MTLResourceOptions::StorageModePrivate;
         }
 
-        let buffer = self
-            .device
-            .new_buffer_with_data(desc.data.as_ptr().cast(), len, options);
-        buffer.set_label(desc.name);
+        let buffer = unsafe {
+            self.device.newBufferWithBytes_length_options(
+                std::ptr::NonNull::from(desc.data).cast(),
+                len as NSUInteger,
+                options,
+            )
+        }
+        .expect("Failed to create buffer");
+        buffer.setLabel(Some(&NSString::from_str(desc.name)));
         Buffer::new(buffer, desc.usage)
     }
 
     fn new_image(&self, desc: ImageDesc) -> Image {
-        let mdesc = metal::TextureDescriptor::new();
-        mdesc.set_pixel_format(desc.format.try_into_metal().unwrap());
-        match desc.extent {
-            ImageExtent::D1(extent) => {
-                mdesc.set_texture_type(metal::MTLTextureType::D1);
-                mdesc.set_width(extent.width() as _);
+        let mdesc = MTLTextureDescriptor::new();
+        mdesc.setPixelFormat(desc.format.try_into_metal().unwrap());
+        unsafe {
+            match desc.extent {
+                ImageExtent::D1(extent) => {
+                    mdesc.setTextureType(MTLTextureType::Type1D);
+                    mdesc.setWidth(extent.width() as _);
+                }
+                ImageExtent::D2(extent) => {
+                    mdesc.setTextureType(MTLTextureType::Type2D);
+                    mdesc.setWidth(extent.width() as _);
+                    mdesc.setHeight(extent.height() as _);
+                }
+                ImageExtent::D3(extent) => {
+                    mdesc.setTextureType(MTLTextureType::Type3D);
+                    mdesc.setWidth(extent.width() as _);
+                    mdesc.setHeight(extent.height() as _);
+                    mdesc.setDepth(extent.depth() as _);
+                }
             }
-            ImageExtent::D2(extent) => {
-                mdesc.set_texture_type(metal::MTLTextureType::D2);
-                mdesc.set_width(extent.width() as _);
-                mdesc.set_height(extent.height() as _);
-            }
-            ImageExtent::D3(extent) => {
-                mdesc.set_texture_type(metal::MTLTextureType::D3);
-                mdesc.set_width(extent.width() as _);
-                mdesc.set_height(extent.height() as _);
-                mdesc.set_depth(extent.depth() as _);
-            }
+            mdesc.setMipmapLevelCount(desc.levels as _);
+            mdesc.setArrayLength(desc.layers as _);
+            mdesc.setSampleCount(1);
         }
-        mdesc.set_mipmap_level_count(desc.levels as _);
-        mdesc.set_array_length(desc.layers as _);
-        mdesc.set_sample_count(1);
-        mdesc.set_usage(desc.usage.into_metal());
-        mdesc.set_storage_mode(metal::MTLStorageMode::Private);
+        mdesc.setUsage(desc.usage.into_metal());
+        mdesc.setStorageMode(MTLStorageMode::Private);
 
-        let texture = self.device.new_texture(&mdesc);
-        texture.set_label(desc.name);
+        let texture = self
+            .device
+            .newTextureWithDescriptor(&mdesc)
+            .expect("Failed to create texture");
+        texture.setLabel(Some(&NSString::from_str(desc.name)));
         Image::new(texture)
     }
 
     fn new_sampler(&self, desc: SamplerDesc) -> Sampler {
-        let mdesc = SamplerDescriptor::new();
-        mdesc.set_min_filter(desc.min_filter.into_metal());
-        mdesc.set_mag_filter(desc.mag_filter.into_metal());
-        mdesc.set_mip_filter(desc.mip_map_mode.into_metal());
-        mdesc.set_address_mode_s(desc.address_mode[0].into_metal());
-        mdesc.set_address_mode_t(desc.address_mode[1].into_metal());
-        mdesc.set_address_mode_r(desc.address_mode[2].into_metal());
+        let mdesc = MTLSamplerDescriptor::new();
+        mdesc.setMinFilter(desc.min_filter.into_metal());
+        mdesc.setMagFilter(desc.mag_filter.into_metal());
+        mdesc.setMipFilter(desc.mip_map_mode.into_metal());
+        mdesc.setSAddressMode(desc.address_mode[0].into_metal());
+        mdesc.setTAddressMode(desc.address_mode[1].into_metal());
+        mdesc.setRAddressMode(desc.address_mode[2].into_metal());
         if let Some(anisotropy) = desc.anisotropy {
-            mdesc.set_max_anisotropy((anisotropy as NSUInteger).clamp(1, 16));
+            mdesc.setMaxAnisotropy((anisotropy as NSUInteger).clamp(1, 16));
         }
-        mdesc.set_lod_min_clamp(desc.min_lod);
-        mdesc.set_lod_max_clamp(desc.max_lod);
-        mdesc.set_normalized_coordinates(desc.normalized);
-        let state = self.device.new_sampler(&mdesc);
+        mdesc.setLodMinClamp(desc.min_lod);
+        mdesc.setLodMaxClamp(desc.max_lod);
+        mdesc.setNormalizedCoordinates(desc.normalized);
+        let state = self
+            .device
+            .newSamplerStateWithDescriptor(&mdesc)
+            .expect("Failed to create sampler state");
         Sampler::new(state)
     }
 
@@ -384,14 +431,18 @@ impl crate::traits::Device for Device {
             .map_err(|_| SurfaceError::SurfaceLost)?;
         match (window.as_raw(), display.as_raw()) {
             (RawWindowHandle::UiKit(handle), RawDisplayHandle::UiKit(_)) => unsafe {
-                let layer = layer_from_view(handle.ui_view.cast().as_ptr());
-                layer.set_device(&self.device);
-                Ok(Surface::new(layer, handle.ui_view.cast().as_ptr()))
+                let view_ptr = handle.ui_view.cast().as_ptr();
+                let layer = layer_from_view(view_ptr);
+                layer.setDevice(Some(&self.device));
+                let view = Retained::retain(view_ptr.cast::<NSObject>());
+                Ok(Surface::new(layer, view))
             },
             (RawWindowHandle::AppKit(handle), RawDisplayHandle::AppKit(_)) => unsafe {
-                let layer = layer_from_view(handle.ns_view.cast().as_ptr());
-                layer.set_device(&self.device);
-                Ok(Surface::new(layer, handle.ns_view.cast().as_ptr()))
+                let view_ptr = handle.ns_view.cast().as_ptr();
+                let layer = layer_from_view(view_ptr);
+                layer.setDevice(Some(&self.device));
+                let view = Retained::retain(view_ptr.cast::<NSObject>());
+                Ok(Surface::new(layer, view))
             },
             (RawWindowHandle::UiKit(_), _) | (RawWindowHandle::AppKit(_), _) => {
                 panic!("Mismatched window and display type")
@@ -401,15 +452,18 @@ impl crate::traits::Device for Device {
     }
 
     fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {
-        todo!()
+        Ok(Surface::fake(image))
     }
 
     fn new_blas(&self, desc: BlasDesc) -> Blas {
         let Ok(size) = u64::try_from(desc.size) else {
             size_exceeds_u64();
         };
-        let blas = self.device.new_acceleration_structure_with_size(size);
-        // blas.set_label(desc.name);
+        let blas = self
+            .device
+            .newAccelerationStructureWithSize(size as NSUInteger)
+            .expect("Failed to create acceleration structure");
+        // blas.setLabel(desc.name);
         Blas::new(blas)
     }
 
@@ -417,43 +471,49 @@ impl crate::traits::Device for Device {
         let Ok(size) = u64::try_from(desc.size) else {
             size_exceeds_u64();
         };
-        let tlas = self.device.new_acceleration_structure_with_size(size);
-        // tlas.set_label(desc.name);
+        let tlas = self
+            .device
+            .newAccelerationStructureWithSize(size as NSUInteger)
+            .expect("Failed to create acceleration structure");
+        // tlas.setLabel(desc.name);
         Tlas::new(tlas)
     }
 }
 
-unsafe fn layer_from_view(view: *mut Object) -> metal::MetalLayer {
-    let main_layer: *mut Object = msg_send![view, layer];
-    let class = class!(CAMetalLayer);
-    let is_valid_layer: BOOL = msg_send![main_layer, isKindOfClass: class];
+unsafe fn layer_from_view(view: *mut AnyObject) -> Retained<CAMetalLayer> {
+    unsafe {
+        let main_layer: *mut AnyObject = msg_send![view, layer];
+        let class = class!(CAMetalLayer);
+        let is_valid_layer: Bool = msg_send![main_layer, isKindOfClass: class];
 
-    if is_valid_layer == YES {
-        unsafe { ForeignType::from_ptr(main_layer.cast()) }
-    } else {
-        let new_layer: *mut CAMetalLayer = msg_send![class, new];
-        let frame: CGRect = msg_send![main_layer, bounds];
-        let () = msg_send![new_layer, setFrame: frame];
-        #[cfg(target_os = "macos")]
-        {
-            let () = msg_send![view, setLayer: new_layer];
-            let () = msg_send![view, setWantsLayer: YES];
-            let () = unsafe { msg_send![new_layer, setContentsGravity: kCAGravityTopLeft] };
-            let window: *mut Object = msg_send![view, window];
-            if !window.is_null() {
-                let scale_factor: CGFloat = msg_send![window, backingScaleFactor];
-                let () = msg_send![new_layer, setContentsScale: scale_factor];
+        if is_valid_layer == Bool::YES {
+            Retained::retain(main_layer.cast::<CAMetalLayer>())
+                .expect("view's layer must not be null")
+        } else {
+            let new_layer = CAMetalLayer::new();
+            let frame: CGRect = msg_send![main_layer, bounds];
+            new_layer.setFrame(frame);
+            #[cfg(target_os = "macos")]
+            {
+                let () = msg_send![view, setLayer: &*new_layer];
+                let () = msg_send![view, setWantsLayer: Bool::YES];
+                let () = msg_send![&*new_layer, setContentsGravity: kCAGravityTopLeft];
+                let window: *mut AnyObject = msg_send![view, window];
+                if !window.is_null() {
+                    let scale_factor: CGFloat = msg_send![window, backingScaleFactor];
+                    let () = msg_send![&*new_layer, setContentsScale: scale_factor];
+                }
             }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let () = msg_send![main_layer, addSublayer: &*new_layer];
+                let () = msg_send![main_layer, setAutoresizingMask: 0x1Fu64];
+                let screen: *mut AnyObject = msg_send![class!(UIScreen), mainScreen];
+                let scale_factor: CGFloat = msg_send![screen, nativeScale];
+                let () = msg_send![view, setContentScaleFactor: scale_factor];
+            }
+            new_layer
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let () = msg_send![main_layer, addSublayer: new_layer];
-            let () = msg_send![main_layer, setAutoresizingMask: 0x1Fu64];
-            let screen: *mut Object = msg_send![class!(UIScreen), mainScreen];
-            let scale_factor: CGFloat = msg_send![screen, nativeScale];
-            let () = msg_send![view, setContentScaleFactor: scale_factor];
-        }
-        unsafe { ForeignType::from_ptr(new_layer) }
     }
 }
 
@@ -461,7 +521,7 @@ unsafe fn layer_from_view(view: *mut Object) -> metal::MetalLayer {
 #[link(name = "QuartzCore", kind = "framework")]
 unsafe extern "C" {
     #[allow(non_upper_case_globals)]
-    static kCAGravityTopLeft: *mut Object;
+    static kCAGravityTopLeft: *mut AnyObject;
 }
 
 struct CompiledMetalShader {

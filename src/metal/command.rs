@@ -1,7 +1,16 @@
-use std::{marker::PhantomData, ops::Range, sync::Arc};
+use std::{marker::PhantomData, ops::Range, ptr::NonNull, sync::Arc};
 
-use metal::{NSRange, NSUInteger};
-use objc::{Message, msg_send};
+use objc2::{Message, msg_send, rc::Retained, runtime::ProtocolObject};
+use objc2_foundation::{NSArray, NSInteger, NSRange, NSUInteger};
+use objc2_metal::{
+    MTLAccelerationStructureBoundingBoxGeometryDescriptor, MTLAccelerationStructureCommandEncoder,
+    MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureTriangleGeometryDescriptor,
+    MTLAccelerationStructureUsage, MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLClearColor,
+    MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLDevice, MTLIndexType,
+    MTLLoadAction, MTLOrigin, MTLPrimitiveAccelerationStructureDescriptor, MTLPrimitiveType,
+    MTLRenderCommandEncoder, MTLRenderPassColorAttachmentDescriptor, MTLRenderPassDescriptor,
+    MTLResourceOptions, MTLScissorRect, MTLSize, MTLStoreAction, MTLViewport,
+};
 use smallvec::SmallVec;
 
 use crate::{
@@ -20,23 +29,26 @@ use super::{
 };
 
 pub struct CommandBuffer {
-    buffer: metal::CommandBuffer,
+    buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
 }
 
 impl CommandBuffer {
-    pub(super) fn commit(self) -> metal::CommandBuffer {
+    pub(super) fn commit(self) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
         self.buffer.commit();
         self.buffer
     }
 }
 
 pub struct CommandEncoder {
-    device: metal::Device,
-    buffer: metal::CommandBuffer,
+    device: Retained<ProtocolObject<dyn MTLDevice>>,
+    buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
 }
 
 impl CommandEncoder {
-    pub(super) fn new(device: metal::Device, buffer: metal::CommandBuffer) -> Self {
+    pub(super) fn new(
+        device: Retained<ProtocolObject<dyn MTLDevice>>,
+        buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
+    ) -> Self {
         CommandEncoder { device, buffer }
     }
 }
@@ -54,9 +66,12 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
 impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline(always)]
     fn copy(&mut self) -> CopyCommandEncoder<'_> {
-        let encoder = self.buffer.new_blit_command_encoder();
+        let encoder = self
+            .buffer
+            .blitCommandEncoder()
+            .expect("Failed to create blit command encoder");
         CopyCommandEncoder {
-            device: &mut self.device,
+            device: &self.device,
             encoder: encoder.to_owned(),
             _marker: PhantomData,
         }
@@ -64,9 +79,12 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 
     #[inline(always)]
     fn compute(&mut self) -> ComputeCommandEncoder<'_> {
-        let encoder = self.buffer.new_compute_command_encoder();
+        let encoder = self
+            .buffer
+            .computeCommandEncoder()
+            .expect("Failed to create compute command encoder");
         ComputeCommandEncoder {
-            device: &mut self.device,
+            device: &self.device,
             encoder: encoder.to_owned(),
             bindings: None,
             workgroup_size: None,
@@ -75,34 +93,36 @@ impl crate::traits::CommandEncoder for CommandEncoder {
     }
 
     fn render(&mut self, desc: RenderPassDesc) -> RenderCommandEncoder<'_> {
-        let mdesc = metal::RenderPassDescriptor::new();
-        let color_attachments = mdesc.color_attachments();
+        let mdesc = MTLRenderPassDescriptor::new();
+        let color_attachments = mdesc.colorAttachments();
         for (idx, color) in desc.color_attachments.iter().enumerate() {
             let format = color.image.format();
             debug_assert!(format.is_color());
 
-            let attachment = metal::RenderPassColorAttachmentDescriptor::new();
-            attachment.set_texture(Some(color.image.metal()));
-            attachment.set_load_action(match color.load {
-                LoadOp::Load => metal::MTLLoadAction::Load,
+            let attachment = MTLRenderPassColorAttachmentDescriptor::new();
+            attachment.setTexture(Some(color.image.metal()));
+            attachment.setLoadAction(match color.load {
+                LoadOp::Load => MTLLoadAction::Load,
                 LoadOp::Clear(ClearColor(r, g, b, a)) => {
-                    attachment.set_clear_color(metal::MTLClearColor {
+                    attachment.setClearColor(MTLClearColor {
                         red: r.into(),
                         green: g.into(),
                         blue: b.into(),
                         alpha: a.into(),
                     });
-                    metal::MTLLoadAction::Clear
+                    MTLLoadAction::Clear
                 }
-                LoadOp::DontCare => metal::MTLLoadAction::DontCare,
+                LoadOp::DontCare => MTLLoadAction::DontCare,
             });
-            attachment.set_store_action(match color.store {
-                StoreOp::Store => metal::MTLStoreAction::Store,
-                StoreOp::DontCare => metal::MTLStoreAction::DontCare,
+            attachment.setStoreAction(match color.store {
+                StoreOp::Store => MTLStoreAction::Store,
+                StoreOp::DontCare => MTLStoreAction::DontCare,
             });
-            attachment.set_level(0);
-            attachment.set_slice(0);
-            color_attachments.set_object_at(idx as _, Some(&attachment));
+            attachment.setLevel(0);
+            attachment.setSlice(0);
+            unsafe {
+                color_attachments.setObject_atIndexedSubscript(Some(&attachment), idx);
+            }
         }
 
         if let Some(depth) = desc.depth_stencil_attachment {
@@ -110,47 +130,50 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             debug_assert!(format.is_depth() || format.is_stencil());
 
             if format.is_depth() {
-                let attachment = mdesc.depth_attachment().unwrap();
-                attachment.set_texture(Some(depth.image.metal()));
-                attachment.set_load_action(match depth.load {
-                    LoadOp::Load => metal::MTLLoadAction::Load,
+                let attachment = mdesc.depthAttachment();
+                attachment.setTexture(Some(depth.image.metal()));
+                attachment.setLoadAction(match depth.load {
+                    LoadOp::Load => MTLLoadAction::Load,
                     LoadOp::Clear(ClearDepthStencil { depth, .. }) => {
-                        attachment.set_clear_depth(depth.into());
-                        metal::MTLLoadAction::Clear
+                        attachment.setClearDepth(depth.into());
+                        MTLLoadAction::Clear
                     }
-                    LoadOp::DontCare => metal::MTLLoadAction::DontCare,
+                    LoadOp::DontCare => MTLLoadAction::DontCare,
                 });
-                attachment.set_store_action(match depth.store {
-                    StoreOp::Store => metal::MTLStoreAction::Store,
-                    StoreOp::DontCare => metal::MTLStoreAction::DontCare,
+                attachment.setStoreAction(match depth.store {
+                    StoreOp::Store => MTLStoreAction::Store,
+                    StoreOp::DontCare => MTLStoreAction::DontCare,
                 });
-                attachment.set_level(0);
-                attachment.set_slice(0);
+                attachment.setLevel(0);
+                attachment.setSlice(0);
             }
             if format.is_stencil() {
-                let attachment = mdesc.stencil_attachment().unwrap();
-                attachment.set_texture(Some(depth.image.metal()));
-                attachment.set_load_action(match depth.load {
-                    LoadOp::Load => metal::MTLLoadAction::Load,
+                let attachment = mdesc.stencilAttachment();
+                attachment.setTexture(Some(depth.image.metal()));
+                attachment.setLoadAction(match depth.load {
+                    LoadOp::Load => MTLLoadAction::Load,
                     LoadOp::Clear(ClearDepthStencil { stencil, .. }) => {
-                        attachment.set_clear_stencil(stencil.into());
-                        metal::MTLLoadAction::Clear
+                        attachment.setClearStencil(stencil.into());
+                        MTLLoadAction::Clear
                     }
-                    LoadOp::DontCare => metal::MTLLoadAction::DontCare,
+                    LoadOp::DontCare => MTLLoadAction::DontCare,
                 });
-                attachment.set_store_action(match depth.store {
-                    StoreOp::Store => metal::MTLStoreAction::Store,
-                    StoreOp::DontCare => metal::MTLStoreAction::DontCare,
+                attachment.setStoreAction(match depth.store {
+                    StoreOp::Store => MTLStoreAction::Store,
+                    StoreOp::DontCare => MTLStoreAction::DontCare,
                 });
-                attachment.set_level(0);
-                attachment.set_slice(0);
+                attachment.setLevel(0);
+                attachment.setSlice(0);
             }
         }
 
-        let encoder = self.buffer.new_render_command_encoder(&mdesc);
+        let encoder = self
+            .buffer
+            .renderCommandEncoderWithDescriptor(&mdesc)
+            .expect("Failed to create render command encoder");
         RenderCommandEncoder {
             encoder: encoder.to_owned(),
-            primitive: metal::MTLPrimitiveType::Triangle,
+            primitive: MTLPrimitiveType::Triangle,
             index_buffer: None,
             index_buffer_offset: 0,
             vertex_bindings: None,
@@ -162,7 +185,10 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 
     #[inline(always)]
     fn acceleration_structure(&mut self) -> AccelerationStructureCommandEncoder<'_> {
-        let encoder = self.buffer.new_acceleration_structure_command_encoder();
+        let encoder = self
+            .buffer
+            .accelerationStructureCommandEncoder()
+            .expect("Failed to create acceleration structure command encoder");
         AccelerationStructureCommandEncoder {
             device: &mut self.device,
             encoder: encoder.to_owned(),
@@ -173,7 +199,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline(always)]
     fn present(&mut self, frame: Frame, _after: PipelineStages) {
         if let Some(drawable) = frame.drawable() {
-            self.buffer.present_drawable(drawable);
+            self.buffer.presentDrawable(drawable);
         }
     }
 
@@ -186,15 +212,15 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 }
 
 pub struct CopyCommandEncoder<'a> {
-    device: &'a mut metal::DeviceRef,
-    encoder: metal::BlitCommandEncoder,
+    device: &'a ProtocolObject<dyn MTLDevice>,
+    encoder: Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>,
     _marker: PhantomData<&'a mut CommandBuffer>,
 }
 
 impl Drop for CopyCommandEncoder<'_> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.encoder.end_encoding();
+        self.encoder.endEncoding();
     }
 }
 
@@ -225,26 +251,27 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         debug_assert!(layers.end > layers.start);
         debug_assert!(layers.end == layers.start + 1);
 
-        self.encoder.copy_from_buffer_to_texture(
+        unsafe {
+            self.encoder.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
             src.metal(),
-            start as NSUInteger,
-            bytes_per_line as NSUInteger,
-            bytes_per_plane as NSUInteger,
-            metal::MTLSize {
-                width: extent.width() as NSUInteger,
-                height: extent.height() as NSUInteger,
-                depth: extent.depth() as NSUInteger,
-            },
-            dst.metal(),
-            layers.start as NSUInteger,
-            level as NSUInteger,
-            metal::MTLOrigin {
-                x: offset.x() as NSUInteger,
-                y: offset.y() as NSUInteger,
-                z: offset.z() as NSUInteger,
-            },
-            metal::MTLBlitOption::empty(),
-        );
+                start as NSUInteger,
+                bytes_per_line as NSUInteger,
+                bytes_per_plane as NSUInteger,
+                MTLSize {
+                    width: extent.width() as NSUInteger,
+                    height: extent.height() as NSUInteger,
+                    depth: extent.depth() as NSUInteger,
+                },
+                dst.metal(),
+                layers.start as NSUInteger,
+                level as NSUInteger,
+                MTLOrigin {
+                    x: offset.x() as NSUInteger,
+                    y: offset.y() as NSUInteger,
+                    z: offset.z() as NSUInteger,
+                },
+            );
+        }
     }
 
     #[inline]
@@ -261,7 +288,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         extent: Extent3<u32>,
         layers: u32,
     ) {
-        use objc::{sel, sel_impl};
+        use objc2::sel;
 
         // If copying entire slices, use optimized method
         if src_offset == Offset3::ZERO
@@ -270,16 +297,16 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             && dst.extent().into_3d() == extent
         {
             unsafe {
-                let () = msg_send![self.encoder,
-                    copyFromTexture: src.metal()
-                    sourceSlice: src_base_layer as NSUInteger
-                    sourceLevel: src_level as NSUInteger
-                    toTexture: dst.metal()
-                    destinationSlice: dst_base_layer as NSUInteger
-                    destinationLevel: dst_level as NSUInteger
-                    sliceCount: layers as NSUInteger
-                    levelCount: 1
-                ];
+                self.encoder.copyFromTexture_sourceSlice_sourceLevel_toTexture_destinationSlice_destinationLevel_sliceCount_levelCount(
+                    src.metal(),
+                    src_base_layer as NSUInteger,
+                    src_level as NSUInteger,
+                    dst.metal(),
+                    dst_base_layer as NSUInteger,
+                    dst_level as NSUInteger,
+                    layers as NSUInteger,
+                    1,
+                );
             }
 
             return;
@@ -287,29 +314,31 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
 
         // Otherwise, copy slice by slice, level by level
         for layer in 0..layers {
-            self.encoder.copy_from_texture(
-                src.metal(),
-                (src_base_layer + layer) as NSUInteger,
-                src_level as NSUInteger,
-                metal::MTLOrigin {
-                    x: src_offset.x() as NSUInteger,
-                    y: src_offset.y() as NSUInteger,
-                    z: src_offset.z() as NSUInteger,
-                },
-                metal::MTLSize {
-                    width: extent.width() as NSUInteger,
-                    height: extent.height() as NSUInteger,
-                    depth: extent.depth() as NSUInteger,
-                },
-                dst.metal(),
-                (dst_base_layer + layer) as NSUInteger,
-                dst_level as NSUInteger,
-                metal::MTLOrigin {
-                    x: dst_offset.x() as NSUInteger,
-                    y: dst_offset.y() as NSUInteger,
-                    z: dst_offset.z() as NSUInteger,
-                },
-            );
+            unsafe {
+                self.encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
+                    src.metal(),
+                    (src_base_layer + layer) as NSUInteger,
+                    src_level as NSUInteger,
+                    MTLOrigin {
+                        x: src_offset.x() as NSUInteger,
+                        y: src_offset.y() as NSUInteger,
+                        z: src_offset.z() as NSUInteger,
+                    },
+                    MTLSize {
+                        width: extent.width() as NSUInteger,
+                        height: extent.height() as NSUInteger,
+                        depth: extent.depth() as NSUInteger,
+                    },
+                    dst.metal(),
+                    (dst_base_layer + layer) as NSUInteger,
+                    dst_level as NSUInteger,
+                    MTLOrigin {
+                        x: dst_offset.x() as NSUInteger,
+                        y: dst_offset.y() as NSUInteger,
+                        z: dst_offset.z() as NSUInteger,
+                    },
+                );
+            }
         }
     }
 
@@ -317,7 +346,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
         let slice = slice.as_buffer_slice();
 
-        self.encoder.fill_buffer(
+        self.encoder.fillBuffer_range_value(
             slice.buffer.metal(),
             NSRange {
                 location: slice.offset as NSUInteger,
@@ -340,19 +369,25 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             "Data length does not match buffer slice size"
         );
 
-        let staged = self.device.new_buffer_with_data(
-            data.as_ptr().cast(),
-            data.len() as NSUInteger,
-            metal::MTLResourceOptions::StorageModeShared,
-        );
+        let staging = unsafe {
+            self.device.newBufferWithBytes_length_options(
+                NonNull::from(data).cast(),
+                data.len() as NSUInteger,
+                MTLResourceOptions::StorageModeShared,
+            )
+        }
+        .expect("Failed to allocate staging buffer");
 
-        self.encoder.copy_from_buffer(
-            &staged,
-            0,
-            slice.buffer.metal(),
-            slice.offset as NSUInteger,
-            data.len() as NSUInteger,
-        );
+        unsafe {
+            self.encoder
+                .copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                    &staging,
+                    0,
+                    slice.buffer.metal(),
+                    slice.offset as NSUInteger,
+                    data.len() as NSUInteger,
+                );
+        }
     }
 
     #[inline(always)]
@@ -375,19 +410,22 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         dst_offset: usize,
         size: usize,
     ) {
-        self.encoder.copy_from_buffer(
-            src.metal(),
-            src_offset as NSUInteger,
-            dst.metal(),
-            dst_offset as NSUInteger,
-            size as NSUInteger,
-        );
+        unsafe {
+            self.encoder
+                .copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                    src.metal(),
+                    src_offset as NSUInteger,
+                    dst.metal(),
+                    dst_offset as NSUInteger,
+                    size as NSUInteger,
+                );
+        }
     }
 }
 
 pub struct ComputeCommandEncoder<'a> {
-    device: &'a mut metal::DeviceRef,
-    encoder: metal::ComputeCommandEncoder,
+    device: &'a ProtocolObject<dyn MTLDevice>,
+    encoder: Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>,
     bindings: Option<Arc<Bindings>>,
     workgroup_size: Option<[u32; 3]>,
     _marker: PhantomData<&'a mut CommandBuffer>,
@@ -402,15 +440,15 @@ impl ComputeCommandEncoder<'_> {
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn metal(&self) -> &metal::ComputeCommandEncoderRef {
-        &self.encoder
+    pub fn metal(&self) -> &ProtocolObject<dyn MTLComputeCommandEncoder> {
+        self.encoder.as_ref()
     }
 }
 
 impl Drop for ComputeCommandEncoder<'_> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.encoder.end_encoding();
+        self.encoder.endEncoding();
     }
 }
 
@@ -427,7 +465,8 @@ impl traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
 impl traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline(always)]
     fn with_pipeline(&mut self, pipeline: &crate::backend::ComputePipeline) {
-        self.encoder.set_compute_pipeline_state(pipeline.metal());
+        pipeline.metal();
+        self.encoder.setComputePipelineState(pipeline.metal());
         self.bindings = pipeline.bindings();
         self.workgroup_size = pipeline.workgroup_size();
     }
@@ -442,33 +481,40 @@ impl traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         let data = constants.as_repr();
         let data_bytes = bytemuck::bytes_of(&data);
 
-        self.encoder
-            .set_bytes(0, data_bytes.len() as NSUInteger, data_bytes.as_ptr() as _);
+        unsafe {
+            self.encoder.setBytes_length_atIndex(
+                NonNull::from(data_bytes).cast(),
+                data_bytes.len() as NSUInteger,
+                0,
+            );
+        }
     }
 
     #[inline(always)]
     fn dispatch(&mut self, groups: Extent3) {
         let group_size = self.workgroup_size.unwrap_or([1, 1, 1]);
 
-        self.encoder.dispatch_thread_groups(
-            metal::MTLSize {
-                width: groups.width().into(),
-                height: groups.height().into(),
-                depth: groups.depth().into(),
-            },
-            metal::MTLSize {
-                width: group_size[0].into(),
-                height: group_size[1].into(),
-                depth: group_size[2].into(),
-            },
-        );
+        unsafe {
+            self.encoder.dispatchThreadgroups_threadsPerThreadgroup(
+                MTLSize {
+                    width: groups.width() as usize,
+                    height: groups.height() as usize,
+                    depth: groups.depth() as usize,
+                },
+                MTLSize {
+                    width: group_size[0] as usize,
+                    height: group_size[1] as usize,
+                    depth: group_size[2] as usize,
+                },
+            );
+        }
     }
 }
 
 pub struct RenderCommandEncoder<'a> {
-    encoder: metal::RenderCommandEncoder,
-    primitive: metal::MTLPrimitiveType,
-    index_buffer: Option<metal::Buffer>,
+    encoder: Retained<ProtocolObject<dyn MTLRenderCommandEncoder>>,
+    primitive: MTLPrimitiveType,
+    index_buffer: Option<Retained<ProtocolObject<dyn MTLBuffer>>>,
     index_buffer_offset: NSUInteger,
     vertex_bindings: Option<Arc<Bindings>>,
     fragment_bindings: Option<Arc<Bindings>>,
@@ -491,7 +537,7 @@ impl RenderCommandEncoder<'_> {
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn metal(&self) -> &metal::RenderCommandEncoderRef {
+    pub fn metal(&self) -> &ProtocolObject<dyn MTLRenderCommandEncoder> {
         &self.encoder
     }
 }
@@ -499,7 +545,7 @@ impl RenderCommandEncoder<'_> {
 impl Drop for RenderCommandEncoder<'_> {
     #[inline(always)]
     fn drop(&mut self) {
-        self.encoder.end_encoding();
+        self.encoder.endEncoding();
     }
 }
 
@@ -507,7 +553,7 @@ impl Drop for RenderCommandEncoder<'_> {
 impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     #[inline(always)]
     fn with_pipeline(&mut self, pipeline: &RenderPipeline) {
-        self.encoder.set_render_pipeline_state(pipeline.metal());
+        self.encoder.setRenderPipelineState(pipeline.metal());
         self.primitive = pipeline.primitive();
         self.vertex_bindings = pipeline.vertex_bindings();
         self.fragment_bindings = pipeline.fragment_bindings();
@@ -516,7 +562,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
 
     #[inline(always)]
     fn with_viewport(&mut self, offset: Offset3<f32>, extent: Extent3<f32>) {
-        let viewport = metal::MTLViewport {
+        let viewport = MTLViewport {
             originX: offset.x().into(),
             originY: offset.y().into(),
             width: extent.width().into(),
@@ -524,7 +570,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
             znear: offset.z().into(),
             zfar: (offset.z() + extent.depth()).into(),
         };
-        self.encoder.set_viewport(viewport);
+        self.encoder.setViewport(viewport);
     }
 
     #[inline(always)]
@@ -532,13 +578,13 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         debug_assert!(offset.x() >= 0);
         debug_assert!(offset.y() >= 0);
 
-        let scissor = metal::MTLScissorRect {
+        let scissor = MTLScissorRect {
             x: offset.x() as NSUInteger,
             y: offset.y() as NSUInteger,
             width: extent.width() as NSUInteger,
             height: extent.height() as NSUInteger,
         };
-        self.encoder.set_scissor_rect(scissor);
+        self.encoder.setScissorRect(scissor);
     }
 
     /// Sets arguments group for the current pipeline.
@@ -555,21 +601,25 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
 
         if let Some(vb) = &self.vertex_bindings {
             if let Some(slot) = vb.push_constants {
-                self.encoder.set_vertex_bytes(
-                    slot as u64,
-                    data_bytes.len() as u64,
-                    data_bytes.as_ptr() as _,
-                );
+                unsafe {
+                    self.encoder.setVertexBytes_length_atIndex(
+                        NonNull::from(data_bytes).cast(),
+                        data_bytes.len() as NSUInteger,
+                        slot as NSUInteger,
+                    );
+                }
             }
         }
 
         if let Some(fb) = &self.fragment_bindings {
             if let Some(slot) = fb.push_constants {
-                self.encoder.set_fragment_bytes(
-                    slot as u64,
-                    data_bytes.len() as u64,
-                    data_bytes.as_ptr() as _,
-                );
+                unsafe {
+                    self.encoder.setFragmentBytes_length_atIndex(
+                        NonNull::from(data_bytes).cast(),
+                        data_bytes.len() as NSUInteger,
+                        slot as NSUInteger,
+                    );
+                }
             }
         }
     }
@@ -577,20 +627,32 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     /// Bind vertex buffer to the current pipeline.
     #[inline]
     fn bind_vertex_buffers(&mut self, start: u32, buffers: &[(impl AsBufferSlice)]) {
-        let (buffers, offsets) = buffers
+        let slices = buffers
+            .iter()
+            .map(|slice| slice.as_buffer_slice())
+            .collect::<SmallVec<[_; 8]>>();
+
+        let (buffers, offsets) = slices
             .iter()
             .map(|slice| {
-                let slice = slice.as_buffer_slice();
-                let offset = slice.offset as NSUInteger;
-                let buffer = slice.buffer.metal();
+                let offset = slice.offset() as NSUInteger;
+                let buffer = slice.buffer().metal();
                 (Some(buffer), offset)
             })
             .unzip::<_, _, SmallVec<[_; 8]>, SmallVec<[_; 8]>>();
 
         let first = self.vertex_buffers_count + start;
 
-        self.encoder
-            .set_vertex_buffers(first as NSUInteger, &buffers, &offsets);
+        unsafe {
+            self.encoder.setVertexBuffers_offsets_withRange(
+                NonNull::from(&buffers[..]).cast(),
+                NonNull::from(&offsets[..]).cast(),
+                NSRange {
+                    location: first as NSUInteger,
+                    length: buffers.len() as NSUInteger,
+                },
+            );
+        }
     }
 
     /// Bind index buffer to the current pipeline.
@@ -598,7 +660,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     fn bind_index_buffer(&mut self, buffer: impl AsBufferSlice) {
         let buffer_slice = buffer.as_buffer_slice();
 
-        self.index_buffer = Some(buffer_slice.buffer.metal().to_owned());
+        self.index_buffer = Some(Retained::from(buffer_slice.buffer.metal()));
         self.index_buffer_offset = buffer_slice.offset as NSUInteger;
     }
 
@@ -608,35 +670,53 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
             // Rendering no vertices is a no-op
             return;
         }
+
         if instances.end <= instances.start {
             // Rendering no instances is a no-op
             return;
         }
 
-        if instances.end - 1 == instances.start {
-            // Rendering single instance
-            self.encoder.draw_primitives(
-                self.primitive,
-                vertices.start.into(),
-                (vertices.end - vertices.start).into(),
-            );
-        } else if instances.start == 0 {
-            // Rendering multiple instances
-            self.encoder.draw_primitives_instanced(
-                self.primitive,
-                vertices.start.into(),
-                (vertices.end - vertices.start).into(),
-                instances.end.into(),
-            );
-        } else {
-            // Rendering multiple instances with a base instance
-            self.encoder.draw_primitives_instanced_base_instance(
-                self.primitive,
-                vertices.start.into(),
-                (vertices.end - vertices.start).into(),
-                (instances.end - instances.start).into(),
-                instances.start.into(),
-            );
+        let first_vertex = vertices.start as NSUInteger;
+        let vertex_count = (vertices.end - vertices.start) as NSUInteger;
+        let first_instance = instances.start as NSUInteger;
+        let instance_count = (instances.end - instances.start) as NSUInteger;
+
+        match (first_instance, instance_count) {
+            (0, 1) => {
+                // Rendering single instance
+                unsafe {
+                    self.encoder.drawPrimitives_vertexStart_vertexCount(
+                        self.primitive,
+                        first_vertex,
+                        vertex_count,
+                    );
+                }
+            }
+            (0, _) => {
+                // Rendering multiple instances
+                unsafe {
+                    self.encoder
+                        .drawPrimitives_vertexStart_vertexCount_instanceCount(
+                            self.primitive,
+                            first_vertex,
+                            vertex_count,
+                            instance_count,
+                        );
+                }
+            }
+            _ => {
+                // Rendering multiple instances with a base instance
+                unsafe {
+                    self.encoder
+                        .drawPrimitives_vertexStart_vertexCount_instanceCount_baseInstance(
+                            self.primitive,
+                            first_vertex,
+                            vertex_count,
+                            instance_count,
+                            first_instance,
+                        );
+                }
+            }
         }
     }
 
@@ -655,45 +735,63 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
             return;
         }
 
-        if instances.end - 1 == instances.start && vertex_offset == 0 {
-            // Rendering single instance
-            self.encoder.draw_indexed_primitives(
-                self.primitive,
-                (indices.end - indices.start).into(),
-                metal::MTLIndexType::UInt32,
-                index_buffer,
-                (self.index_buffer_offset + (indices.start as NSUInteger * 4)).into(),
-            );
-        } else if instances.start == 0 && vertex_offset == 0 {
-            // Rendering multiple instances
-            self.encoder.draw_indexed_primitives_instanced(
-                self.primitive,
-                (indices.end - indices.start).into(),
-                metal::MTLIndexType::UInt32,
-                index_buffer,
-                (self.index_buffer_offset + (indices.start as NSUInteger * 4)).into(),
-                instances.end.into(),
-            );
-        } else {
-            // Rendering multiple instances with a base instance
-            self.encoder
-                .draw_indexed_primitives_instanced_base_instance(
-                    self.primitive,
-                    (indices.end - indices.start).into(),
-                    metal::MTLIndexType::UInt32,
-                    self.index_buffer.as_ref().unwrap(),
-                    (self.index_buffer_offset + (indices.start as NSUInteger * 4)).into(),
-                    (instances.end - instances.start).into(),
-                    instances.start.into(),
-                    vertex_offset as NSUInteger,
-                );
+        let first_vertex = vertex_offset as NSInteger;
+        let first_index = indices.start as NSUInteger;
+        let indices_count = (indices.end - indices.start) as NSUInteger;
+        let first_instance = instances.start as NSUInteger;
+        let instance_count = (instances.end - instances.start) as NSUInteger;
+
+        match (first_vertex, first_instance, instance_count) {
+            (0, 0, 1) => {
+                // Rendering single instance
+                unsafe {
+                    self.encoder
+                        .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset(
+                            self.primitive,
+                            indices_count,
+                            MTLIndexType::UInt32,
+                            index_buffer,
+                            (self.index_buffer_offset + (first_index * 4)) as NSUInteger,
+                        );
+                }
+            }
+            (0, 0, _) => {
+                // Rendering multiple instances
+                unsafe {
+                    self.encoder
+                        .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount(
+                            self.primitive,
+                            indices_count,
+                            MTLIndexType::UInt32,
+                            index_buffer,
+                            (self.index_buffer_offset + (first_index * 4)) as NSUInteger,
+                            instance_count,
+                        );
+                }
+            }
+            (_, _, _) => {
+                // Rendering multiple instances with a base instance
+                unsafe {
+                    self.encoder
+                        .drawIndexedPrimitives_indexCount_indexType_indexBuffer_indexBufferOffset_instanceCount_baseVertex_baseInstance(
+                            self.primitive,
+                            indices_count,
+                            MTLIndexType::UInt32,
+                            index_buffer,
+                            (self.index_buffer_offset + (first_index * 4)) as NSUInteger,
+                            instance_count,
+                            first_vertex,
+                            first_instance,
+                        );
+                }
+            }
         }
     }
 }
 
 pub struct AccelerationStructureCommandEncoder<'a> {
-    device: &'a mut metal::DeviceRef,
-    encoder: metal::AccelerationStructureCommandEncoder,
+    device: &'a ProtocolObject<dyn MTLDevice>,
+    encoder: Retained<ProtocolObject<dyn MTLAccelerationStructureCommandEncoder>>,
     _marker: PhantomData<&'a mut CommandBuffer>,
 }
 
@@ -702,81 +800,73 @@ impl crate::traits::AccelerationStructureCommandEncoder
     for AccelerationStructureCommandEncoder<'_>
 {
     fn build_blas(&mut self, blas: &Blas, desc: BlasBuildDesc, scratch: impl AsBufferSlice) {
-        use objc::{
-            class, msg_send,
-            runtime::{BOOL, Object, YES},
-            sel, sel_impl,
-        };
-
-        let mut mdesc = metal::PrimitiveAccelerationStructureDescriptor::descriptor();
-        match desc.performance {
-            AccelerationStructurePerformance::FastBuild => unsafe {
-                msg_send![mdesc, usage: 0x2u64]
-            },
-            _ => {}
+        let mdesc = MTLPrimitiveAccelerationStructureDescriptor::descriptor();
+        if let AccelerationStructurePerformance::FastBuild = desc.performance {
+            mdesc.setUsage(MTLAccelerationStructureUsage::PreferFastBuild);
         }
 
-        let mut geometry_descs = Vec::<metal::AccelerationStructureGeometryDescriptor>::new();
+        let mut geometry_descs =
+            Vec::<Retained<MTLAccelerationStructureGeometryDescriptor>>::new();
 
         for geometry in desc.geometry {
             match geometry {
                 BlasGeometryDesc::Triangles(triangles) => {
-                    let mut mdesc =
-                        metal::AccelerationStructureTriangleGeometryDescriptor::descriptor();
+                    let mdesc = MTLAccelerationStructureTriangleGeometryDescriptor::descriptor();
 
-                    mdesc.set_opaque(triangles.opaque);
+                    mdesc.setOpaque(triangles.opaque);
 
                     let mut count =
                         (triangles.vertices.size / triangles.vertex_stride) as NSUInteger;
 
-                    if let Some(indices) = triangles.indices {
-                        mdesc.set_index_type(metal::MTLIndexType::UInt32);
-                        mdesc.set_index_buffer_offset(indices.offset as _);
-                        mdesc.set_index_buffer(Some(indices.buffer.metal()));
-                        count = indices.size as NSUInteger / 4;
+                    if let Some(indices) = &triangles.indices {
+                        mdesc.setIndexType(MTLIndexType::UInt32);
+                        unsafe {
+                            mdesc.setIndexBufferOffset(indices.offset as NSUInteger);
+                        }
+                        mdesc.setIndexBuffer(Some(indices.buffer().metal()));
+                        count = indices.size() as NSUInteger / 4;
                     }
 
-                    mdesc.set_triangle_count(count as NSUInteger);
+                    mdesc.setTriangleCount(count as NSUInteger);
 
-                    if let Some(transform) = triangles.transform {
-                        mdesc.set_transformation_matrix_buffer_offset(
-                            transform.offset as NSUInteger,
-                        );
-                        mdesc.set_transformation_matrix_buffer(Some(transform.buffer.metal()));
+                    if let Some(transform) = &triangles.transform {
+                        unsafe {
+                            mdesc.setTransformationMatrixBufferOffset(
+                                transform.offset() as NSUInteger,
+                            );
+                            mdesc.setTransformationMatrixBuffer(Some(transform.buffer().metal()));
+                        }
                     }
 
-                    mdesc.set_vertex_format(triangles.vertex_format.try_into_metal().unwrap());
-                    mdesc.set_vertex_stride(triangles.vertex_stride as NSUInteger);
-                    mdesc.set_vertex_buffer_offset(triangles.vertices.offset as NSUInteger);
-                    mdesc.set_vertex_buffer(Some(triangles.vertices.buffer.metal()));
+                    mdesc.setVertexFormat(triangles.vertex_format.try_into_metal().unwrap());
+                    mdesc.setVertexStride(triangles.vertex_stride as NSUInteger);
+                    unsafe {
+                        mdesc.setVertexBufferOffset(triangles.vertices.offset() as NSUInteger);
+                    }
+                    mdesc.setVertexBuffer(Some(triangles.vertices.buffer().metal()));
 
-                    geometry_descs.push((**mdesc).to_owned());
+                    geometry_descs.push(mdesc.into_super());
                 }
                 BlasGeometryDesc::AABBs(aabbs) => {
-                    let mut mdesc =
-                        metal::AccelerationStructureBoundingBoxGeometryDescriptor::descriptor();
+                    let mdesc = MTLAccelerationStructureBoundingBoxGeometryDescriptor::descriptor();
 
-                    mdesc.set_opaque(aabbs.opaque);
+                    mdesc.setOpaque(aabbs.opaque);
 
-                    mdesc.set_bounding_box_count(
-                        (aabbs.boxes.size / aabbs.box_stride) as NSUInteger,
-                    );
+                    mdesc.setBoundingBoxCount((aabbs.boxes.size() / aabbs.box_stride) as NSUInteger);
                     unsafe {
-                        msg_send![mdesc, setBoundingBoxStride: (aabbs.box_stride as NSUInteger)]
+                        mdesc.setBoundingBoxStride(aabbs.box_stride as NSUInteger);
+                        mdesc.setBoundingBoxBufferOffset(aabbs.boxes.offset() as NSUInteger);
                     }
-                    unsafe {
-                        msg_send![mdesc, setBoundingBoxBufferOffset: (aabbs.boxes.offset as NSUInteger)]
-                    }
-                    mdesc.set_bounding_box_buffer(Some(aabbs.boxes.buffer.metal()));
+                    mdesc.setBoundingBoxBuffer(Some(aabbs.boxes.buffer().metal()));
 
-                    geometry_descs.push((**mdesc).to_owned());
+                    geometry_descs.push(mdesc.into_super());
                 }
             }
         }
 
-        let geometry_descs = metal::Array::from_owned_slice(&*geometry_descs);
+        let geometry_descs = NSArray::from_retained_slice(&geometry_descs);
 
-        mdesc.set_geometry_descriptors(geometry_descs);
+        mdesc.setGeometryDescriptors(Some(&geometry_descs));
     }
 
     fn build_tlas(&mut self, tlas: &Tlas, desc: TlasBuildDesc, scratch: impl AsBufferSlice) {}
