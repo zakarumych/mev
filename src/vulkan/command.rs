@@ -543,7 +543,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
             let slice: crate::generic::BufferSlice = slice.as_buffer_slice();
             handles.push(slice.buffer.handle());
             offsets.push(slice.offset as u64);
-            self.refs.add_buffer(slice.buffer.clone());
+            self.refs.add_buffer(slice.buffer.clone().into_owned());
         }
 
         unsafe {
@@ -567,7 +567,7 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
                 vk::IndexType::UINT32,
             )
         }
-        self.refs.add_buffer(slice.buffer.clone());
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
     }
 
     #[inline]
@@ -789,7 +789,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             return;
         }
 
-        self.refs.add_buffer(slice.buffer.clone());
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
 
         let data = u32::from_ne_bytes([byte; 4]);
 
@@ -818,7 +818,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
 
         assert!(slice.size >= data.len());
 
-        self.refs.add_buffer(slice.buffer.clone());
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
 
         const CHUNK_SIZE: usize = 65536;
 
