@@ -194,7 +194,11 @@ impl VertexApp {
                             format: target_format,
                             blend: Some(mev::BlendDesc::default()),
                         }],
-                        depth_stencil: None,
+                        depth_stencil: Some(mev::DepthStencilDesc {
+                            format: mev::PixelFormat::D32Float,
+                            write_enabled: false,
+                            compare: mev::CompareFunction::LessEqual,
+                        }),
                         front_face: mev::FrontFace::default(),
                         culling: mev::Culling::Back,
                     }),
