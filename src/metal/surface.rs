@@ -7,7 +7,7 @@ use objc2_metal::MTLDrawable;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
 use crate::{
-    Extent2, PixelFormat,
+    ColorSpace, Extent2, PixelFormat, PresentMode,
     backend::from::{IntoMetal, TryIntoMetal, TryMetalInto},
     generic::{PipelineStages, SurfaceError},
 };
@@ -23,7 +23,7 @@ enum Backing {
     },
     Fake {
         image: Image,
-        format: PixelFormat,
+        format: (PixelFormat, ColorSpace),
     },
 }
 
@@ -55,7 +55,10 @@ impl Surface {
             preferred_extent: None,
             reconfigure_cooldown: 0,
             reconfigure: false,
-            backing: Backing::Fake { image, format },
+            backing: Backing::Fake {
+                image,
+                format: (format, ColorSpace::SrgbNonLinear),
+            },
         }
     }
 }
@@ -93,7 +96,7 @@ unsafe fn view_size(view: *const NSObject) -> CGSize {
 
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
-    fn available_formats(&self) -> &[PixelFormat] {
+    fn available_formats(&self) -> &[(PixelFormat, ColorSpace)] {
         match &self.backing {
             Backing::Layer { .. } => supported_formats(),
             Backing::Fake { format, .. } => std::slice::from_ref(format),
@@ -106,7 +109,7 @@ impl crate::traits::Surface for Surface {
             return;
         };
 
-        if supported_formats().contains(&format) {
+        if supported_formats().contains(&(format, ColorSpace::SrgbNonLinear)) {
             let metal_format = format.expect_into_metal();
             if layer.pixelFormat() != metal_format {
                 layer.setPixelFormat(metal_format);
@@ -114,6 +117,8 @@ impl crate::traits::Surface for Surface {
             }
         }
     }
+
+    fn preferred_color_space(&mut self, color_space: ColorSpace) {}
 
     fn preferred_extent(&mut self, extent: Extent2) {
         let Backing::Layer { layer, .. } = &self.backing else {
@@ -128,6 +133,22 @@ impl crate::traits::Surface for Surface {
         }
 
         self.preferred_extent = Some(extent);
+    }
+
+    fn preferred_present_mode(&mut self, _mode: PresentMode) {}
+
+    fn preferred_usage(&mut self, _usage: crate::ImageUsage) {}
+
+    fn preferred_image_count(&mut self, count: u32) {
+        let Backing::Layer { layer, .. } = &self.backing else {
+            // Fake surface has a fixed extent tied to its backing image.
+            return;
+        };
+
+        match count {
+            0..=2 => layer.setMaximumDrawableCount(2),
+            3.. => layer.setMaximumDrawableCount(3),
+        }
     }
 
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
@@ -207,10 +228,10 @@ impl crate::traits::Frame for Frame {
     }
 }
 
-const fn supported_formats() -> &'static [PixelFormat] {
+const fn supported_formats() -> &'static [(PixelFormat, ColorSpace)] {
     &[
-        PixelFormat::Bgra8Unorm,
-        PixelFormat::Bgra8Srgb,
-        PixelFormat::Rgba16Float,
+        (PixelFormat::Bgra8Unorm, ColorSpace::SrgbNonLinear),
+        (PixelFormat::Bgra8Srgb, ColorSpace::SrgbNonLinear),
+        (PixelFormat::Rgba16Float, ColorSpace::SrgbNonLinear),
     ]
 }
