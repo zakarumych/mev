@@ -270,7 +270,7 @@ pub trait CopyCommandEncoder: SyncCommandEncoder {
         size: usize,
     );
 
-    /// Copies pixels from src image to dst image.
+    /// Copies pixels from src buffer to dst image.
     fn copy_buffer_to_image(
         &mut self,
         src: &crate::backend::Buffer,
@@ -297,6 +297,20 @@ pub trait CopyCommandEncoder: SyncCommandEncoder {
         dst_offset: Offset3<u32>,
         extent: Extent3<u32>,
         layers: u32,
+    );
+
+    /// Copies pixels from src image to dst buffer.
+    fn copy_image_to_buffer(
+        &mut self,
+        src: &crate::backend::Image,
+        src_offset: Offset3<u32>,
+        extent: Extent3<u32>,
+        layers: Range<u32>,
+        level: u32,
+        dst: &crate::backend::Buffer,
+        dst_offset: usize,
+        bytes_per_line: usize,
+        bytes_per_plane: usize,
     );
 }
 

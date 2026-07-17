@@ -239,11 +239,11 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     fn copy_buffer_to_image(
         &mut self,
         src: &Buffer,
-        start: usize,
+        src_offset: usize,
         bytes_per_line: usize,
         bytes_per_plane: usize,
         dst: &Image,
-        offset: Offset3<u32>,
+        dst_offset: Offset3<u32>,
         extent: Extent3<u32>,
         layers: Range<u32>,
         level: u32,
@@ -254,7 +254,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         unsafe {
             self.encoder.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
             src.metal(),
-                start as NSUInteger,
+                src_offset as NSUInteger,
                 bytes_per_line as NSUInteger,
                 bytes_per_plane as NSUInteger,
                 MTLSize {
@@ -266,9 +266,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 layers.start as NSUInteger,
                 level as NSUInteger,
                 MTLOrigin {
-                    x: offset.x() as NSUInteger,
-                    y: offset.y() as NSUInteger,
-                    z: offset.z() as NSUInteger,
+                    x: dst_offset.x() as NSUInteger,
+                    y: dst_offset.y() as NSUInteger,
+                    z: dst_offset.z() as NSUInteger,
                 },
             );
         }
@@ -339,6 +339,45 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                     },
                 );
             }
+        }
+    }
+
+    #[inline]
+    fn copy_image_to_buffer(
+        &mut self,
+        src: &Image,
+        src_offset: Offset3<u32>,
+        extent: Extent3<u32>,
+        layers: Range<u32>,
+        level: u32,
+        dst: &Buffer,
+        dst_offset: usize,
+        bytes_per_line: usize,
+        bytes_per_plane: usize,
+    ) {
+        debug_assert!(layers.end > layers.start);
+        debug_assert!(layers.end == layers.start + 1);
+
+        unsafe {
+            self.encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
+                src.metal(),
+                layers.start as NSUInteger,
+                level as NSUInteger,
+                MTLOrigin {
+                    x: src_offset.x() as NSUInteger,
+                    y: src_offset.y() as NSUInteger,
+                    z: src_offset.z() as NSUInteger,
+                },
+                MTLSize {
+                    width: extent.width() as NSUInteger,
+                    height: extent.height() as NSUInteger,
+                    depth: extent.depth() as NSUInteger,
+                },
+                dst.metal(),
+                dst_offset as NSUInteger,
+                bytes_per_line as NSUInteger,
+                bytes_per_plane as NSUInteger,
+            );
         }
     }
 
@@ -805,8 +844,7 @@ impl crate::traits::AccelerationStructureCommandEncoder
             mdesc.setUsage(MTLAccelerationStructureUsage::PreferFastBuild);
         }
 
-        let mut geometry_descs =
-            Vec::<Retained<MTLAccelerationStructureGeometryDescriptor>>::new();
+        let mut geometry_descs = Vec::<Retained<MTLAccelerationStructureGeometryDescriptor>>::new();
 
         for geometry in desc.geometry {
             match geometry {
@@ -832,7 +870,7 @@ impl crate::traits::AccelerationStructureCommandEncoder
                     if let Some(transform) = &triangles.transform {
                         unsafe {
                             mdesc.setTransformationMatrixBufferOffset(
-                                transform.offset() as NSUInteger,
+                                transform.offset() as NSUInteger
                             );
                             mdesc.setTransformationMatrixBuffer(Some(transform.buffer().metal()));
                         }
@@ -852,7 +890,8 @@ impl crate::traits::AccelerationStructureCommandEncoder
 
                     mdesc.setOpaque(aabbs.opaque);
 
-                    mdesc.setBoundingBoxCount((aabbs.boxes.size() / aabbs.box_stride) as NSUInteger);
+                    mdesc
+                        .setBoundingBoxCount((aabbs.boxes.size() / aabbs.box_stride) as NSUInteger);
                     unsafe {
                         mdesc.setBoundingBoxStride(aabbs.box_stride as NSUInteger);
                         mdesc.setBoundingBoxBufferOffset(aabbs.boxes.offset() as NSUInteger);

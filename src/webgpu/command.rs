@@ -342,6 +342,46 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             },
         );
     }
+
+    #[inline]
+    fn copy_image_to_buffer(
+        &mut self,
+        src: &Image,
+        src_offset: Offset3<u32>,
+        extent: Extent3<u32>,
+        layers: Range<u32>,
+        level: u32,
+        dst: &Buffer,
+        dst_offset: usize,
+        bytes_per_line: usize,
+        bytes_per_plane: usize,
+    ) {
+        self.encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: src.wgpu_view().texture(),
+                mip_level: level + src.base_level(),
+                origin: wgpu::Origin3d {
+                    x: src_offset.x(),
+                    y: src_offset.y(),
+                    z: layers.start + src.base_layer(),
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: dst.wgpu(),
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: dst_offset as u64,
+                    bytes_per_row: Some(bytes_per_line as u32),
+                    rows_per_image: Some((bytes_per_plane / bytes_per_line) as u32),
+                },
+            },
+            wgpu::Extent3d {
+                width: extent.width(),
+                height: extent.height(),
+                depth_or_array_layers: extent.depth() * (layers.end - layers.start),
+            },
+        );
+    }
 }
 
 pub struct ComputeCommandEncoder<'enc> {

@@ -782,6 +782,65 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline]
+    fn copy_image_to_buffer(
+        &mut self,
+        src: &Image,
+        src_offset: Offset3<u32>,
+        extent: Extent3<u32>,
+        layers: Range<u32>,
+        level: u32,
+        dst: &Buffer,
+        dst_offset: usize,
+        bytes_per_line: usize,
+        bytes_per_plane: usize,
+    ) {
+        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
+            return;
+        }
+
+        let block_size = src.format().block_size();
+        let block_extent = src.format().block_extent();
+
+        debug_assert_eq!(bytes_per_line % block_size, 0);
+        debug_assert_eq!(bytes_per_plane % block_size, 0);
+        let buffer_row_length = (bytes_per_line / block_size) as u32 * block_extent.width();
+        let buffer_image_height = (bytes_per_plane / bytes_per_line) as u32 * block_extent.height();
+
+        self.refs.add_image(src.clone());
+        self.refs.add_buffer(dst.clone());
+
+        unsafe {
+            self.device.ash().cmd_copy_image_to_buffer(
+                self.handle,
+                src.handle(),
+                ash::vk::ImageLayout::GENERAL,
+                dst.handle(),
+                &[vk::BufferImageCopy {
+                    buffer_offset: dst_offset as u64,
+                    buffer_row_length,
+                    buffer_image_height,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: format_aspect(src.format()),
+                        mip_level: src.base_level() + level,
+                        base_array_layer: src.base_layer() + layers.start,
+                        layer_count: layers.end - layers.start,
+                    },
+                    image_offset: vk::Offset3D {
+                        x: src_offset.x() as i32,
+                        y: src_offset.y() as i32,
+                        z: src_offset.z() as i32,
+                    },
+                    image_extent: vk::Extent3D {
+                        width: extent.width(),
+                        height: extent.height(),
+                        depth: extent.depth(),
+                    },
+                }],
+            )
+        }
+    }
+
+    #[inline]
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8) {
         let slice = slice.as_buffer_slice();
 

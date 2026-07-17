@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, ops::Deref};
 
 use ash::vk::{self, Handle};
+use bitflags::Flags;
 use smallvec::SmallVec;
 
 use crate::{
@@ -18,9 +19,22 @@ use super::{
     handle_host_oom, unexpected_error,
 };
 
+bitflags::bitflags! {
+    #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+    struct SurfaceStatus: u32 {
+        const LOST = 0x01;
+        const OUT_OF_DATE = 0x02;
+        const SUBOPTIMAL = 0x04;
+        const NOT_PREFERRED_EXTENT = 0x08;
+        const NOT_PREFERRED_FORMAT = 0x10;
+
+        const NEEDS_RECONFIGURE = 0x1E; // OUT_OF_DATE | SUBOPTIMAL | NOT_PREFERRED_EXTENT | NOT_PREFERRED_FORMAT
+    }
+}
+
 const RECONFIGURE_COOLDOWN: u64 = 10;
 
-struct SwachainFences {
+struct SwapchainFences {
     array: SmallVec<[vk::Fence; 4]>,
     next: usize,
 }
@@ -29,7 +43,7 @@ struct Swapchain {
     handle: vk::SwapchainKHR,
     images: SmallVec<[(Image, [vk::Semaphore; 2]); 4]>,
     next: vk::Semaphore,
-    fences: Option<SwachainFences>,
+    fences: Option<SwapchainFences>,
 }
 
 struct FakeSwapchain {
@@ -62,10 +76,7 @@ pub struct Surface {
     bound_queue_family: Option<u32>,
 
     reconfigure_cooldown: u64,
-    reconfigure: bool,
-
-    /// Signals that surface or device was lost.
-    lost: bool,
+    status: SurfaceStatus,
 }
 
 impl Drop for Surface {
@@ -168,9 +179,7 @@ impl Surface {
             bound_queue_family: None,
 
             reconfigure_cooldown: 0,
-            reconfigure: true,
-
-            lost: false,
+            status: SurfaceStatus::empty(),
         }
     }
 
@@ -203,9 +212,8 @@ impl Surface {
             bound_queue_family: None,
 
             reconfigure_cooldown: 0,
-            reconfigure: false,
 
-            lost: false,
+            status: SurfaceStatus::empty(),
 
             current: Some(MaybeFakeSwapchain::Fake(FakeSwapchain {
                 image,
@@ -227,7 +235,7 @@ impl Surface {
 
         self.handle_retired()?;
 
-        if self.lost {
+        if self.status.contains(SurfaceStatus::LOST) {
             return Err(SurfaceError::SurfaceLost);
         }
 
@@ -248,7 +256,7 @@ impl Surface {
                 return Err(SurfaceError::OutOfMemory);
             }
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                self.lost = true;
+                self.status.insert(SurfaceStatus::LOST);
                 self.device.set_lost();
                 return Err(SurfaceError::SurfaceLost);
             }
@@ -282,8 +290,24 @@ impl Surface {
             self.caps.current_extent
         };
 
+        if self.status == SurfaceStatus::NOT_PREFERRED_EXTENT {
+            // Reconfiguration is only requested because the preferred extent is different from the current one.
+            // If the extent new surface would be created is the same as the current one, we can skip reconfiguration.
+            if let Some(MaybeFakeSwapchain::Real(swapchain)) = &self.current {
+                let current_extent = swapchain.images[0].0.extent().expect_2d();
+                if current_extent.width() == use_extent.width
+                    && current_extent.height() == use_extent.height
+                {
+                    self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
+                    return Ok(());
+                }
+            }
+        }
+
         if use_extent.width == 0 || use_extent.height == 0 {
             if let Some(MaybeFakeSwapchain::Fake(swapchain)) = &self.current {
+                self.status.insert(SurfaceStatus::SUBOPTIMAL);
+                self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
                 return Ok(());
             }
 
@@ -298,10 +322,7 @@ impl Surface {
             let pixel_format = self.preferred_format.format.try_ash_into().unwrap();
 
             let image = self.device.new_image(ImageDesc {
-                extent: ImageExtent::D2(Extent2::new(
-                    use_extent.width.max(1),
-                    use_extent.height.max(1),
-                )),
+                extent: ImageExtent::D2(Extent2::new(1, 1)),
                 format: pixel_format,
                 usage: self.preferred_usage.ash_into(),
                 layers: 1,
@@ -316,6 +337,14 @@ impl Surface {
                 semaphore,
                 frame_idx: 0,
             }));
+
+            if self.preferred_extent == Some(Extent2::new(1, 1)) {
+                self.status.remove(SurfaceStatus::NOT_PREFERRED_EXTENT);
+            }
+            self.status.remove(SurfaceStatus::NOT_PREFERRED_FORMAT);
+            self.status.remove(SurfaceStatus::OUT_OF_DATE);
+            self.status.insert(SurfaceStatus::SUBOPTIMAL);
+            self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
 
             return Ok(());
         }
@@ -371,12 +400,12 @@ impl Surface {
                 return Err(SurfaceError::OutOfMemory);
             }
             Err(vk::Result::ERROR_DEVICE_LOST) => {
-                self.lost = true;
+                self.status.insert(SurfaceStatus::LOST);
                 self.device.set_lost();
                 return Err(SurfaceError::SurfaceLost);
             }
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                self.lost = true;
+                self.status.insert(SurfaceStatus::LOST);
                 return Err(SurfaceError::SurfaceLost);
             }
             Err(vk::Result::ERROR_NATIVE_WINDOW_IN_USE_KHR) => {
@@ -450,14 +479,19 @@ impl Surface {
                 .device
                 .swapchain_maintenance1()
                 .is_some()
-                .then(|| SwachainFences {
+                .then(|| SwapchainFences {
                     array: SmallVec::new(),
                     next: 0,
                 }),
         }));
 
+        if self.preferred_extent == Some(Extent2::new(use_extent.width, use_extent.height)) {
+            self.status.remove(SurfaceStatus::NOT_PREFERRED_EXTENT);
+        }
+        self.status.remove(SurfaceStatus::NOT_PREFERRED_FORMAT);
+        self.status
+            .remove(SurfaceStatus::OUT_OF_DATE | SurfaceStatus::SUBOPTIMAL);
         self.reconfigure_cooldown = RECONFIGURE_COOLDOWN;
-        self.reconfigure = false;
 
         Ok(())
     }
@@ -577,14 +611,26 @@ impl crate::traits::Surface for Surface {
         let format = pick_format(&self.formats, Some(format));
         if self.preferred_format != format {
             self.preferred_format = format;
-            self.reconfigure = true;
+        }
+
+        if let Some(MaybeFakeSwapchain::Real(swapchain)) = &self.current {
+            let current_format = swapchain.images[0].0.format();
+            if current_format != format.format.try_ash_into().unwrap() {
+                self.status.insert(SurfaceStatus::NOT_PREFERRED_FORMAT);
+            }
         }
     }
 
     fn preferred_extent(&mut self, extent: Extent2) {
         if self.preferred_extent != Some(extent) {
             self.preferred_extent = Some(extent);
-            self.reconfigure = true;
+        }
+
+        if let Some(MaybeFakeSwapchain::Real(swapchain)) = &self.current {
+            let current_format = swapchain.images[0].0.extent();
+            if current_format.expect_2d() != extent {
+                self.status.insert(SurfaceStatus::NOT_PREFERRED_EXTENT);
+            }
         }
     }
 
@@ -592,7 +638,10 @@ impl crate::traits::Surface for Surface {
         self.clear_retired(true)?;
 
         self.reconfigure_cooldown = self.reconfigure_cooldown.saturating_sub(1);
-        if self.reconfigure && self.reconfigure_cooldown == 0 {
+
+        if self.status.intersects(SurfaceStatus::NEEDS_RECONFIGURE)
+            && self.reconfigure_cooldown == 0
+        {
             self.configure()?;
         }
 
@@ -617,7 +666,7 @@ impl crate::traits::Surface for Surface {
                         Ok((idx, false)) => idx,
                         Ok((idx, true)) => {
                             tracing::debug!("Surface '{:?}' is suboptimal", self.surface);
-                            self.reconfigure = true;
+                            self.status.insert(SurfaceStatus::SUBOPTIMAL);
                             idx
                         }
                         Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
@@ -626,7 +675,7 @@ impl crate::traits::Surface for Surface {
                             return Err(SurfaceError::OutOfMemory);
                         }
                         Err(vk::Result::ERROR_DEVICE_LOST) => {
-                            self.lost = true;
+                            self.status.insert(SurfaceStatus::LOST);
                             self.device.set_lost();
                             return Err(SurfaceError::DeviceLost);
                         }
@@ -634,11 +683,13 @@ impl crate::traits::Surface for Surface {
                             vk::Result::ERROR_SURFACE_LOST_KHR
                             | vk::Result::ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT,
                         ) => {
-                            self.lost = true;
+                            self.status.insert(SurfaceStatus::LOST);
                             return Err(SurfaceError::SurfaceLost);
                         }
                         Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                             tracing::debug!("Surface '{:?}' is out of date", self.surface);
+                            self.status.insert(SurfaceStatus::OUT_OF_DATE);
+                            self.reconfigure_cooldown = 0;
                             self.configure()?;
                             continue;
                         }
@@ -685,7 +736,7 @@ impl crate::traits::Surface for Surface {
                         // Reconfigure each frame the fake swapchain in real surface.
                         // Fake is only used here when maxExtent is {0,0}
                         // As soon as it is not, we will reconfigure to real swapchain.
-                        self.reconfigure = true;
+                        self.status.insert(SurfaceStatus::SUBOPTIMAL);
                     }
 
                     let frame = Frame {
