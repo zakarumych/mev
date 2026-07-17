@@ -1,3 +1,5 @@
+use std::{num::NonZero, ptr::NonNull};
+
 use crate::generic::{ArgumentGroupLayout, ArgumentKind, ArgumentsSealed};
 
 use super::{
@@ -112,7 +114,7 @@ where
 #[doc(hidden)]
 pub trait ArgumentsField<T>: 'static {
     const KIND: ArgumentKind;
-    const SIZE: usize;
+    const SIZE: Option<NonZero<usize>>;
     const OFFSET: usize;
     const STRIDE: usize;
 
@@ -130,7 +132,7 @@ where
     F: ArgumentsField<T> + ArgumentsSealed,
 {
     const KIND: ArgumentKind = F::KIND;
-    const SIZE: usize = F::SIZE;
+    const SIZE: Option<NonZero<usize>> = F::SIZE;
 }
 
 #[doc(hidden)]

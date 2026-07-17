@@ -5,13 +5,13 @@ use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    backend::from::{IntoWgpu, WgpuFrom},
+    ArgumentGroupLayout, PixelFormat,
+    backend::from::{IntoWgpu, TryIntoWgpu, TryWgpuFrom, WgpuFrom},
     generic::{
         BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageExtent,
         LibraryDesc, LibraryInput, PipelineError, RenderPipelineDesc, SamplerDesc, ShaderLanguage,
         ShaderLibraryError, SurfaceError, TlasDesc,
     },
-    ArgumentGroupLayout,
 };
 
 use super::{
@@ -258,7 +258,7 @@ impl crate::traits::Device for Device {
                             alpha: b.alpha.into_wgpu(),
                         });
                         Some(wgpu::ColorTargetState {
-                            format: ct.format.into_wgpu(),
+                            format: ct.format.expect_into_wgpu(),
                             blend,
                             write_mask: ct
                                 .blend
@@ -273,7 +273,7 @@ impl crate::traits::Device for Device {
                     .depth_stencil
                     .as_ref()
                     .map(|ds| wgpu::DepthStencilState {
-                        format: ds.format.into_wgpu(),
+                        format: ds.format.expect_into_wgpu(),
                         depth_write_enabled: Some(ds.write_enabled),
                         depth_compare: Some(ds.compare.into_wgpu()),
                         stencil: wgpu::StencilState::default(),
@@ -346,7 +346,7 @@ impl crate::traits::Device for Device {
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(desc.name),
                 contents: desc.data,
-                usage: wgpu::BufferUsages::wgpu_from(desc.usage) | wgpu::BufferUsages::MAP_WRITE,
+                usage: wgpu::BufferUsages::wgpu_from(desc.usage),
             });
         Buffer::new(buffer)
     }
@@ -385,7 +385,7 @@ impl crate::traits::Device for Device {
             mip_level_count: desc.levels,
             sample_count: 1,
             dimension,
-            format: desc.format.into_wgpu(),
+            format: desc.format.expect_into_wgpu(),
             usage: desc.usage.into_wgpu(),
             view_formats: &[],
         });
@@ -477,7 +477,13 @@ pub(super) fn create_bind_group_layouts(
                     binding: i as u32,
                     visibility: arg.stages.into_wgpu(),
                     ty: arg.kind.into_wgpu(),
-                    count: NonZero::new(arg.size as u32),
+                    count: arg.size.map(|s| {
+                        debug_assert!(
+                            u32::try_from(s.get()).is_ok(),
+                            "Bind group layout size exceeds u32::MAX"
+                        );
+                        NonZero::new(s.get() as u32).unwrap()
+                    }),
                 })
                 .collect();
 

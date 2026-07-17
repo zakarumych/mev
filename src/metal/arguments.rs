@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLComputeCommandEncoder, MTLRenderCommandEncoder};
 
@@ -40,7 +42,7 @@ fn non_zero_group_no_bindings() -> ! {
 #[doc(hidden)]
 pub trait ArgumentsField<T>: 'static {
     const KIND: ArgumentKind;
-    const SIZE: usize;
+    const SIZE: Option<NonZero<usize>>;
 
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>);
     fn bind_fragment(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>);
@@ -107,5 +109,5 @@ where
     F: ArgumentsField<T> + ArgumentsSealed,
 {
     const KIND: ArgumentKind = F::KIND;
-    const SIZE: usize = F::SIZE;
+    const SIZE: Option<NonZero<usize>> = F::SIZE;
 }

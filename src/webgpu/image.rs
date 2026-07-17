@@ -1,14 +1,15 @@
-use std::{fmt, hash, rc::Rc};
+use std::{fmt, hash, num::NonZero, rc::Rc};
 
 use crate::{
-    generic::{ImageDesc, ImageExtent, ImageUsage, PixelFormat, ViewDesc},
     ArgumentKind, Automatic, Sampled, Storage,
+    backend::from::{TryIntoWgpu, TryWgpuInto},
+    generic::{ImageDesc, ImageExtent, ImageUsage, PixelFormat, ViewDesc},
 };
 
 use super::{
+    Device,
     arguments::ArgumentsField,
     from::{IntoWgpu, WgpuInto},
-    Device,
 };
 
 pub(super) struct ImageInner {
@@ -79,7 +80,7 @@ impl crate::traits::Resource for Image {}
 #[hidden_trait::expose]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {
-        self.view.texture().format().wgpu_into()
+        self.view.texture().format().expect_wgpu_into()
     }
 
     fn extent(&self) -> ImageExtent {
@@ -101,7 +102,7 @@ impl crate::traits::Image for Image {
     fn view(&self, device: &Device, desc: ViewDesc) -> Image {
         let view_desc = wgpu::TextureViewDescriptor {
             label: None,
-            format: Some(desc.format.into_wgpu()),
+            format: Some(desc.format.expect_into_wgpu()),
             dimension: None,
             usage: None,
             aspect: wgpu::TextureAspect::All,
@@ -129,7 +130,7 @@ impl crate::traits::Image for Image {
 
 impl ArgumentsField<Automatic> for Image {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::SampledImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::TextureView(self.wgpu_view())
@@ -138,7 +139,7 @@ impl ArgumentsField<Automatic> for Image {
 
 impl ArgumentsField<Sampled> for Image {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::SampledImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::TextureView(self.wgpu_view())
@@ -147,7 +148,7 @@ impl ArgumentsField<Sampled> for Image {
 
 impl ArgumentsField<Storage> for Image {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::StorageImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::TextureView(self.wgpu_view())

@@ -1,6 +1,7 @@
 use std::{
     fmt,
     hash::{Hash, Hasher},
+    num::NonZero,
     ptr::NonNull,
 };
 
@@ -190,7 +191,7 @@ impl crate::traits::Buffer for Buffer {
 
 impl ArgumentsField<Automatic> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
@@ -216,7 +217,7 @@ impl ArgumentsField<Automatic> for Buffer {
 
 impl ArgumentsField<Uniform> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
@@ -242,7 +243,7 @@ impl ArgumentsField<Uniform> for Buffer {
 
 impl ArgumentsField<Storage> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::StorageBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
@@ -268,7 +269,7 @@ impl ArgumentsField<Storage> for Buffer {
 
 impl ArgumentsField<Automatic> for BufferSlice<'static> {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {

@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use crate::backend::{ComputeCommandEncoder, RenderCommandEncoder};
 
 use super::ShaderStages;
@@ -34,7 +36,7 @@ pub struct ArgumentLayout {
     pub kind: ArgumentKind,
 
     /// Number of resources in the argument.
-    pub size: usize,
+    pub size: Option<NonZero<usize>>,
 
     /// Stages that the argument may be used in.
     pub stages: ShaderStages,
@@ -93,5 +95,5 @@ impl ArgumentsSealed for Automatic {}
 /// This cannot be implemented outside of the crate.
 pub trait ArgumentsField<T: ArgumentsSealed>: ArgumentsSealed {
     const KIND: ArgumentKind;
-    const SIZE: usize;
+    const SIZE: Option<NonZero<usize>>;
 }

@@ -1,6 +1,8 @@
-use std::{fmt, rc::Rc};
+use std::{fmt, num::NonZero, rc::Rc};
 
-use crate::generic::SamplerDesc;
+use crate::{ArgumentKind, Automatic, generic::SamplerDesc};
+
+use super::arguments::ArgumentsField;
 
 #[derive(Clone)]
 pub struct Sampler {
@@ -24,3 +26,12 @@ impl fmt::Debug for Sampler {
 }
 
 impl crate::traits::Resource for Sampler {}
+
+impl ArgumentsField<Automatic> for Sampler {
+    const KIND: ArgumentKind = ArgumentKind::Sampler;
+    const SIZE: Option<NonZero<usize>> = None;
+
+    fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
+        wgpu::BindingResource::Sampler(&self.inner)
+    }
+}

@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use crate::generic::{ArgumentGroupLayout, ArgumentKind, ArgumentsSealed};
 
 use super::{ComputeCommandEncoder, RenderCommandEncoder};
@@ -31,7 +33,7 @@ where
 #[doc(hidden)]
 pub trait ArgumentsField<T>: 'static {
     const KIND: ArgumentKind;
-    const SIZE: usize;
+    const SIZE: Option<NonZero<usize>>;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_>;
 }
@@ -42,5 +44,5 @@ where
     F: ArgumentsField<T> + ArgumentsSealed,
 {
     const KIND: ArgumentKind = F::KIND;
-    const SIZE: usize = F::SIZE;
+    const SIZE: Option<NonZero<usize>> = F::SIZE;
 }

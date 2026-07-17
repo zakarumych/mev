@@ -1,12 +1,12 @@
-use std::{fmt, hash, rc::Rc};
+use std::{fmt, hash, num::NonZero, rc::Rc};
 
 use crate::{
+    ArgumentKind, ArgumentsSealed, Automatic, Storage, Uniform,
     backend::{arguments::ArgumentsField, from::WgpuInto},
     generic::{
         BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, BufferRange,
         BufferUsage, DeviceError,
     },
-    ArgumentKind, ArgumentsSealed, Automatic, Storage, Uniform,
 };
 
 #[derive(Clone)]
@@ -93,7 +93,9 @@ impl crate::traits::Buffer for Buffer {
     }
 
     fn write(&mut self, _offset: usize, _data: &[u8]) -> Result<(), DeviceError> {
-        panic!("buffer host-write is not supported in the WebGPU backend; use CopyCommandEncoder::write_buffer instead")
+        panic!(
+            "buffer host-write is not supported in the WebGPU backend; use CopyCommandEncoder::write_buffer instead"
+        )
     }
 
     fn read(&mut self, _offset: usize, _data: &mut [u8]) -> Result<(), DeviceError> {
@@ -105,7 +107,7 @@ impl ArgumentsSealed for Buffer {}
 
 impl ArgumentsField<Automatic> for Buffer {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -118,7 +120,7 @@ impl ArgumentsField<Automatic> for Buffer {
 
 impl ArgumentsField<Uniform> for Buffer {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {
@@ -131,7 +133,7 @@ impl ArgumentsField<Uniform> for Buffer {
 
 impl ArgumentsField<Storage> for Buffer {
     const KIND: ArgumentKind = crate::generic::ArgumentKind::StorageBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
         wgpu::BindingResource::Buffer(wgpu::BufferBinding {

@@ -1,4 +1,4 @@
-use proc_easy::{private::Spanned, EasyAttributes};
+use proc_easy::{EasyAttributes, private::Spanned};
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn;
@@ -25,7 +25,7 @@ pub fn derive(
             return Err(syn::Error::new_spanned(
                 input,
                 "only structs are supported by `#[derive(Arguments)]`",
-            ))
+            ));
         }
     };
 
@@ -139,10 +139,14 @@ pub fn derive(
                                     dst_binding: #field_bindings,
                                     dst_array_element: 0,
                                     descriptor_count: {
-                                        if #field_argument_impls::SIZE > u32::MAX as usize {
+                                        let size: usize = match #field_argument_impls::SIZE {
+                                            None => 1,
+                                            Some(size) => size.get(),
+                                        };
+                                        if size > u32::MAX as usize {
                                             panic!("Too many elements in the descriptor array");
                                         }
-                                        #field_argument_impls::SIZE as u32
+                                        size as u32
                                     },
                                     descriptor_type: #mev::for_macro::descriptor_type(#field_argument_impls::KIND),
                                     offset: unsafe { #mev::for_macro::addr_of!((*ptr).#field_names).cast::<u8>().offset_from(ptr.cast::<u8>()) as usize },

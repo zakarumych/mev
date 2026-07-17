@@ -1,5 +1,6 @@
 use crate::{
-    ArgumentKind, Blend, BlendDesc, ClearColor, Extent1, PrimitiveTopology, VertexStepMode,
+    ArgumentKind, Blend, BlendDesc, ClearColor, Extent1, PresentMode, PrimitiveTopology,
+    VertexStepMode,
     generic::{
         AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, ComponentSwizzle, Culling,
         Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
@@ -8,23 +9,6 @@ use crate::{
     },
     mat,
 };
-
-macro_rules! from_flags {
-    ($from:ty => $to:ty, [$($from_flag:ident),* $(,)?], $flags:expr) => {
-        from_flags!($from => $to, [$($from_flag => $from_flag,)*], $flags)
-    };
-    ($from:ty => $to:ty, [$($from_flag:ident => $to_flag:ident),* $(,)?], $flags:expr) => {{
-        let mut dst = <$to>::empty();
-        #[allow(unused_mut)]
-        let mut src = $flags;
-        $(
-            if src.contains(<$from>::$from_flag) {
-                dst |= <$to>::$to_flag;
-            }
-        )*
-        dst
-    }};
-}
 
 pub trait FromWgpu<A> {
     fn from_wgpu(wgpu: A) -> Self;
@@ -64,10 +48,13 @@ where
 
 pub trait TryFromWgpu<T>: Sized {
     fn try_from_wgpu(t: T) -> Option<Self>;
+    fn expect_from_wgpu(t: T) -> Self;
 }
 
 pub trait TryWgpuInto<T> {
     fn try_wgpu_into(self) -> Option<T>;
+
+    fn expect_wgpu_into(self) -> T;
 }
 
 impl<T, U> TryWgpuInto<U> for T
@@ -78,14 +65,21 @@ where
     fn try_wgpu_into(self) -> Option<U> {
         U::try_from_wgpu(self)
     }
+
+    #[inline]
+    fn expect_wgpu_into(self) -> U {
+        U::expect_from_wgpu(self)
+    }
 }
 
 pub trait TryWgpuFrom<T>: Sized {
     fn try_wgpu_from(t: T) -> Option<Self>;
+    fn expect_wgpu_from(t: T) -> Self;
 }
 
 pub trait TryIntoWgpu<T> {
     fn try_into_wgpu(self) -> Option<T>;
+    fn expect_into_wgpu(self) -> T;
 }
 
 impl<T, U> TryIntoWgpu<U> for T
@@ -95,6 +89,11 @@ where
     #[inline]
     fn try_into_wgpu(self) -> Option<U> {
         U::try_wgpu_from(self)
+    }
+
+    #[inline]
+    fn expect_into_wgpu(self) -> U {
+        U::expect_wgpu_from(self)
     }
 }
 
@@ -236,133 +235,147 @@ impl WgpuFrom<ImageUsage> for wgpu::TextureUsages {
     }
 }
 
-impl WgpuFrom<PixelFormat> for wgpu::TextureFormat {
-    fn wgpu_from(mev: PixelFormat) -> Self {
+impl TryWgpuFrom<PixelFormat> for wgpu::TextureFormat {
+    fn try_wgpu_from(mev: PixelFormat) -> Option<Self> {
         use wgpu::TextureFormat::*;
         match mev {
-            PixelFormat::R8Unorm => R8Unorm,
-            PixelFormat::R8Snorm => R8Snorm,
-            PixelFormat::R8Uint => R8Uint,
-            PixelFormat::R8Sint => R8Sint,
-            PixelFormat::R16Unorm => R16Unorm,
-            PixelFormat::R16Snorm => R16Snorm,
-            PixelFormat::R16Uint => R16Uint,
-            PixelFormat::R16Sint => R16Sint,
-            PixelFormat::R16Float => R16Float,
-            PixelFormat::R32Uint => R32Uint,
-            PixelFormat::R32Sint => R32Sint,
-            PixelFormat::R32Float => R32Float,
-            PixelFormat::Rg8Unorm => Rg8Unorm,
-            PixelFormat::Rg8Snorm => Rg8Snorm,
-            PixelFormat::Rg8Uint => Rg8Uint,
-            PixelFormat::Rg8Sint => Rg8Sint,
-            PixelFormat::Rg16Unorm => Rg16Unorm,
-            PixelFormat::Rg16Snorm => Rg16Snorm,
-            PixelFormat::Rg16Uint => Rg16Uint,
-            PixelFormat::Rg16Sint => Rg16Sint,
-            PixelFormat::Rg16Float => Rg16Float,
-            PixelFormat::Rg32Uint => Rg32Uint,
-            PixelFormat::Rg32Sint => Rg32Sint,
-            PixelFormat::Rg32Float => Rg32Float,
-            PixelFormat::Rgba8Unorm => Rgba8Unorm,
-            PixelFormat::Rgba8Snorm => Rgba8Snorm,
-            PixelFormat::Rgba8Uint => Rgba8Uint,
-            PixelFormat::Rgba8Sint => Rgba8Sint,
-            PixelFormat::Rgba8Srgb => Rgba8UnormSrgb,
-            PixelFormat::Rgba16Unorm => Rgba16Unorm,
-            PixelFormat::Rgba16Snorm => Rgba16Snorm,
-            PixelFormat::Rgba16Uint => Rgba16Uint,
-            PixelFormat::Rgba16Sint => Rgba16Sint,
-            PixelFormat::Rgba16Float => Rgba16Float,
-            PixelFormat::Rgba32Uint => Rgba32Uint,
-            PixelFormat::Rgba32Sint => Rgba32Sint,
-            PixelFormat::Rgba32Float => Rgba32Float,
-            PixelFormat::Bgra8Unorm => Bgra8Unorm,
-            PixelFormat::Bgra8Srgb => Bgra8UnormSrgb,
-            PixelFormat::D16Unorm => Depth16Unorm,
-            PixelFormat::D32Float => Depth32Float,
-            PixelFormat::S8Uint => Stencil8,
-            PixelFormat::D24UnormS8Uint => Depth24PlusStencil8,
-            PixelFormat::D32FloatS8Uint => Depth32FloatStencil8,
-            PixelFormat::Bc1RgbUnorm => Bc1RgbaUnorm,
-            PixelFormat::Bc1RgbSrgb => Bc1RgbaUnormSrgb,
-            PixelFormat::Bc1RgbaUnorm => Bc1RgbaUnorm,
-            PixelFormat::Bc1RgbaSrgb => Bc1RgbaUnormSrgb,
-            PixelFormat::Bc2Unorm => Bc2RgbaUnorm,
-            PixelFormat::Bc2Srgb => Bc2RgbaUnormSrgb,
-            PixelFormat::Bc3Unorm => Bc3RgbaUnorm,
-            PixelFormat::Bc3Srgb => Bc3RgbaUnormSrgb,
-            PixelFormat::Bc4Unorm => Bc4RUnorm,
-            PixelFormat::Bc4Snorm => Bc4RSnorm,
-            PixelFormat::Bc5Unorm => Bc5RgUnorm,
-            PixelFormat::Bc5Snorm => Bc5RgSnorm,
-            _ => panic!("Unsupported mev::PixelFormat: {:?}", mev),
+            PixelFormat::R8Unorm => Some(R8Unorm),
+            PixelFormat::R8Snorm => Some(R8Snorm),
+            PixelFormat::R8Uint => Some(R8Uint),
+            PixelFormat::R8Sint => Some(R8Sint),
+            PixelFormat::R16Unorm => Some(R16Unorm),
+            PixelFormat::R16Snorm => Some(R16Snorm),
+            PixelFormat::R16Uint => Some(R16Uint),
+            PixelFormat::R16Sint => Some(R16Sint),
+            PixelFormat::R16Float => Some(R16Float),
+            PixelFormat::R32Uint => Some(R32Uint),
+            PixelFormat::R32Sint => Some(R32Sint),
+            PixelFormat::R32Float => Some(R32Float),
+            PixelFormat::Rg8Unorm => Some(Rg8Unorm),
+            PixelFormat::Rg8Snorm => Some(Rg8Snorm),
+            PixelFormat::Rg8Uint => Some(Rg8Uint),
+            PixelFormat::Rg8Sint => Some(Rg8Sint),
+            PixelFormat::Rg16Unorm => Some(Rg16Unorm),
+            PixelFormat::Rg16Snorm => Some(Rg16Snorm),
+            PixelFormat::Rg16Uint => Some(Rg16Uint),
+            PixelFormat::Rg16Sint => Some(Rg16Sint),
+            PixelFormat::Rg16Float => Some(Rg16Float),
+            PixelFormat::Rg32Uint => Some(Rg32Uint),
+            PixelFormat::Rg32Sint => Some(Rg32Sint),
+            PixelFormat::Rg32Float => Some(Rg32Float),
+            PixelFormat::Rgba8Unorm => Some(Rgba8Unorm),
+            PixelFormat::Rgba8Snorm => Some(Rgba8Snorm),
+            PixelFormat::Rgba8Uint => Some(Rgba8Uint),
+            PixelFormat::Rgba8Sint => Some(Rgba8Sint),
+            PixelFormat::Rgba8Srgb => Some(Rgba8UnormSrgb),
+            PixelFormat::Rgba16Unorm => Some(Rgba16Unorm),
+            PixelFormat::Rgba16Snorm => Some(Rgba16Snorm),
+            PixelFormat::Rgba16Uint => Some(Rgba16Uint),
+            PixelFormat::Rgba16Sint => Some(Rgba16Sint),
+            PixelFormat::Rgba16Float => Some(Rgba16Float),
+            PixelFormat::Rgba32Uint => Some(Rgba32Uint),
+            PixelFormat::Rgba32Sint => Some(Rgba32Sint),
+            PixelFormat::Rgba32Float => Some(Rgba32Float),
+            PixelFormat::Bgra8Unorm => Some(Bgra8Unorm),
+            PixelFormat::Bgra8Srgb => Some(Bgra8UnormSrgb),
+            PixelFormat::D16Unorm => Some(Depth16Unorm),
+            PixelFormat::D32Float => Some(Depth32Float),
+            PixelFormat::S8Uint => Some(Stencil8),
+            PixelFormat::D24UnormS8Uint => Some(Depth24PlusStencil8),
+            PixelFormat::D32FloatS8Uint => Some(Depth32FloatStencil8),
+            PixelFormat::Bc1RgbUnorm => Some(Bc1RgbaUnorm),
+            PixelFormat::Bc1RgbSrgb => Some(Bc1RgbaUnormSrgb),
+            PixelFormat::Bc1RgbaUnorm => Some(Bc1RgbaUnorm),
+            PixelFormat::Bc1RgbaSrgb => Some(Bc1RgbaUnormSrgb),
+            PixelFormat::Bc2Unorm => Some(Bc2RgbaUnorm),
+            PixelFormat::Bc2Srgb => Some(Bc2RgbaUnormSrgb),
+            PixelFormat::Bc3Unorm => Some(Bc3RgbaUnorm),
+            PixelFormat::Bc3Srgb => Some(Bc3RgbaUnormSrgb),
+            PixelFormat::Bc4Unorm => Some(Bc4RUnorm),
+            PixelFormat::Bc4Snorm => Some(Bc4RSnorm),
+            PixelFormat::Bc5Unorm => Some(Bc5RgUnorm),
+            PixelFormat::Bc5Snorm => Some(Bc5RgSnorm),
+            _ => None,
+        }
+    }
+
+    fn expect_wgpu_from(t: PixelFormat) -> Self {
+        match Self::try_wgpu_from(t) {
+            Some(format) => format,
+            None => panic!("Unsupported mev::PixelFormat: {:?}", t),
         }
     }
 }
 
-impl FromWgpu<wgpu::TextureFormat> for PixelFormat {
-    fn from_wgpu(wgpu: wgpu::TextureFormat) -> Self {
+impl TryFromWgpu<wgpu::TextureFormat> for PixelFormat {
+    fn try_from_wgpu(wgpu: wgpu::TextureFormat) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
         match wgpu {
-            R8Unorm => PixelFormat::R8Unorm,
-            R8Snorm => PixelFormat::R8Snorm,
-            R8Uint => PixelFormat::R8Uint,
-            R8Sint => PixelFormat::R8Sint,
-            R16Unorm => PixelFormat::R16Unorm,
-            R16Snorm => PixelFormat::R16Snorm,
-            R16Uint => PixelFormat::R16Uint,
-            R16Sint => PixelFormat::R16Sint,
-            R16Float => PixelFormat::R16Float,
-            R32Uint => PixelFormat::R32Uint,
-            R32Sint => PixelFormat::R32Sint,
-            R32Float => PixelFormat::R32Float,
-            Rg8Unorm => PixelFormat::Rg8Unorm,
-            Rg8Snorm => PixelFormat::Rg8Snorm,
-            Rg8Uint => PixelFormat::Rg8Uint,
-            Rg8Sint => PixelFormat::Rg8Sint,
-            Rg16Unorm => PixelFormat::Rg16Unorm,
-            Rg16Snorm => PixelFormat::Rg16Snorm,
-            Rg16Uint => PixelFormat::Rg16Uint,
-            Rg16Sint => PixelFormat::Rg16Sint,
-            Rg16Float => PixelFormat::Rg16Float,
-            Rg32Uint => PixelFormat::Rg32Uint,
-            Rg32Sint => PixelFormat::Rg32Sint,
-            Rg32Float => PixelFormat::Rg32Float,
-            Rgba8Unorm => PixelFormat::Rgba8Unorm,
-            Rgba8Snorm => PixelFormat::Rgba8Snorm,
-            Rgba8Uint => PixelFormat::Rgba8Uint,
-            Rgba8Sint => PixelFormat::Rgba8Sint,
-            Rgba8UnormSrgb => PixelFormat::Rgba8Srgb,
-            Rgba16Unorm => PixelFormat::Rgba16Unorm,
-            Rgba16Snorm => PixelFormat::Rgba16Snorm,
-            Rgba16Uint => PixelFormat::Rgba16Uint,
-            Rgba16Sint => PixelFormat::Rgba16Sint,
-            Rgba16Float => PixelFormat::Rgba16Float,
-            Rgba32Uint => PixelFormat::Rgba32Uint,
-            Rgba32Sint => PixelFormat::Rgba32Sint,
-            Rgba32Float => PixelFormat::Rgba32Float,
-            Bgra8Unorm => PixelFormat::Bgra8Unorm,
-            Bgra8UnormSrgb => PixelFormat::Bgra8Srgb,
-            Depth16Unorm => PixelFormat::D16Unorm,
-            Depth32Float => PixelFormat::D32Float,
-            Stencil8 => PixelFormat::S8Uint,
-            Depth24PlusStencil8 => PixelFormat::D24UnormS8Uint,
-            Depth32FloatStencil8 => PixelFormat::D32FloatS8Uint,
-            Bc1RgbaUnorm => PixelFormat::Bc1RgbUnorm,
-            Bc1RgbaUnormSrgb => PixelFormat::Bc1RgbSrgb,
-            Bc1RgbaUnorm => PixelFormat::Bc1RgbaUnorm,
-            Bc1RgbaUnormSrgb => PixelFormat::Bc1RgbaSrgb,
-            Bc2RgbaUnorm => PixelFormat::Bc2Unorm,
-            Bc2RgbaUnormSrgb => PixelFormat::Bc2Srgb,
-            Bc3RgbaUnorm => PixelFormat::Bc3Unorm,
-            Bc3RgbaUnormSrgb => PixelFormat::Bc3Srgb,
-            Bc4RUnorm => PixelFormat::Bc4Unorm,
-            Bc4RSnorm => PixelFormat::Bc4Snorm,
-            Bc5RgUnorm => PixelFormat::Bc5Unorm,
-            Bc5RgSnorm => PixelFormat::Bc5Snorm,
-            _ => panic!("Unsupported wgpu::TextureFormat: {:?}", wgpu),
+            R8Unorm => Some(PixelFormat::R8Unorm),
+            R8Snorm => Some(PixelFormat::R8Snorm),
+            R8Uint => Some(PixelFormat::R8Uint),
+            R8Sint => Some(PixelFormat::R8Sint),
+            R16Unorm => Some(PixelFormat::R16Unorm),
+            R16Snorm => Some(PixelFormat::R16Snorm),
+            R16Uint => Some(PixelFormat::R16Uint),
+            R16Sint => Some(PixelFormat::R16Sint),
+            R16Float => Some(PixelFormat::R16Float),
+            R32Uint => Some(PixelFormat::R32Uint),
+            R32Sint => Some(PixelFormat::R32Sint),
+            R32Float => Some(PixelFormat::R32Float),
+            Rg8Unorm => Some(PixelFormat::Rg8Unorm),
+            Rg8Snorm => Some(PixelFormat::Rg8Snorm),
+            Rg8Uint => Some(PixelFormat::Rg8Uint),
+            Rg8Sint => Some(PixelFormat::Rg8Sint),
+            Rg16Unorm => Some(PixelFormat::Rg16Unorm),
+            Rg16Snorm => Some(PixelFormat::Rg16Snorm),
+            Rg16Uint => Some(PixelFormat::Rg16Uint),
+            Rg16Sint => Some(PixelFormat::Rg16Sint),
+            Rg16Float => Some(PixelFormat::Rg16Float),
+            Rg32Uint => Some(PixelFormat::Rg32Uint),
+            Rg32Sint => Some(PixelFormat::Rg32Sint),
+            Rg32Float => Some(PixelFormat::Rg32Float),
+            Rgba8Unorm => Some(PixelFormat::Rgba8Unorm),
+            Rgba8Snorm => Some(PixelFormat::Rgba8Snorm),
+            Rgba8Uint => Some(PixelFormat::Rgba8Uint),
+            Rgba8Sint => Some(PixelFormat::Rgba8Sint),
+            Rgba8UnormSrgb => Some(PixelFormat::Rgba8Srgb),
+            Rgba16Unorm => Some(PixelFormat::Rgba16Unorm),
+            Rgba16Snorm => Some(PixelFormat::Rgba16Snorm),
+            Rgba16Uint => Some(PixelFormat::Rgba16Uint),
+            Rgba16Sint => Some(PixelFormat::Rgba16Sint),
+            Rgba16Float => Some(PixelFormat::Rgba16Float),
+            Rgba32Uint => Some(PixelFormat::Rgba32Uint),
+            Rgba32Sint => Some(PixelFormat::Rgba32Sint),
+            Rgba32Float => Some(PixelFormat::Rgba32Float),
+            Bgra8Unorm => Some(PixelFormat::Bgra8Unorm),
+            Bgra8UnormSrgb => Some(PixelFormat::Bgra8Srgb),
+            Depth16Unorm => Some(PixelFormat::D16Unorm),
+            Depth32Float => Some(PixelFormat::D32Float),
+            Stencil8 => Some(PixelFormat::S8Uint),
+            Depth24PlusStencil8 => Some(PixelFormat::D24UnormS8Uint),
+            Depth32FloatStencil8 => Some(PixelFormat::D32FloatS8Uint),
+            Bc1RgbaUnorm => Some(PixelFormat::Bc1RgbUnorm),
+            Bc1RgbaUnormSrgb => Some(PixelFormat::Bc1RgbSrgb),
+            Bc1RgbaUnorm => Some(PixelFormat::Bc1RgbaUnorm),
+            Bc1RgbaUnormSrgb => Some(PixelFormat::Bc1RgbaSrgb),
+            Bc2RgbaUnorm => Some(PixelFormat::Bc2Unorm),
+            Bc2RgbaUnormSrgb => Some(PixelFormat::Bc2Srgb),
+            Bc3RgbaUnorm => Some(PixelFormat::Bc3Unorm),
+            Bc3RgbaUnormSrgb => Some(PixelFormat::Bc3Srgb),
+            Bc4RUnorm => Some(PixelFormat::Bc4Unorm),
+            Bc4RSnorm => Some(PixelFormat::Bc4Snorm),
+            Bc5RgUnorm => Some(PixelFormat::Bc5Unorm),
+            Bc5RgSnorm => Some(PixelFormat::Bc5Snorm),
+            _ => None,
+        }
+    }
+
+    fn expect_from_wgpu(t: wgpu::TextureFormat) -> Self {
+        match Self::try_from_wgpu(t) {
+            Some(format) => format,
+            None => panic!("Unsupported wgpu::TextureFormat: {:?}", t),
         }
     }
 }
@@ -655,6 +668,16 @@ impl WgpuFrom<MipMapMode> for wgpu::MipmapFilterMode {
         match mev {
             MipMapMode::Nearest => wgpu::MipmapFilterMode::Nearest,
             MipMapMode::Linear => wgpu::MipmapFilterMode::Linear,
+        }
+    }
+}
+
+impl WgpuFrom<PresentMode> for wgpu::PresentMode {
+    fn wgpu_from(mev: PresentMode) -> Self {
+        match mev {
+            PresentMode::Immediate => wgpu::PresentMode::Immediate,
+            PresentMode::Mailbox => wgpu::PresentMode::Mailbox,
+            PresentMode::Fifo => wgpu::PresentMode::Fifo,
         }
     }
 }

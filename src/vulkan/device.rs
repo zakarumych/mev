@@ -2,6 +2,7 @@ use std::{
     any::TypeId,
     ffi, fmt,
     hash::{Hash, Hasher},
+    num::NonZero,
     ptr::NonNull,
     sync::{
         Arc, Weak,
@@ -871,7 +872,8 @@ impl Device {
                 ash::vk::DescriptorSetLayoutBinding::default()
                     .binding(u32::try_from(idx).expect("Too many descriptor bindings"))
                     .descriptor_count(
-                        u32::try_from(arg.size).expect("Too many descriptors in array"),
+                        u32::try_from(arg.size.map_or(1, NonZero::get))
+                            .expect("Too many descriptors in array"),
                     )
                     .descriptor_type(descriptor_type(arg.kind))
                     .stage_flags(arg.stages.into_ash())

@@ -1,4 +1,7 @@
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    num::NonZero,
+};
 
 use objc2::{
     msg_send,
@@ -186,7 +189,7 @@ fn swizzle_mul(channels: MTLTextureSwizzleChannels, rhs: Swizzle) -> MTLTextureS
 
 impl ArgumentsField<Automatic> for Image {
     const KIND: ArgumentKind = ArgumentKind::SampledImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
@@ -212,7 +215,7 @@ impl ArgumentsField<Automatic> for Image {
 
 impl ArgumentsField<Sampled> for Image {
     const KIND: ArgumentKind = ArgumentKind::SampledImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
@@ -238,7 +241,7 @@ impl ArgumentsField<Sampled> for Image {
 
 impl ArgumentsField<Storage> for Image {
     const KIND: ArgumentKind = ArgumentKind::StorageImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     #[inline(always)]
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {

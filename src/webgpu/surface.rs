@@ -1,7 +1,8 @@
 use std::fmt;
 
 use crate::{
-    Extent2,
+    ColorSpace, Extent2, ImageUsage, PresentMode,
+    backend::from::{TryFromWgpu, TryIntoWgpu, TryWgpuInto},
     generic::{PixelFormat, SurfaceError},
 };
 
@@ -16,7 +17,7 @@ pub struct Surface {
     surface: wgpu::Surface<'static>,
     device: Device,
     config: wgpu::SurfaceConfiguration,
-    available_formats: Vec<PixelFormat>,
+    available_formats: Vec<(PixelFormat, ColorSpace)>,
     reconfigure_cooldown: u64,
     reconfigure: bool,
 }
@@ -41,7 +42,7 @@ impl Surface {
         let available_formats = caps
             .formats
             .iter()
-            .map(|&f| f.wgpu_into())
+            .filter_map(|&f| Some((f.try_wgpu_into()?, ColorSpace::SrgbNonLinear)))
             .collect::<Vec<_>>();
 
         let config = wgpu::SurfaceConfiguration {
@@ -80,15 +81,22 @@ impl crate::traits::Resource for Surface {}
 
 #[hidden_trait::expose]
 impl crate::traits::Surface for Surface {
-    fn available_formats(&self) -> &[PixelFormat] {
+    fn available_formats(&self) -> &[(PixelFormat, ColorSpace)] {
         &self.available_formats
     }
 
     fn preferred_format(&mut self, format: PixelFormat) {
-        if self.available_formats.contains(&format) {
-            self.config.format = format.into_wgpu();
+        if let Some(wgpu_format) = format.try_into_wgpu() {
+            if self
+                .available_formats
+                .contains(&(format, ColorSpace::SrgbNonLinear))
+            {
+                self.config.format = wgpu_format;
+            }
         }
     }
+
+    fn preferred_color_space(&mut self, _color_space: ColorSpace) {}
 
     fn preferred_extent(&mut self, extent: Extent2) {
         if self.config.width != extent.width() || self.config.height != extent.height() {
@@ -96,6 +104,18 @@ impl crate::traits::Surface for Surface {
             self.config.height = extent.height();
             self.reconfigure = true;
         }
+    }
+
+    fn preferred_present_mode(&mut self, mode: PresentMode) {
+        self.config.present_mode = mode.into_wgpu();
+    }
+
+    fn preferred_usage(&mut self, usage: ImageUsage) {
+        self.config.usage = usage.into_wgpu();
+    }
+
+    fn preferred_image_count(&mut self, count: u32) {
+        self.config.desired_maximum_frame_latency = count;
     }
 
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {
@@ -160,36 +180,49 @@ impl crate::traits::Frame for Frame {
 
 fn pick_format(
     formats: &[wgpu::TextureFormat],
-    pixel_format: Option<PixelFormat>,
+    preferred_format: Option<PixelFormat>,
 ) -> wgpu::TextureFormat {
-    if let Some(pixel_format) = pixel_format {
-        let wgpu_format = pixel_format.into_wgpu();
-        for &format in formats {
-            if format == wgpu_format {
-                return format;
-            }
-        }
-    }
-    for &format in formats {
-        if format == wgpu::TextureFormat::Bgra8UnormSrgb {
-            return format;
-        }
-    }
-    for &format in formats {
-        if format == wgpu::TextureFormat::Rgba8UnormSrgb {
-            return format;
-        }
-    }
-    for &format in formats {
-        if format == wgpu::TextureFormat::Rgba8Unorm {
-            return format;
-        }
-    }
-    for &format in formats {
-        if format == wgpu::TextureFormat::Bgra8Unorm {
-            return format;
-        }
-    }
+    match formats.len() {
+        0 => panic!("No surface formats available"),
+        _ => {
+            let format_priority = [
+                Some(wgpu::TextureFormat::Bgra8Unorm),
+                Some(wgpu::TextureFormat::Rgba8Unorm),
+                Some(wgpu::TextureFormat::Rgba8UnormSrgb),
+                Some(wgpu::TextureFormat::Bgra8UnormSrgb),
+                preferred_format.and_then(TryIntoWgpu::try_into_wgpu),
+            ];
 
-    return formats[0];
+            let mut best_candidate = formats[0];
+            let mut best_score = 0usize;
+
+            for &candidate in formats {
+                if PixelFormat::try_from_wgpu(candidate).is_none() {
+                    continue;
+                }
+
+                let mut score: usize = 1;
+
+                for (p, f) in format_priority.iter().enumerate() {
+                    if Some(candidate) == *f {
+                        score += p + 1;
+                    }
+                }
+
+                if score > best_score {
+                    best_candidate = candidate;
+                    best_score = score;
+                }
+            }
+
+            if best_score > 0 {
+                return best_candidate;
+            }
+
+            panic!(
+                "No usable format found for surface. Available formats: {:?}",
+                formats
+            );
+        }
+    }
 }

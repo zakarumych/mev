@@ -1,3 +1,5 @@
+use std::num::NonZero;
+
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSUInteger;
 use objc2_metal::{MTLComputeCommandEncoder, MTLRenderCommandEncoder, MTLSamplerState};
@@ -19,7 +21,7 @@ impl Sampler {
 
 impl ArgumentsField<Automatic> for Sampler {
     const KIND: ArgumentKind = ArgumentKind::Sampler;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
 
     fn bind_vertex(&self, slot: u32, encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>) {
         unsafe {

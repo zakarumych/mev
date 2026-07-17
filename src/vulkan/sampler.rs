@@ -1,5 +1,6 @@
 use std::{
     mem::size_of,
+    num::NonZero,
     sync::{Arc, Weak},
 };
 
@@ -100,7 +101,7 @@ impl Sampler {
 
 impl ArgumentsField<Automatic> for Sampler {
     const KIND: ArgumentKind = ArgumentKind::Sampler;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorImageInfo>();
 

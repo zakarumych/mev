@@ -1,13 +1,14 @@
 use core::fmt;
 use std::{
     hash::{Hash, Hasher},
-    mem::{size_of, ManuallyDrop},
+    mem::{ManuallyDrop, size_of},
+    num::NonZero,
     sync::Arc,
 };
 
 use ash::vk::{self, Handle};
 use gpu_alloc::MemoryBlock;
-use hashbrown::{hash_map::Entry, HashMap};
+use hashbrown::{HashMap, hash_map::Entry};
 use parking_lot::Mutex;
 
 use crate::generic::{
@@ -371,10 +372,10 @@ impl crate::traits::Image for Image {
 }
 
 impl ArgumentsField<Automatic> for Image {
-    const KIND: ArgumentKind = <Self as ArgumentsField<Sampled>>::KIND;
-    const SIZE: usize = <Self as ArgumentsField<Sampled>>::SIZE;
-    const OFFSET: usize = <Self as ArgumentsField<Sampled>>::OFFSET;
-    const STRIDE: usize = <Self as ArgumentsField<Sampled>>::STRIDE;
+    const KIND: ArgumentKind = ArgumentKind::SampledImage;
+    const SIZE: Option<NonZero<usize>> = None;
+    const OFFSET: usize = 0;
+    const STRIDE: usize = size_of::<vk::DescriptorImageInfo>();
 
     type Update = <Self as ArgumentsField<Sampled>>::Update;
 
@@ -391,7 +392,7 @@ impl ArgumentsField<Automatic> for Image {
 
 impl ArgumentsField<Sampled> for Image {
     const KIND: ArgumentKind = ArgumentKind::SampledImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorImageInfo>();
 
@@ -414,7 +415,7 @@ impl ArgumentsField<Sampled> for Image {
 
 impl ArgumentsField<Storage> for Image {
     const KIND: ArgumentKind = ArgumentKind::StorageImage;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorImageInfo>();
 

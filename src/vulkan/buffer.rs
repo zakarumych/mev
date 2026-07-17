@@ -2,6 +2,7 @@ use core::fmt;
 use std::{
     hash::{Hash, Hasher},
     mem::size_of,
+    num::NonZero,
     ops::Range,
     ptr::NonNull,
     sync::Arc,
@@ -11,9 +12,9 @@ use ash::vk;
 use gpu_alloc::MemoryBlock;
 
 use crate::{
+    BufferMappedRange, BufferMappedRangeMut, DeviceError,
     backend::handle_host_oom,
     generic::{ArgumentKind, Automatic, BufferUsage, Storage, Uniform},
-    BufferMappedRange, BufferMappedRangeMut, DeviceError,
 };
 
 use super::{
@@ -568,7 +569,7 @@ impl crate::traits::Buffer for Buffer {
 
 impl ArgumentsField<Automatic> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorBufferInfo>();
 
@@ -587,7 +588,7 @@ impl ArgumentsField<Automatic> for Buffer {
 
 impl ArgumentsField<Uniform> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorBufferInfo>();
 
@@ -610,7 +611,7 @@ impl ArgumentsField<Uniform> for Buffer {
 
 impl ArgumentsField<Storage> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::StorageBuffer;
-    const SIZE: usize = 1;
+    const SIZE: Option<NonZero<usize>> = None;
     const OFFSET: usize = 0;
     const STRIDE: usize = size_of::<vk::DescriptorBufferInfo>();
 

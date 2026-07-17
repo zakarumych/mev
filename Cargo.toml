@@ -28,6 +28,10 @@ smallvec.workspace = true
 tracing.workspace = true
 pollster.workspace = true
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+naga = { workspace = true, features = ["wgsl-out"] }
+wgpu.workspace = true
+
 [target.'cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))'.dependencies]
 ash.workspace = true
 gpu-alloc.workspace = true
@@ -41,10 +45,6 @@ objc2-core-graphics.workspace = true
 objc2-quartz-core.workspace = true
 objc2-metal.workspace = true
 naga = { workspace = true, features = ["msl-out"] }
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-naga = { workspace = true, features = ["wgsl-out"] }
-wgpu.workspace = true
 
 [dev-dependencies]
 winit = "0.30.12"
