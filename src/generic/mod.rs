@@ -38,7 +38,7 @@ pub use self::{
     compute::ComputePipelineDesc,
     data::*,
     feature::Features,
-    format::{PixelFormat, VertexFormat},
+    format::{ColorSpace, PixelFormat, VertexFormat},
     image::{ComponentSwizzle, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
     instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
     queue::QueueFlags,
@@ -54,7 +54,7 @@ pub use self::{
         ShaderStage, ShaderStages,
     },
     stages::{PipelineStage, PipelineStages},
-    surface::SurfaceError,
+    surface::{PresentMode, SurfaceError},
 };
 
 pub(crate) use self::{arguments::ArgumentsSealed, shader::parse_shader};

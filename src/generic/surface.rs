@@ -39,3 +39,17 @@ impl fmt::Display for SurfaceError {
 }
 
 impl std::error::Error for SurfaceError {}
+
+/// Present mode for a surface.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum PresentMode {
+    /// Images are presented in a FIFO mode, which is the only guaranteed to be available.
+    Fifo,
+
+    /// Images are presented in a mailbox mode, which may result in lower latency.
+    /// Any queued images are replaced with the latest image, which may result in dropped frames.
+    Mailbox,
+
+    /// Images are presented immediately, which may result in tearing.
+    Immediate,
+}

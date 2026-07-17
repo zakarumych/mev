@@ -89,6 +89,7 @@ impl ApplicationHandler for TriangleApp {
 
             let size = window.inner_size();
             surface.preferred_extent(mev::Extent2::new(size.width, size.height));
+            surface.preferred_usage(mev::ImageUsage::TARGET);
 
             self.window = Some(window);
             self.surface = Some(surface);

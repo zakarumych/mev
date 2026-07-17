@@ -8,13 +8,14 @@ use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::{
-    AutoDeviceRepr, BufferMappedRange, BufferMappedRangeMut,
+    PresentMode,
     generic::{
-        Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
-        Capabilities, ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3,
-        ImageDesc, ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError,
-        PipelineStages, PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader,
-        ShaderLibraryError, SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
+        Arguments, AsBufferSlice, AutoDeviceRepr, BlasBuildDesc, BlasDesc, BufferDesc,
+        BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, Capabilities, ColorSpace,
+        ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
+        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError, PipelineStages,
+        PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, ShaderLibraryError,
+        SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
     },
 };
 
@@ -358,11 +359,27 @@ pub trait AccelerationStructureCommandEncoder {
 }
 
 pub trait Surface: Resource {
-    fn available_formats(&self) -> &[PixelFormat];
+    /// List of available formats for the surface.
+    /// It may change during the lifetime of the surface, so it is not recommended to cache the result.
+    fn available_formats(&self) -> &[(PixelFormat, ColorSpace)];
 
+    /// Sets the preferred pixel format for the surface.
     fn preferred_format(&mut self, format: PixelFormat);
 
+    /// Sets the preferred color space for the surface.
+    fn preferred_color_space(&mut self, color_space: ColorSpace);
+
+    /// Sets the preferred extent for the surface.
     fn preferred_extent(&mut self, extent: Extent2);
+
+    /// Sets the preferred present mode for the surface.
+    fn preferred_present_mode(&mut self, mode: PresentMode);
+
+    /// Sets the preferred usage for the surface.
+    fn preferred_usage(&mut self, usage: ImageUsage);
+
+    /// Sets the preferred number of images for the surface.
+    fn preferred_image_count(&mut self, count: u32);
 
     /// Acquires next frame from the surface.
     fn next_frame(&mut self) -> Result<crate::backend::Frame, SurfaceError>;

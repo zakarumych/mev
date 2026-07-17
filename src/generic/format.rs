@@ -911,3 +911,12 @@ impl VertexFormat {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ColorSpace {
+    /// Linear color space.
+    SrgbLinear,
+
+    /// sRGB color space.
+    SrgbNonLinear,
+}

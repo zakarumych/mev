@@ -1997,76 +1997,7 @@ impl crate::traits::Device for Device {
             }
         };
 
-        let result = unsafe {
-            self.surface()
-                .get_physical_device_surface_formats(self.physical_device(), surface_handle)
-        };
-        let formats = match result {
-            Ok(formats) => formats,
-            Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-            Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                self.set_oom();
-                return Err(SurfaceError::OutOfMemory);
-            }
-            Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                return Err(SurfaceError::SurfaceLost);
-            }
-            Err(err) => unexpected_error(err),
-        };
-
-        let result = unsafe {
-            self.surface()
-                .get_physical_device_surface_present_modes(self.physical_device(), surface_handle)
-        };
-        let modes = match result {
-            Ok(modes) => modes,
-            Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-            Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                self.set_oom();
-                return Err(SurfaceError::OutOfMemory);
-            }
-            Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                return Err(SurfaceError::SurfaceLost);
-            }
-            Err(err) => unexpected_error(err),
-        };
-
-        let family_supports =
-            self.queue_families()
-                .iter()
-                .try_fold(Vec::new(), |mut supports, &idx| {
-                    let result = unsafe {
-                        self.surface().get_physical_device_surface_support(
-                            self.physical_device(),
-                            idx,
-                            surface_handle,
-                        )
-                    };
-
-                    let support = match result {
-                        Ok(support) => support,
-                        Err(ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
-                        Err(ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
-                            self.set_oom();
-                            return Err(SurfaceError::OutOfMemory);
-                        }
-                        Err(ash::vk::Result::ERROR_SURFACE_LOST_KHR) => {
-                            return Err(SurfaceError::SurfaceLost);
-                        }
-                        Err(err) => unexpected_error(err),
-                    };
-
-                    supports.push(support);
-                    Ok::<_, SurfaceError>(supports)
-                })?;
-
-        Ok(Surface::new(
-            self.clone(),
-            surface_handle,
-            formats,
-            modes,
-            family_supports,
-        ))
+        Ok(Surface::new(self.clone(), surface_handle))
     }
 
     fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {

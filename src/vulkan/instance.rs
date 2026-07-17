@@ -254,6 +254,10 @@ impl Instance {
                     enabled_extension_names.push(extension_name!("VK_EXT_surface_maintenance1"));
                 }
             }
+
+            if unsafe { has_extension(&extensions, "VK_EXT_swapchain_colorspace") } {
+                enabled_extension_names.push(extension_name!("VK_EXT_swapchain_colorspace"));
+            }
         }
 
         // Choose latest Vulkan version.

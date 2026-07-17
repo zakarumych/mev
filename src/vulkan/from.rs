@@ -1,10 +1,10 @@
 use ash::vk;
 
 use crate::generic::{
-    AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, ComponentSwizzle, Culling,
-    Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage, MipMapMode,
-    Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags, ShaderStage,
-    ShaderStages, Swizzle, VertexFormat, WriteMask,
+    AddressMode, BlendFactor, BlendOp, BufferUsage, ColorSpace, CompareFunction, ComponentSwizzle,
+    Culling, Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
+    MipMapMode, Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, PresentMode,
+    QueueFlags, ShaderStage, ShaderStages, Swizzle, VertexFormat, WriteMask,
 };
 
 macro_rules! from_flags {
@@ -744,6 +744,50 @@ impl AshFrom<Swizzle> for ash::vk::ComponentMapping {
             g: swizzle.g.into_ash(),
             b: swizzle.b.into_ash(),
             a: swizzle.a.into_ash(),
+        }
+    }
+}
+
+impl AshFrom<ColorSpace> for ash::vk::ColorSpaceKHR {
+    #[inline]
+    fn ash_from(space: ColorSpace) -> Self {
+        match space {
+            ColorSpace::SrgbLinear => ash::vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+            ColorSpace::SrgbNonLinear => ash::vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        }
+    }
+}
+
+impl TryFromAsh<ash::vk::ColorSpaceKHR> for ColorSpace {
+    #[inline]
+    fn try_from_ash(value: ash::vk::ColorSpaceKHR) -> Option<Self> {
+        Some(match value {
+            ash::vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT => ColorSpace::SrgbLinear,
+            ash::vk::ColorSpaceKHR::SRGB_NONLINEAR => ColorSpace::SrgbNonLinear,
+            _ => return None,
+        })
+    }
+}
+
+impl TryFromAsh<ash::vk::PresentModeKHR> for PresentMode {
+    #[inline]
+    fn try_from_ash(value: ash::vk::PresentModeKHR) -> Option<Self> {
+        Some(match value {
+            ash::vk::PresentModeKHR::FIFO => PresentMode::Fifo,
+            ash::vk::PresentModeKHR::MAILBOX => PresentMode::Mailbox,
+            ash::vk::PresentModeKHR::IMMEDIATE => PresentMode::Immediate,
+            _ => return None,
+        })
+    }
+}
+
+impl AshFrom<PresentMode> for ash::vk::PresentModeKHR {
+    #[inline]
+    fn ash_from(mode: PresentMode) -> Self {
+        match mode {
+            PresentMode::Fifo => ash::vk::PresentModeKHR::FIFO,
+            PresentMode::Mailbox => ash::vk::PresentModeKHR::MAILBOX,
+            PresentMode::Immediate => ash::vk::PresentModeKHR::IMMEDIATE,
         }
     }
 }

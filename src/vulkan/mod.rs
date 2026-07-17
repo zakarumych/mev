@@ -50,6 +50,11 @@ fn unexpected_error(err: vk::Result) -> ! {
     panic!("unexpected error: {err:?}")
 }
 
+#[track_caller]
+fn unknown_error() -> ! {
+    panic!("unknown error occurred")
+}
+
 /// Version of the API.
 /// For internal use only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -140,7 +145,7 @@ fn new_semaphore(device: &ash::Device) -> Result<vk::Semaphore, OutOfMemory> {
 
 pub mod for_macro {
     pub use super::{
-        arguments::{descriptor_type, Arguments, ArgumentsField},
+        arguments::{Arguments, ArgumentsField, descriptor_type},
         refs::Refs,
     };
     pub use ash::vk::DescriptorUpdateTemplateEntry;
