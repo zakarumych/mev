@@ -1086,6 +1086,207 @@ fn test_buffer_to_image_resample_linear_panics(
     );
 }
 
+/// The tiled non-atomic dispatch processes 4 destination elements per
+/// thread; a destination element count that isn't a multiple of 4
+/// exercises the tail-block bounds check within the tight chain (group 1
+/// covers only element 4 of `{4,5,6,7}` — sub-ids 1..4 in that group must
+/// be skipped, not read/written out of bounds).
+fn test_tail_block_non_multiple_of_4(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
+    let src_data = [10u8, 20, 30, 40, 50];
+    let src = make_readback_buffer(device, &src_data, "tail_src");
+    let dst = make_readback_buffer(device, &[0u8; 5], "tail_dst");
+
+    let mut encoder = queue.new_command_encoder();
+    cvt.buffer_to_buffer::<1, 1>(
+        &mut encoder,
+        &src,
+        0,
+        VertexFormat::Uint8.into(),
+        [1],
+        Extent1::new(5),
+        &dst,
+        0,
+        VertexFormat::Uint8.into(),
+        [1],
+        Extent1::new(5),
+        AxisSwizzle::IDENTITY,
+        Swizzle::IDENTITY,
+    );
+    submit_and_wait(queue, encoder.finish());
+
+    let mut out = [0u8; 5];
+    let mut dst = dst;
+    dst.read(0, &mut out).unwrap();
+    assert_eq!(
+        out, src_data,
+        "tail-block (5 elements, not a multiple of 4) mismatch: {:?}",
+        out
+    );
+    println!(
+        "[PASS] Buffer->Buffer tail-block handling (5 elements, byte_size==1, not a multiple of 4)"
+    );
+}
+
+/// A 2D destination with an explicitly padded row stride (rows tight,
+/// planes word-aligned with a gap — the exact scenario the tight/aligned
+/// dispatch distinction exists for). The destination is pre-filled with a
+/// sentinel byte so padding bytes, which no thread should ever touch, are
+/// directly observable in the readback alongside the real, correctly
+/// converted element bytes.
+fn test_padded_dst_stride_sentinel(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
+    let src_data: [u8; 6] = [1, 2, 3, 4, 5, 6]; // row-major 3x2, tightly packed.
+    let src = make_readback_buffer(device, &src_data, "padded_src");
+    let dst = make_readback_buffer(device, &[0xAAu8; 8], "padded_dst");
+
+    let mut encoder = queue.new_command_encoder();
+    cvt.buffer_to_buffer::<2, 2>(
+        &mut encoder,
+        &src,
+        0,
+        VertexFormat::Uint8.into(),
+        [1, 3],
+        Extent2::new(3, 2),
+        &dst,
+        0,
+        VertexFormat::Uint8.into(),
+        [1, 4],
+        Extent2::new(3, 2),
+        AxisSwizzle::IDENTITY,
+        Swizzle::IDENTITY,
+    );
+    submit_and_wait(queue, encoder.finish());
+
+    let mut out = [0u8; 8];
+    let mut dst = dst;
+    dst.read(0, &mut out).unwrap();
+    let expected = [1u8, 2, 3, 0xAA, 4, 5, 6, 0xAA];
+    assert_eq!(
+        out, expected,
+        "padded dst_stride mismatch: {:?} != {:?}",
+        out, expected
+    );
+    println!("[PASS] Buffer->Buffer padded dst_stride (2D, sentinel padding bytes untouched)");
+}
+
+/// The two new destination-stride preconditions the tiled non-atomic
+/// dispatch's safety argument depends on must panic (before any GPU work)
+/// rather than silently produce wrong output: (a) `dst_stride[0] >=
+/// byte_size` — `stride == 0` slips past the older `stride %
+/// component_byte_size == 0` check (`0 % x == 0`) but is a real aliasing
+/// hazard; (b) a stride that is neither word-aligned nor tight against its
+/// predecessor ("bad", unsupported).
+fn test_new_dst_stride_preconditions_panic(
+    device: &mev::Device,
+    queue: &mut mev::Queue,
+    cvt: &Cvt,
+) {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    {
+        let src = make_readback_buffer(device, &[1u8], "bad_stride_zero_src");
+        let dst = make_readback_buffer(device, &[0u8], "bad_stride_zero_dst");
+        let mut encoder = queue.new_command_encoder();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cvt.buffer_to_buffer::<1, 1>(
+                &mut encoder,
+                &src,
+                0,
+                VertexFormat::Uint8.into(),
+                [1],
+                Extent1::new(1),
+                &dst,
+                0,
+                VertexFormat::Uint8.into(),
+                [0],
+                Extent1::new(1),
+                AxisSwizzle::IDENTITY,
+                Swizzle::IDENTITY,
+            );
+        }));
+        assert!(
+            result.is_err(),
+            "cvt_buffer_to_buffer must panic when dst_stride[0] < the format's element byte size"
+        );
+        submit_and_wait(queue, encoder.finish());
+    }
+
+    {
+        let src = make_readback_buffer(device, &[0u8; 6], "bad_stride_axis1_src");
+        let dst = make_readback_buffer(device, &[0u8; 10], "bad_stride_axis1_dst");
+        let mut encoder = queue.new_command_encoder();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cvt.buffer_to_buffer::<2, 2>(
+                &mut encoder,
+                &src,
+                0,
+                VertexFormat::Uint8.into(),
+                [1, 3],
+                Extent2::new(3, 2),
+                &dst,
+                0,
+                VertexFormat::Uint8.into(),
+                [1, 5],
+                Extent2::new(3, 2),
+                AxisSwizzle::IDENTITY,
+                Swizzle::IDENTITY,
+            );
+        }));
+        assert!(
+            result.is_err(),
+            "cvt_buffer_to_buffer must panic on a dst stride that is neither word-aligned nor tight"
+        );
+        submit_and_wait(queue, encoder.finish());
+    }
+
+    println!(
+        "[PASS] cvt_buffer_to_buffer panics on the new dst-stride preconditions (stride < byte_size; bad/unsupported alignment)"
+    );
+}
+
+/// Rank-4 destination with every axis classified `aligned` (`T == 0`,
+/// fully packed `Uint32` — dense word-sized strides are always
+/// word-aligned, so `aligned` wins over the numerically tight equality at
+/// every level): axis 0 rides `gid.x`, axis 1 rides `gid.y` directly, and
+/// axes 2/3 fold together into `gid.z` — the one dispatch shape that needs
+/// a secondary flat unravel, only reachable at rank 4. Exercises that shape
+/// on real hardware, not just its generated-WGSL structure.
+fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
+    let values: [u32; 16] = std::array::from_fn(|i| 1000 + i as u32);
+    let src_data: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let src = make_readback_buffer(device, &src_data, "rank4_src");
+    let dst = make_readback_buffer(device, &vec![0u8; 64], "rank4_dst");
+
+    let strides = [4usize, 8, 16, 32];
+    let extent = mev::Extent::<u32, 4>([2, 2, 2, 2]);
+
+    let mut encoder = queue.new_command_encoder();
+    cvt.buffer_to_buffer::<4, 4>(
+        &mut encoder,
+        &src,
+        0,
+        VertexFormat::Uint32.into(),
+        strides,
+        extent,
+        &dst,
+        0,
+        VertexFormat::Uint32.into(),
+        strides,
+        extent,
+        AxisSwizzle::IDENTITY,
+        Swizzle::IDENTITY,
+    );
+    submit_and_wait(queue, encoder.finish());
+
+    let mut out = vec![0u8; 64];
+    let mut dst = dst;
+    dst.read(0, &mut out).unwrap();
+    assert_eq!(
+        out, src_data,
+        "rank-4 all-aligned (T=0) z-folded dispatch mismatch"
+    );
+    println!("[PASS] Buffer->Buffer rank-4 all-aligned (T=0), z-folded dispatch shape");
+}
+
 fn main() {
     mev::match_backend! {
         metal => { println!("Metal backend"); }
@@ -1123,6 +1324,10 @@ fn main() {
     test_image_to_image_resample(&device, &mut queue, &cvt);
     test_buffer_to_buffer_resample(&device, &mut queue, &cvt);
     test_buffer_to_image_resample_linear_panics(&device, &mut queue, &cvt);
+    test_tail_block_non_multiple_of_4(&device, &mut queue, &cvt);
+    test_padded_dst_stride_sentinel(&device, &mut queue, &cvt);
+    test_new_dst_stride_preconditions_panic(&device, &mut queue, &cvt);
+    test_rank4_all_aligned_z_fold(&device, &mut queue, &cvt);
 
     println!("All cvt_smoke checks passed.");
 }

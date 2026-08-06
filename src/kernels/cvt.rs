@@ -297,10 +297,14 @@ struct EndpointDesc {
     format: PixelFormat,
 }
 
-/// Cache key for both the compute and render pipelines built by
-/// `make_compute_pipeline_nd`/`make_render_pipeline`. One pipeline shape per
-/// distinct (endpoint kinds/formats, swizzle, axis map, ranks, resample)
-/// combination actually used; `axes`'s slots beyond `src_rank` are ignored.
+/// Cache key for the render pipelines built by `make_render_pipeline`. One
+/// pipeline shape per distinct (endpoint kinds/formats, swizzle, axis map,
+/// ranks, resample) combination actually used; `axes`'s slots beyond
+/// `src_rank` are ignored. The render pipeline's destination is always
+/// `Image` (never `Buffer` — sRGB `Image` destinations route here
+/// specifically because a WGSL storage texture has no sRGB write format),
+/// so unlike [`CvtComputeKey`] it never needs a `dst_tight_len` shape
+/// discriminant.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CvtKey {
     src: EndpointDesc,
@@ -310,6 +314,25 @@ struct CvtKey {
     dst_rank: u8,
     axes: AxisSwizzle,
     resample: bool,
+}
+
+/// Cache key for the compute pipelines built by `make_compute_pipeline_nd`.
+/// Same fields as [`CvtKey`], plus `dst_tight_len` (`T`, see module docs'
+/// tiled-dispatch algorithm): when `dst.kind == Buffer`, the generated
+/// WGSL's *shape* differs qualitatively per `T` (which axes fold into the
+/// flat tight-chain wrap vs. get their own independently-grouped dispatch
+/// dimension), so it must be part of what selects/builds a distinct
+/// pipeline. Meaningless (always `0`) when `dst.kind != Buffer`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CvtComputeKey {
+    src: EndpointDesc,
+    dst: EndpointDesc,
+    swizzle: Swizzle,
+    src_rank: u8,
+    dst_rank: u8,
+    axes: AxisSwizzle,
+    resample: bool,
+    dst_tight_len: u8,
 }
 
 /// Cache key for the dedicated single-resource in-place buffer pipeline.
@@ -331,7 +354,7 @@ struct CvtInPlaceKey {
 pub struct Cvt {
     device: Device,
     render_pipelines: Mutex<HashMap<CvtKey, RenderPipeline>>,
-    compute_pipelines: Mutex<HashMap<CvtKey, ComputePipeline>>,
+    compute_pipelines: Mutex<HashMap<CvtComputeKey, ComputePipeline>>,
     in_place_pipelines: Mutex<HashMap<CvtInPlaceKey, ComputePipeline>>,
     samplers: Mutex<HashMap<SamplerDesc, Sampler>>,
 }
@@ -446,34 +469,6 @@ fn mev_float_to_half(value: f32) -> u32 {
 }
 "#;
 
-/// Generates the masked-atomic `store_u8`/`store_u16` helper pair for a
-/// sub-word-writable `array<atomic<u32>>` storage buffer named `target`.
-/// Each destination element is written by exactly one thread, so a plain
-/// `atomicAnd` (clear the target bits) followed by `atomicOr` (set them) is
-/// race-free regardless of interleaving with other threads writing
-/// disjoint bit ranges of the same `u32` word.
-fn store_bit_helpers(target: &str) -> String {
-    format!(
-        r#"
-fn mev_{target}_store_u8(byte_offset: u32, value: u32) {{
-    let word_index = byte_offset / 4u;
-    let bit_offset = (byte_offset % 4u) * 8u;
-    let mask = 0xFFu << bit_offset;
-    atomicAnd(&{target}[word_index], ~mask);
-    atomicOr(&{target}[word_index], (value << bit_offset) & mask);
-}}
-
-fn mev_{target}_store_u16(byte_offset: u32, value: u32) {{
-    let word_index = byte_offset / 4u;
-    let bit_offset = (byte_offset % 4u) * 8u;
-    let mask = 0xFFFFu << bit_offset;
-    atomicAnd(&{target}[word_index], ~mask);
-    atomicOr(&{target}[word_index], (value << bit_offset) & mask);
-}}
-"#
-    )
-}
-
 // ============================================================================
 // WGSL codegen: decode / swizzle / convert / encode
 // ============================================================================
@@ -489,16 +484,16 @@ fn mev_{target}_store_u16(byte_offset: u32, value: u32) {{
 /// component's own byte width (1/2/4), which every entry point asserts up
 /// front (a component can never straddle a 4-byte storage word otherwise).
 ///
-/// `buf` is the storage array's identifier. If `atomic_read` is set, `buf`
-/// is `array<atomic<u32>>` and reads go through `atomicLoad` (required
-/// in-place, when the same binding is also written with masked atomics).
+/// `buf` is the storage array's identifier (`array<u32>`; every read in this
+/// kernel is a plain, non-atomic load — no binding ever needs `atomic<u32>`
+/// since destination writes are structurally disjoint across threads, see
+/// module docs).
 fn gen_buffer_decode_channel(
     var: &str,
     buf: &str,
     elem_byte: &str,
     layout: &FormatLayout,
     channel: Channel,
-    atomic_read: bool,
 ) -> String {
     let scalar = wgsl_scalar(layout.kind);
 
@@ -544,11 +539,7 @@ fn gen_buffer_decode_channel(
         prelude += &format!("    let {bit_off}: u32 = ({var}_byte % 4u) * 8u;\n");
     }
 
-    let word_expr = if atomic_read {
-        format!("atomicLoad(&{buf}[{var}_word])")
-    } else {
-        format!("{buf}[{var}_word]")
-    };
+    let word_expr = format!("{buf}[{var}_word]");
 
     let body = if layout.kind == CanonicalKind::Float && !comp.normalized && comp.bits == 32 {
         format!("bitcast<f32>({word_expr})")
@@ -756,11 +747,17 @@ fn gen_convert_channel(
 
 /// Generates the store statements writing `out_{r,g,b,a}` (already in
 /// `dst`'s target representation, per [`gen_convert_channel`]) into a
-/// buffer named `target`, at the element whose byte-offset expression is
-/// `elem_byte`. Components with `bits < 32` go through the masked-atomic
-/// `store_u8`/`store_u16` helpers (`target` must then be declared
-/// `array<atomic<u32>>`); `bits == 32` components are a plain store
-/// (`target` declared `array<u32>`).
+/// buffer named `target` (always declared plain `array<u32>`), at the
+/// element whose byte-offset expression is `elem_byte`. `bits == 32`
+/// components are a single plain store (a 32-bit component already fully
+/// owns its word). `bits < 32` components go through a plain (non-atomic)
+/// masked read-modify-write — safe because the caller's dispatch structure
+/// guarantees no *other* thread ever touches this word (see module docs'
+/// tiled-dispatch algorithm) and, within one thread, statements execute
+/// sequentially, so a load-modify-store from the same thread cannot race
+/// with itself. Per-component locals are suffixed by the component's index
+/// `i` so multiple sub-word components in the same call (e.g. `Rg8Uint`)
+/// don't collide in the same WGSL scope.
 fn gen_buffer_encode(target: &str, elem_byte: &str, dst: &FormatLayout) -> String {
     let mut s = String::new();
 
@@ -791,10 +788,14 @@ fn gen_buffer_encode(target: &str, elem_byte: &str, dst: &FormatLayout) -> Strin
 
         if comp.bits == 32 {
             s += &format!("    {target}[{byte_expr} / 4u] = {bits_expr};\n");
-        } else if comp.bits == 16 {
-            s += &format!("    mev_{target}_store_u16({byte_expr}, {bits_expr});\n");
         } else {
-            s += &format!("    mev_{target}_store_u8({byte_expr}, {bits_expr});\n");
+            let mask_hex = if comp.bits == 16 { "0xFFFFu" } else { "0xFFu" };
+            s += &format!("    let word_index_{i}: u32 = ({byte_expr}) / 4u;\n");
+            s += &format!("    let bit_offset_{i}: u32 = (({byte_expr}) % 4u) * 8u;\n");
+            s += &format!("    let mask_{i}: u32 = {mask_hex} << bit_offset_{i};\n");
+            s += &format!(
+                "    {target}[word_index_{i}] = ({target}[word_index_{i}] & ~mask_{i}) | (({bits_expr} << bit_offset_{i}) & mask_{i});\n"
+            );
         }
     }
 
@@ -994,7 +995,6 @@ fn gen_endpoint_decode_convert(
                     "src_elem_byte",
                     src_layout,
                     ch,
-                    false,
                 );
             }
         }
@@ -1301,6 +1301,403 @@ const CVT_ND_CONSTANTS_WGSL: &str = r#"struct Constants {
 }
 "#;
 
+// ============================================================================
+// Buffer destination: tiled, non-atomic write dispatch
+//
+// Every destination `Buffer` write is safe without atomics because the
+// dispatch structure below guarantees, purely geometrically, that no two
+// GPU threads ever touch the same 4-byte storage word. Destination axes
+// `0..dst_rank` (X, Y, Z, W — fastest to slowest) are classified `tight`
+// (exactly contiguous with the predecessor) or `aligned` (word-aligned,
+// possibly with a gap) or `bad` (unsupported, panics) — `aligned` is
+// checked *before* `tight`, so an axis satisfying both is `aligned`. `T`
+// (the length of the unbroken tight prefix from axis 0) selects one of a
+// small number of generated-WGSL dispatch shapes: axes `0..T` collapse
+// into one flat "tight chain" thread index (`gid.x`, 4 elements/thread,
+// wrapping across axis boundaries); axes `T..dst_rank` (or `0..dst_rank`
+// if `T == 0`) are each independently grouped by 4 with no wrapping, one
+// per remaining dispatch dimension (`gid.y`/`gid.z`, folding two axes into
+// `gid.z` via a secondary flat unravel if 3 remain — only possible at
+// `dst_rank == 4`). See the design notes accompanying this kernel's
+// implementation for the full algorithm.
+// ============================================================================
+
+/// Computes `T` — the length of the unbroken tight-chain prefix starting at
+/// destination axis 0 — for a `Buffer` destination described by
+/// `dst_extent`/`dst_stride` (both length `dst_rank`, `dst_rank <= 4`) and
+/// `byte_size` (the destination format's element byte size). Panics (before
+/// any GPU work) if:
+/// - the general no-aliasing precondition is violated at any axis
+///   (`dst_stride[0] >= byte_size`; `dst_stride[d] >= dst_extent[d-1] *
+///   dst_stride[d-1]` for `d >= 1`), or
+/// - any axis is classified neither `tight` nor `aligned` ("bad" —
+///   unsupported dst layout).
+///
+/// Classification checks `aligned` (`dst_stride[d] % 4 == 0`) before
+/// `tight` (`dst_stride[d] == dst_extent[d-1] * dst_stride[d-1]`, or
+/// `dst_stride[0] == byte_size` for axis 0): an axis satisfying both is
+/// `aligned`, not `tight`. Once the chain breaks (an axis is `aligned`),
+/// every subsequent axis is independently `aligned`-or-`bad` — the chain
+/// never re-extends even if a later axis is numerically tight relative to
+/// its immediate predecessor.
+fn classify_dst_tight_chain(dst_extent: &[u32], dst_stride: &[usize], byte_size: usize) -> usize {
+    let dst_rank = dst_extent.len();
+    debug_assert_eq!(dst_stride.len(), dst_rank);
+
+    for d in 0..dst_rank {
+        if d == 0 {
+            assert!(
+                dst_stride[0] >= byte_size,
+                "Cvt: dst axis 0 stride ({}) must be >= the destination format's element byte size ({byte_size}) — would alias",
+                dst_stride[0]
+            );
+        } else {
+            let prev_span = dst_extent[d - 1] as usize * dst_stride[d - 1];
+            assert!(
+                dst_stride[d] >= prev_span,
+                "Cvt: dst axis {d} stride ({}) must be >= axis {}'s full extent*stride ({prev_span}) — would alias",
+                dst_stride[d],
+                d - 1
+            );
+        }
+    }
+
+    let mut tight_len = 0;
+    let mut chain_open = true;
+    for d in 0..dst_rank {
+        let aligned = dst_stride[d] % 4 == 0;
+        if chain_open && !aligned {
+            let tight = if d == 0 {
+                dst_stride[0] == byte_size
+            } else {
+                dst_stride[d] == dst_extent[d - 1] as usize * dst_stride[d - 1]
+            };
+            assert!(
+                tight,
+                "Cvt: dst axis {d} (stride {}) is neither word-aligned (a multiple of 4) nor tightly packed against its predecessor — unsupported dst layout",
+                dst_stride[d]
+            );
+            tight_len += 1;
+        } else {
+            chain_open = false;
+            assert!(
+                aligned,
+                "Cvt: dst axis {d} (stride {}) is neither word-aligned (a multiple of 4) nor tightly packed against its predecessor — unsupported dst layout",
+                dst_stride[d]
+            );
+        }
+    }
+
+    tight_len
+}
+
+/// Derived dispatch-shape facts for a `Buffer` destination's tiled write
+/// scheme, purely a function of `(rank, tight_len)` (`tight_len` = `T`,
+/// from [`classify_dst_tight_chain`]) — deterministic, so `(rank,
+/// tight_len)` alone fully determines the generated WGSL shape and doubles
+/// as the compute-pipeline cache-key discriminant (see [`CvtComputeKey`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DstTileUnits {
+    tight_len: usize,
+    rank: usize,
+}
+
+/// How the (up to 2) axes beyond the `gid.x`/`gid.y` units map onto
+/// `gid.z`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ZUnit {
+    None,
+    Single(usize),
+    Folded(usize, usize),
+}
+
+impl DstTileUnits {
+    fn new(rank: usize, tight_len: usize) -> Self {
+        debug_assert!(tight_len <= rank);
+        DstTileUnits { tight_len, rank }
+    }
+
+    /// `true` if `gid.x` carries the tight-chain's flat wrap group index
+    /// (`T >= 1`); `false` if `T == 0`, in which case axis 0 itself rides
+    /// `gid.x` as just another independently-grouped aligned axis.
+    fn x_is_chain(&self) -> bool {
+        self.tight_len >= 1
+    }
+
+    /// Axis indices handled independently on `gid.y`/`gid.z` (or folded
+    /// together into `gid.z`), in increasing order. Does not include the
+    /// `gid.x` unit (the tight chain, or axis 0 alone if `T == 0`).
+    fn remaining(&self) -> Vec<usize> {
+        if self.x_is_chain() {
+            (self.tight_len..self.rank).collect()
+        } else {
+            (1..self.rank).collect()
+        }
+    }
+
+    fn z_unit(&self) -> ZUnit {
+        let r = self.remaining();
+        match r.len() {
+            0 | 1 => ZUnit::None,
+            2 => ZUnit::Single(r[1]),
+            3 => ZUnit::Folded(r[1], r[2]),
+            n => unreachable!(
+                "Cvt: dst rank <= 4 implies at most 3 remaining axes beyond the x/y units, got {n}"
+            ),
+        }
+    }
+}
+
+/// Number of dispatch groups along each of `gid.x`/`gid.y`/`gid.z`, given
+/// the actual runtime `dst_extent` (each group covers up to 4 elements
+/// along its unit's axis/axes — see module docs). A dimension with no
+/// assigned unit is `1` (not `0`): it must stay a no-op single group so the
+/// *other* dimensions' real work still executes, unlike a real axis whose
+/// own extent is legitimately `0` (correctly yielding an empty dispatch
+/// along that axis).
+fn dst_tile_groups(units: DstTileUnits, dst_extent: &[u32]) -> (u32, u32, u32) {
+    let groups_x = if units.x_is_chain() {
+        let total: u64 = dst_extent[..units.tight_len]
+            .iter()
+            .map(|&e| e as u64)
+            .product();
+        total.div_ceil(4) as u32
+    } else {
+        dst_extent[0].div_ceil(4)
+    };
+
+    let remaining = units.remaining();
+    let groups_for = |axis: usize| dst_extent[axis].div_ceil(4);
+    let (groups_y, groups_z) = match remaining.len() {
+        0 => (1u32, 1u32),
+        1 => (groups_for(remaining[0]), 1u32),
+        2 => (groups_for(remaining[0]), groups_for(remaining[1])),
+        3 => (
+            groups_for(remaining[0]),
+            groups_for(remaining[1]) * groups_for(remaining[2]),
+        ),
+        n => unreachable!("Cvt: dst rank <= 4 implies at most 3 remaining axes, got {n}"),
+    };
+
+    (groups_x, groups_y, groups_z)
+}
+
+/// The actual dispatch `Extent3` (in workgroups of `[64, 1, 1]`) for a
+/// `Buffer` destination's tiled write, given the real runtime `dst_extent`.
+fn dst_tile_dispatch_extent(units: DstTileUnits, dst_extent: &[u32]) -> Extent3 {
+    let (groups_x, groups_y, groups_z) = dst_tile_groups(units, dst_extent);
+    Extent3::new(groups_x.div_ceil(64), groups_y, groups_z)
+}
+
+/// One independently-grouped-by-4 "unit" of the tiled dispatch: either the
+/// tight chain (`chain: true`, covering `axes` `0..T` via one flat wrapped
+/// sub-index) or a single aligned axis (`chain: false`, `axes` holding
+/// exactly one index).
+struct DstTileUnit {
+    axes: Vec<usize>,
+    base_expr: String,
+    chain: bool,
+}
+
+/// Builds the ordered list of dispatch units for `units`: the `gid.x` unit
+/// first (tight chain or axis-0-alone), then the remaining aligned axes
+/// riding `gid.y`/`gid.z` (or `group_zb`/`group_zc`, the two locals
+/// [`gen_dst_buffer_tiled_body`] emits when 3 axes remain and 2 must fold
+/// into `gid.z`).
+fn dst_tile_unit_list(units: DstTileUnits) -> Vec<DstTileUnit> {
+    let mut list = Vec::new();
+    if units.x_is_chain() {
+        list.push(DstTileUnit {
+            axes: (0..units.tight_len).collect(),
+            base_expr: "gid.x".to_string(),
+            chain: true,
+        });
+    } else {
+        list.push(DstTileUnit {
+            axes: vec![0],
+            base_expr: "gid.x".to_string(),
+            chain: false,
+        });
+    }
+
+    let remaining = units.remaining();
+    match remaining.len() {
+        0 => {}
+        1 => list.push(DstTileUnit {
+            axes: vec![remaining[0]],
+            base_expr: "gid.y".to_string(),
+            chain: false,
+        }),
+        2 => {
+            list.push(DstTileUnit {
+                axes: vec![remaining[0]],
+                base_expr: "gid.y".to_string(),
+                chain: false,
+            });
+            list.push(DstTileUnit {
+                axes: vec![remaining[1]],
+                base_expr: "gid.z".to_string(),
+                chain: false,
+            });
+        }
+        3 => {
+            list.push(DstTileUnit {
+                axes: vec![remaining[0]],
+                base_expr: "gid.y".to_string(),
+                chain: false,
+            });
+            list.push(DstTileUnit {
+                axes: vec![remaining[1]],
+                base_expr: "group_zb".to_string(),
+                chain: false,
+            });
+            list.push(DstTileUnit {
+                axes: vec![remaining[2]],
+                base_expr: "group_zc".to_string(),
+                chain: false,
+            });
+        }
+        n => unreachable!("Cvt: dst rank <= 4 implies at most 3 remaining axes, got {n}"),
+    }
+    list
+}
+
+/// Generates the full tiled, non-atomic dispatch body for a `Buffer`
+/// destination (see module docs above). Emits its own `gid.x` bounds check
+/// (the workgroup-of-64 rounding tail along the `gid.x` unit) and, for
+/// every combination of up to 4 sub-indices per unit, a scoped block
+/// computing that sub-element's `dst_c{d}` coordinates, decoding/converting
+/// via [`gen_endpoint_decode_convert`] (unchanged — called once per
+/// in-bounds sub-element instead of once per thread), then encoding via
+/// [`gen_buffer_encode`]'s plain (non-atomic) masked read-modify-write.
+/// Each combination's block is its own WGSL scope (`{ ... }`), so the
+/// repeated `dst_c{d}`/`out_r`/etc. declarations across combinations never
+/// collide.
+#[allow(clippy::too_many_arguments)]
+fn gen_dst_buffer_tiled_body(
+    src: EndpointDesc,
+    dst_layout: &FormatLayout,
+    src_layout: &FormatLayout,
+    swizzle: Swizzle,
+    axes: AxisSwizzle,
+    src_rank: usize,
+    dst_rank: usize,
+    resample: bool,
+    units: DstTileUnits,
+) -> String {
+    let mut body = String::new();
+    let t = units.tight_len;
+    let x_is_chain = units.x_is_chain();
+
+    // `gid.x`'s own bound: the workgroup-of-64 rounding tail along the
+    // tight-chain-or-axis-0 unit (every other dispatch dimension is
+    // launched with an *exact* group count, so no bound check is needed
+    // there).
+    if x_is_chain {
+        let mut total_expr = String::new();
+        for d in 0..t {
+            if d > 0 {
+                total_expr += " * ";
+            }
+            total_expr += &format!("constants.dst_extent[{d}]");
+        }
+        body += &format!("    let tight_total: u32 = {total_expr};\n");
+    } else {
+        body += "    let tight_total: u32 = constants.dst_extent[0];\n";
+    }
+    body += "    let groups_x: u32 = (tight_total + 3u) / 4u;\n";
+    body += "    if (gid.x >= groups_x) {\n        return;\n    }\n";
+
+    // Unravel `gid.z` into its two folded group indices, if 3 axes remain.
+    if let ZUnit::Folded(b_axis, _c_axis) = units.z_unit() {
+        body += &format!("    let groups_zb: u32 = (constants.dst_extent[{b_axis}] + 3u) / 4u;\n");
+        body += "    let group_zb: u32 = gid.z % groups_zb;\n";
+        body += "    let group_zc: u32 = gid.z / groups_zb;\n";
+    }
+
+    let unit_list = dst_tile_unit_list(units);
+
+    // Precompute each unit's 4 sub-id variants once (its coordinate(s) and
+    // an in-bounds flag), avoiding redundant axis arithmetic across the
+    // combinations generated below.
+    for (u, unit) in unit_list.iter().enumerate() {
+        for s in 0..4u32 {
+            if unit.chain {
+                body += &format!("    let eid_v{u}_{s}: u32 = gid.x * 4u + {s}u;\n");
+                body += &format!("    let ok_v{u}_{s}: bool = eid_v{u}_{s} < tight_total;\n");
+                body += &format!("    var rem_v{u}_{s}: u32 = eid_v{u}_{s};\n");
+                for &axis in &unit.axes {
+                    body += &format!(
+                        "    let dst_c{axis}_v{u}_{s}: u32 = rem_v{u}_{s} % constants.dst_extent[{axis}];\n"
+                    );
+                    body += &format!("    rem_v{u}_{s} = rem_v{u}_{s} / constants.dst_extent[{axis}];\n");
+                }
+            } else {
+                let axis = unit.axes[0];
+                body += &format!(
+                    "    let dst_c{axis}_v{u}_{s}: u32 = {} * 4u + {s}u;\n",
+                    unit.base_expr
+                );
+                body += &format!(
+                    "    let ok_v{u}_{s}: bool = dst_c{axis}_v{u}_{s} < constants.dst_extent[{axis}];\n"
+                );
+            }
+        }
+    }
+
+    // Cartesian product over every unit's sub-id (0..4 each): one scoped
+    // block per combination.
+    let n_units = unit_list.len();
+    let mut subids = vec![0u32; n_units];
+    loop {
+        let mut cond = String::new();
+        let mut coord_lets = String::new();
+        for (u, unit) in unit_list.iter().enumerate() {
+            let s = subids[u];
+            if u > 0 {
+                cond += " && ";
+            }
+            cond += &format!("ok_v{u}_{s}");
+            for &axis in &unit.axes {
+                coord_lets += &format!("        let dst_c{axis}: u32 = dst_c{axis}_v{u}_{s};\n");
+            }
+        }
+
+        body += &format!("    if ({cond}) {{\n");
+        body += &coord_lets;
+        body += &gen_endpoint_decode_convert(
+            src, dst_layout, src_layout, swizzle, axes, src_rank, false, resample,
+        );
+
+        let mut dst_byte_expr = "constants.dst_byte_offset".to_string();
+        for d in 0..dst_rank {
+            dst_byte_expr += &format!(" + dst_c{d} * constants.dst_stride[{d}]");
+        }
+        body += &format!("        let dst_elem_byte: u32 = {dst_byte_expr};\n");
+        body += &gen_buffer_encode("dst", "dst_elem_byte", dst_layout);
+        body += "    }\n";
+
+        // Odometer-increment `subids` (last unit fastest-varying); stop
+        // once incrementing carries out past unit 0 (all combos done).
+        let mut i = n_units;
+        let mut carry = true;
+        while carry && i > 0 {
+            i -= 1;
+            subids[i] += 1;
+            if subids[i] == 4 {
+                subids[i] = 0;
+            } else {
+                carry = false;
+            }
+        }
+        if carry {
+            break;
+        }
+    }
+
+    body
+}
+
 /// Builds the compute pipeline for one specific `(src, dst, swizzle, ranks,
 /// axes, resample)` combination, for every endpoint-kind pairing except
 /// sRGB `Image` destinations (WGSL storage textures have no sRGB write
@@ -1311,11 +1708,17 @@ const CVT_ND_CONSTANTS_WGSL: &str = r#"struct Constants {
 ///
 /// `src_rank`/`dst_rank` (each <= 4) and `axes` are baked into the
 /// generated WGSL as compile-time-unrolled code (no runtime rank
-/// branching), matching the `CvtNdKey` cache key that selects this
+/// branching), matching the `CvtComputeKey` cache key that selects this
 /// pipeline. `Image` endpoints are always addressed at rank 3 by every
 /// current call site (2 spatial axes + 1 always-degenerate iteration
 /// axis), but this function does not assume that — a `Buffer` endpoint
 /// paired with an `Image` endpoint may be described at any rank up to 4.
+///
+/// When `dst.kind == Buffer`, `dst_tight_len` (`T`, from
+/// [`classify_dst_tight_chain`]) selects the generated tiled non-atomic
+/// dispatch shape (see [`gen_dst_buffer_tiled_body`]); ignored otherwise
+/// (`Image` destinations keep the original one-thread-per-element scheme —
+/// `textureStore` never aliases across threads, so it never needed this).
 ///
 /// When `resample` is `true` and the source is an `Image` of
 /// `CanonicalKind::Float`, an extra `sampler` binding is declared and the
@@ -1336,6 +1739,7 @@ fn make_compute_pipeline_nd(
     dst_rank: usize,
     axes: AxisSwizzle,
     resample: bool,
+    dst_tight_len: usize,
 ) -> ComputePipeline {
     let src_layout = describe(src.format).expect("Cvt: src format is not describable");
     let dst_layout = describe(dst.format).expect("Cvt: dst format is not describable");
@@ -1344,40 +1748,40 @@ fn make_compute_pipeline_nd(
         "Cvt: sRGB Image destinations must use the render pipeline"
     );
 
-    let dst_atomic = dst.kind == EndpointKind::Buffer && dst_layout.bits() < 32;
-    let dst_arr_ty = if dst_atomic { "atomic<u32>" } else { "u32" };
     let dst_is_image = dst.kind == EndpointKind::Image;
     let needs_sampler =
         resample && src.kind == EndpointKind::Image && src_layout.kind == CanonicalKind::Float;
 
     let mut body = String::new();
 
-    // Unravel the linear destination index into per-axis `dst_c{d}`
-    // coordinates (row-major, fastest-varying last) — endpoint-kind- and
-    // rank-agnostic.
-    body += "    var rem = linear;\n";
-    for d in 0..dst_rank {
-        body += &format!(
-            "    let dst_c{d} = rem % constants.dst_extent[{d}];\n    rem = rem / constants.dst_extent[{d}];\n"
+    if dst_is_image {
+        // Unravel the linear destination index into per-axis `dst_c{d}`
+        // coordinates (row-major, fastest-varying last) — one thread per
+        // destination element; safe unconditionally since `textureStore`
+        // never aliases across threads (never needed the tiled scheme
+        // below, which is `Buffer`-destination-only).
+        body += "    var rem = linear;\n";
+        for d in 0..dst_rank {
+            body += &format!(
+                "    let dst_c{d} = rem % constants.dst_extent[{d}];\n    rem = rem / constants.dst_extent[{d}];\n"
+            );
+        }
+
+        body += &gen_endpoint_decode_convert(
+            src,
+            &dst_layout,
+            &src_layout,
+            swizzle,
+            axes,
+            src_rank,
+            true,
+            resample,
         );
     }
 
-    body += &gen_endpoint_decode_convert(
-        src,
-        &dst_layout,
-        &src_layout,
-        swizzle,
-        axes,
-        src_rank,
-        dst_is_image,
-        resample,
-    );
-
     let (bindings, arguments_layout): (String, &'static str) = match (src.kind, dst.kind) {
         (EndpointKind::Buffer, EndpointKind::Buffer) => (
-            format!(
-                "@group(0) @binding(1) var<storage, read> src: array<u32>;\n@group(0) @binding(2) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
-            ),
+            "@group(0) @binding(1) var<storage, read> src: array<u32>;\n@group(0) @binding(2) var<storage, read_write> dst: array<u32>;\n".to_string(),
             "CvtNdArguments",
         ),
         (EndpointKind::Image, EndpointKind::Image) if needs_sampler => (
@@ -1398,14 +1802,14 @@ fn make_compute_pipeline_nd(
         ),
         (EndpointKind::Image, EndpointKind::Buffer) if needs_sampler => (
             format!(
-                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var src_sampler: sampler;\n@group(0) @binding(3) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var src_sampler: sampler;\n@group(0) @binding(3) var<storage, read_write> dst: array<u32>;\n",
                 wgsl_scalar(src_layout.kind),
             ),
             "CvtImageToBufferResampleArguments",
         ),
         (EndpointKind::Image, EndpointKind::Buffer) => (
             format!(
-                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var<storage, read_write> dst: array<u32>;\n",
                 wgsl_scalar(src_layout.kind),
             ),
             "CvtImageToBufferArguments",
@@ -1419,23 +1823,26 @@ fn make_compute_pipeline_nd(
         ),
     };
 
-    match dst.kind {
-        EndpointKind::Image => {
-            body += "    let dst_px0 = constants.dst_offset[0] + i32(dst_c0);\n    let dst_px1 = constants.dst_offset[1] + i32(dst_c1);\n";
-            body += "    if (dst_px0 < 0 || dst_px1 < 0 || u32(dst_px0) >= constants.dst_image_size[0] || u32(dst_px1) >= constants.dst_image_size[1]) {\n        return;\n    }\n";
-            let scalar = wgsl_scalar(dst_layout.kind);
-            body += &format!(
-                "    textureStore(dst, vec2<i32>(dst_px0, dst_px1), vec4<{scalar}>(out_r, out_g, out_b, out_a));\n"
-            );
-        }
-        EndpointKind::Buffer => {
-            let mut dst_byte_expr = "constants.dst_byte_offset".to_string();
-            for d in 0..dst_rank {
-                dst_byte_expr += &format!(" + dst_c{d} * constants.dst_stride[{d}]");
-            }
-            body += &format!("    let dst_elem_byte: u32 = {dst_byte_expr};\n");
-            body += &gen_buffer_encode("dst", "dst_elem_byte", &dst_layout);
-        }
+    if dst_is_image {
+        body += "    let dst_px0 = constants.dst_offset[0] + i32(dst_c0);\n    let dst_px1 = constants.dst_offset[1] + i32(dst_c1);\n";
+        body += "    if (dst_px0 < 0 || dst_px1 < 0 || u32(dst_px0) >= constants.dst_image_size[0] || u32(dst_px1) >= constants.dst_image_size[1]) {\n        return;\n    }\n";
+        let scalar = wgsl_scalar(dst_layout.kind);
+        body += &format!(
+            "    textureStore(dst, vec2<i32>(dst_px0, dst_px1), vec4<{scalar}>(out_r, out_g, out_b, out_a));\n"
+        );
+    } else {
+        let units = DstTileUnits::new(dst_rank, dst_tight_len);
+        body += &gen_dst_buffer_tiled_body(
+            src,
+            &dst_layout,
+            &src_layout,
+            swizzle,
+            axes,
+            src_rank,
+            dst_rank,
+            resample,
+            units,
+        );
     }
 
     let mut helpers = String::new();
@@ -1445,9 +1852,17 @@ fn make_compute_pipeline_nd(
     if resample && !needs_sampler {
         helpers += ADDRESS_MODE_HELPER;
     }
-    if dst_atomic {
-        helpers += &store_bit_helpers("dst");
-    }
+
+    // `Image` destinations still dispatch one thread per destination
+    // element off a flat `gid.x` (`linear`), bounded by
+    // `total_dst_elements`; `Buffer` destinations generate their own
+    // `gid.x`/`gid.y`/`gid.z` bounds checks inside `body` (see
+    // `gen_dst_buffer_tiled_body`) and need no preamble here.
+    let entry_preamble = if dst_is_image {
+        "    let linear = gid.x;\n    if (linear >= constants.total_dst_elements) {\n        return;\n    }\n"
+    } else {
+        ""
+    };
 
     let code = format!(
         r#"
@@ -1456,11 +1871,7 @@ fn make_compute_pipeline_nd(
 {bindings}{helpers}
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let linear = gid.x;
-    if (linear >= constants.total_dst_elements) {{
-        return;
-    }}
-{body}
+{entry_preamble}{body}
 }}
 "#,
     );
@@ -1662,46 +2073,48 @@ fn make_in_place_pipeline(
         "Cvt: in-place conversion requires src/dst element byte size to match"
     );
 
-    let dst_atomic = dst_layout.bits() < 32;
-    let buf_arr_ty = if dst_atomic { "atomic<u32>" } else { "u32" };
-    // The single `buf` binding's declared type is dictated by dst's write
-    // requirements; if it's atomic-typed, reads must also go through
-    // `atomicLoad` (WGSL requires uniform access mode per binding).
-    let atomic_read = dst_atomic;
-
     let byte_size = dst_layout.byte_size;
 
+    // Always rank-1 and inherently tight by contract (flat
+    // `byte_offset + linear*byte_size` addressing, no stride concept at
+    // all — `T = D = 1`, no outer aligned axes ever needed): the simplest
+    // instance of the tiled non-atomic scheme (see module docs above
+    // `classify_dst_tight_chain`). Each thread owns 4 consecutive elements,
+    // wrapping is always safe since there's nothing to wrap into but more
+    // of the same tightly-packed run.
     let mut body = String::new();
-    body += &format!("    let elem_byte: u32 = constants.byte_offset + linear * {byte_size}u;\n");
+    body += "    let groups: u32 = (constants.element_count + 3u) / 4u;\n";
+    body += "    if (gid.x >= groups) {\n        return;\n    }\n";
 
-    for &ch in &CHANNELS {
-        body += &gen_buffer_decode_channel(
-            &format!("src_{}", ch.lower()),
-            "buf",
-            "elem_byte",
-            &src_layout,
-            ch,
-            atomic_read,
+    for s in 0..4u32 {
+        body += &format!("    let eid_{s}: u32 = gid.x * 4u + {s}u;\n");
+        body += &format!("    if (eid_{s} < constants.element_count) {{\n");
+        body += &format!(
+            "        let elem_byte_{s}: u32 = constants.byte_offset + eid_{s} * {byte_size}u;\n"
         );
+        for &ch in &CHANNELS {
+            body += &gen_buffer_decode_channel(
+                &format!("src_{}", ch.lower()),
+                "buf",
+                &format!("elem_byte_{s}"),
+                &src_layout,
+                ch,
+            );
+        }
+        body += &gen_swizzle(swizzle, src_layout.kind);
+        for &ch in &CHANNELS {
+            let var = format!("out_{}", ch.lower());
+            let sw_var = format!("sw_{}", ch.lower());
+            let (line, _ty) = gen_convert_channel(&var, &sw_var, &src_layout, &dst_layout, false);
+            body += &line;
+        }
+        body += &gen_buffer_encode("buf", &format!("elem_byte_{s}"), &dst_layout);
+        body += "    }\n";
     }
-
-    body += &gen_swizzle(swizzle, src_layout.kind);
-
-    for &ch in &CHANNELS {
-        let var = format!("out_{}", ch.lower());
-        let sw_var = format!("sw_{}", ch.lower());
-        let (line, _ty) = gen_convert_channel(&var, &sw_var, &src_layout, &dst_layout, false);
-        body += &line;
-    }
-
-    body += &gen_buffer_encode("buf", "elem_byte", &dst_layout);
 
     let mut helpers = String::new();
     if needs_half_float(&src_layout) || needs_half_float(&dst_layout) {
         helpers += HALF_FLOAT_HELPERS;
-    }
-    if dst_atomic {
-        helpers += &store_bit_helpers("buf");
     }
 
     let code = format!(
@@ -1712,14 +2125,10 @@ struct Constants {{
 }}
 
 @group(0) @binding(0) var<uniform> constants: Constants;
-@group(0) @binding(1) var<storage, read_write> buf: array<{buf_arr_ty}>;
+@group(0) @binding(1) var<storage, read_write> buf: array<u32>;
 {helpers}
 @compute @workgroup_size(64, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
-    let linear = gid.x;
-    if (linear >= constants.element_count) {{
-        return;
-    }}
 {body}
 }}
 "#,
@@ -1820,9 +2229,11 @@ impl Cvt {
     /// resample - extents must match along every mapped axis; use
     /// `cvt_buffer_to_buffer_resample` for mismatched extents), or any byte
     /// offset/stride isn't a multiple of its side's component byte size
-    /// (1/2/4 — required so that no component write ever straddles a
-    /// 4-byte storage-buffer word, keeping the masked-atomic sub-word
-    /// writes correct and simple).
+    /// (1/2/4 — required so that no component ever straddles a 4-byte
+    /// storage-buffer word), or the destination stride/offset pattern fails
+    /// the tiled non-atomic write dispatch's own preconditions (no-aliasing
+    /// stride requirement, 4-byte-aligned `dst_byte_offset`, every axis
+    /// classified `tight` or `aligned` — see `classify_dst_tight_chain`).
     #[allow(clippy::too_many_arguments)]
     pub fn buffer_to_buffer<const SRC: usize, const DST: usize>(
         &self,
@@ -1885,8 +2296,19 @@ impl Cvt {
                 "Cvt: dst strides must be a multiple of {dst_align} (dst's component byte size)"
             );
         }
+        assert_eq!(
+            dst_byte_offset % 4,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of 4 (word-aligned) — required by the tiled non-atomic destination-write dispatch"
+        );
 
         Self::assert_exact_extents(axes, src_extent.0, dst_extent.0);
+
+        let dst_tight_len = classify_dst_tight_chain(
+            &dst_extent.0,
+            &dst_strides,
+            describe(dst_format).expect("Cvt: dst format is not describable").byte_size,
+        );
 
         let total_dst_elements: u32 = dst_extent.0.iter().product();
 
@@ -1899,7 +2321,7 @@ impl Cvt {
             format: dst_format,
         };
 
-        let key = CvtKey {
+        let key = CvtComputeKey {
             src: src_endpoint,
             dst: dst_endpoint,
             swizzle,
@@ -1907,6 +2329,7 @@ impl Cvt {
             dst_rank: DST as u8,
             axes,
             resample: false,
+            dst_tight_len: dst_tight_len as u8,
         };
 
         let pipeline = {
@@ -1923,6 +2346,7 @@ impl Cvt {
                         DST,
                         axes,
                         false,
+                        dst_tight_len,
                     )
                 })
                 .clone()
@@ -1958,7 +2382,7 @@ impl Cvt {
             name: "cvt_nd_constants",
         });
 
-        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+        let groups = dst_tile_dispatch_extent(DstTileUnits::new(DST, dst_tight_len), &dst_extent.0);
 
         let mut compute = encoder.compute();
         compute.with_pipeline(&pipeline);
@@ -2055,6 +2479,17 @@ impl Cvt {
                 "Cvt: dst strides must be a multiple of {dst_align} (dst's component byte size)"
             );
         }
+        assert_eq!(
+            dst_byte_offset % 4,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of 4 (word-aligned) — required by the tiled non-atomic destination-write dispatch"
+        );
+
+        let dst_tight_len = classify_dst_tight_chain(
+            &dst_extent.0,
+            &dst_strides,
+            describe(dst_format).expect("Cvt: dst format is not describable").byte_size,
+        );
 
         let total_dst_elements: u32 = dst_extent.0.iter().product();
 
@@ -2067,7 +2502,7 @@ impl Cvt {
             format: dst_format,
         };
 
-        let key = CvtKey {
+        let key = CvtComputeKey {
             src: src_endpoint,
             dst: dst_endpoint,
             swizzle,
@@ -2075,6 +2510,7 @@ impl Cvt {
             dst_rank: DST as u8,
             axes,
             resample: true,
+            dst_tight_len: dst_tight_len as u8,
         };
 
         let pipeline = {
@@ -2091,6 +2527,7 @@ impl Cvt {
                         DST,
                         axes,
                         true,
+                        dst_tight_len,
                     )
                 })
                 .clone()
@@ -2130,7 +2567,7 @@ impl Cvt {
             name: "cvt_nd_resample_constants",
         });
 
-        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+        let groups = dst_tile_dispatch_extent(DstTileUnits::new(DST, dst_tight_len), &dst_extent.0);
 
         let mut compute = encoder.compute();
         compute.with_pipeline(&pipeline);
@@ -2209,7 +2646,9 @@ impl Cvt {
             name: "cvt_in_place_constants",
         });
 
-        let groups = Extent3::new(element_count.div_ceil(64), 1, 1);
+        // 4 elements/thread (see `make_in_place_pipeline`'s tiled scheme),
+        // grouped further into workgroups of 64.
+        let groups = Extent3::new(element_count.div_ceil(4).div_ceil(64), 1, 1);
 
         let mut compute = encoder.compute();
         compute.with_pipeline(&pipeline);
@@ -2363,10 +2802,23 @@ impl Cvt {
             );
             render.draw(0..3, 0..1);
         } else {
+            // `dst` is `Image` here, so the tiled non-atomic scheme doesn't
+            // apply (`textureStore` never aliases across threads) —
+            // `dst_tight_len` is meaningless, always `0`.
+            let compute_key = CvtComputeKey {
+                src: src_endpoint,
+                dst: dst_endpoint,
+                swizzle,
+                src_rank: 3,
+                dst_rank: 3,
+                axes,
+                resample: false,
+                dst_tight_len: 0,
+            };
             let pipeline = {
                 let mut pipelines = self.compute_pipelines.lock();
                 pipelines
-                    .entry(key)
+                    .entry(compute_key)
                     .or_insert_with(|| {
                         make_compute_pipeline_nd(
                             &self.device,
@@ -2377,6 +2829,7 @@ impl Cvt {
                             3,
                             axes,
                             false,
+                            0,
                         )
                     })
                     .clone()
@@ -2586,10 +3039,22 @@ impl Cvt {
             }
             render.draw(0..3, 0..1);
         } else {
+            // `dst` is `Image` here, so the tiled non-atomic scheme doesn't
+            // apply — `dst_tight_len` is meaningless, always `0`.
+            let compute_key = CvtComputeKey {
+                src: src_endpoint,
+                dst: dst_endpoint,
+                swizzle,
+                src_rank: 3,
+                dst_rank: 3,
+                axes,
+                resample: true,
+                dst_tight_len: 0,
+            };
             let pipeline = {
                 let mut pipelines = self.compute_pipelines.lock();
                 pipelines
-                    .entry(key)
+                    .entry(compute_key)
                     .or_insert_with(|| {
                         make_compute_pipeline_nd(
                             &self.device,
@@ -2600,6 +3065,7 @@ impl Cvt {
                             3,
                             axes,
                             true,
+                            0,
                         )
                     })
                     .clone()
@@ -2697,6 +3163,19 @@ impl Cvt {
             0,
             "Cvt: dst_plane_pitch must be a multiple of {align} (dst's component byte size)"
         );
+        assert_eq!(
+            dst_byte_offset % 4,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of 4 (word-aligned) — required by the tiled non-atomic destination-write dispatch"
+        );
+
+        let dst_stride3 = [
+            dst_layout.byte_size,
+            dst_row_pitch,
+            dst_plane_pitch,
+        ];
+        let dst_tight_len =
+            classify_dst_tight_chain(&dst_extent.0, &dst_stride3, dst_layout.byte_size);
 
         let src_endpoint = EndpointDesc {
             kind: EndpointKind::Image,
@@ -2707,7 +3186,7 @@ impl Cvt {
             format: dst_format,
         };
 
-        let key = CvtKey {
+        let key = CvtComputeKey {
             src: src_endpoint,
             dst: dst_endpoint,
             swizzle,
@@ -2715,6 +3194,7 @@ impl Cvt {
             dst_rank: 3,
             axes,
             resample: false,
+            dst_tight_len: dst_tight_len as u8,
         };
 
         let total_dst_elements: u32 = dst_extent.0.iter().product();
@@ -2758,12 +3238,13 @@ impl Cvt {
                         3,
                         axes,
                         false,
+                        dst_tight_len,
                     )
                 })
                 .clone()
         };
 
-        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+        let groups = dst_tile_dispatch_extent(DstTileUnits::new(3, dst_tight_len), &dst_extent.0);
 
         let mut compute = encoder.compute();
         compute.with_pipeline(&pipeline);
@@ -2842,6 +3323,19 @@ impl Cvt {
             0,
             "Cvt: dst_plane_pitch must be a multiple of {align} (dst's component byte size)"
         );
+        assert_eq!(
+            dst_byte_offset % 4,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of 4 (word-aligned) — required by the tiled non-atomic destination-write dispatch"
+        );
+
+        let dst_stride3 = [
+            dst_layout.byte_size,
+            dst_row_pitch,
+            dst_plane_pitch,
+        ];
+        let dst_tight_len =
+            classify_dst_tight_chain(&dst_extent.0, &dst_stride3, dst_layout.byte_size);
 
         let src_endpoint = EndpointDesc {
             kind: EndpointKind::Image,
@@ -2852,7 +3346,7 @@ impl Cvt {
             format: dst_format,
         };
 
-        let key = CvtKey {
+        let key = CvtComputeKey {
             src: src_endpoint,
             dst: dst_endpoint,
             swizzle,
@@ -2860,6 +3354,7 @@ impl Cvt {
             dst_rank: 3,
             axes,
             resample: true,
+            dst_tight_len: dst_tight_len as u8,
         };
 
         let src_image_size = src.extent().into_2d();
@@ -2904,12 +3399,13 @@ impl Cvt {
                         3,
                         axes,
                         true,
+                        dst_tight_len,
                     )
                 })
                 .clone()
         };
 
-        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+        let groups = dst_tile_dispatch_extent(DstTileUnits::new(3, dst_tight_len), &dst_extent.0);
 
         let mut compute = encoder.compute();
         compute.with_pipeline(&pipeline);
@@ -3112,10 +3608,22 @@ impl Cvt {
             );
             render.draw(0..3, 0..1);
         } else {
+            // `dst` is `Image` here, so the tiled non-atomic scheme doesn't
+            // apply — `dst_tight_len` is meaningless, always `0`.
+            let compute_key = CvtComputeKey {
+                src: src_endpoint,
+                dst: dst_endpoint,
+                swizzle,
+                src_rank: 3,
+                dst_rank: 3,
+                axes,
+                resample: false,
+                dst_tight_len: 0,
+            };
             let pipeline = {
                 let mut pipelines = self.compute_pipelines.lock();
                 pipelines
-                    .entry(key)
+                    .entry(compute_key)
                     .or_insert_with(|| {
                         make_compute_pipeline_nd(
                             &self.device,
@@ -3126,6 +3634,7 @@ impl Cvt {
                             3,
                             axes,
                             false,
+                            0,
                         )
                     })
                     .clone()
@@ -3333,10 +3842,22 @@ impl Cvt {
             );
             render.draw(0..3, 0..1);
         } else {
+            // `dst` is `Image` here, so the tiled non-atomic scheme doesn't
+            // apply — `dst_tight_len` is meaningless, always `0`.
+            let compute_key = CvtComputeKey {
+                src: src_endpoint,
+                dst: dst_endpoint,
+                swizzle,
+                src_rank: 3,
+                dst_rank: 3,
+                axes,
+                resample: true,
+                dst_tight_len: 0,
+            };
             let pipeline = {
                 let mut pipelines = self.compute_pipelines.lock();
                 pipelines
-                    .entry(key)
+                    .entry(compute_key)
                     .or_insert_with(|| {
                         make_compute_pipeline_nd(
                             &self.device,
@@ -3347,6 +3868,7 @@ impl Cvt {
                             3,
                             axes,
                             true,
+                            0,
                         )
                     })
                     .clone()
@@ -3366,5 +3888,161 @@ impl Cvt {
             );
             compute.dispatch(groups);
         }
+    }
+}
+
+// ============================================================================
+// Tests: pure codegen/classification logic (no GPU device needed). The
+// tiled dispatch's actual read-back correctness is verified on real
+// hardware by `examples/cvt_smoke.rs`.
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_dst_tight_chain_cases() {
+        // Case 1: "all aligned to u32" — a dense, word-sized dst (e.g.
+        // Rgba8Unorm, byte_size=4) is naturally word-aligned at every
+        // level, so `aligned` (checked first) wins over the numerically
+        // tight equality: T == 0, not the whole rank.
+        let t = classify_dst_tight_chain(&[4, 3], &[4, 16], 4);
+        assert_eq!(
+            t, 0,
+            "dense word-sized dst should classify axis 0 as aligned, not tight"
+        );
+
+        // Case 2: rows tight (byte_size=1, no gap), planes aligned with an
+        // explicit padding gap — the scenario the tight/aligned distinction
+        // exists for.
+        let t = classify_dst_tight_chain(&[3, 2], &[1, 4], 1);
+        assert_eq!(
+            t, 1,
+            "byte_size==1 packed row + word-aligned padded plane stride should give T=1"
+        );
+
+        // Case 4: fully tight (no padding anywhere, sub-word format).
+        let t = classify_dst_tight_chain(&[3, 2], &[1, 3], 1);
+        assert_eq!(
+            t, 2,
+            "fully packed sub-word dst (no gaps) should give T == rank"
+        );
+
+        // General no-aliasing precondition, axis 0: `stride == 0` must be
+        // rejected (this is the real gap in the old
+        // `stride % component_byte_size == 0` check the plan calls out —
+        // `0 % x == 0` let it slip through).
+        let result = std::panic::catch_unwind(|| classify_dst_tight_chain(&[3], &[0], 1));
+        assert!(result.is_err(), "dst_stride[0] < byte_size must panic");
+
+        // General no-aliasing precondition, axis >= 1.
+        let result = std::panic::catch_unwind(|| classify_dst_tight_chain(&[3, 2], &[1, 2], 1));
+        assert!(
+            result.is_err(),
+            "dst_stride[1] < extent[0]*stride[0] must panic"
+        );
+
+        // "Bad" axis: neither word-aligned nor tight relative to its
+        // predecessor — must panic with a clear message, not silently
+        // produce wrong output.
+        let result = std::panic::catch_unwind(|| classify_dst_tight_chain(&[3, 2], &[1, 5], 1));
+        let err = result.expect_err("a non-word-aligned, non-tight stride must panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(
+            msg.contains("neither word-aligned") && msg.contains("unsupported"),
+            "panic message should clearly explain the unsupported alignment, got: {msg:?}"
+        );
+    }
+
+    /// A 2D padded-row destination (`T=1`: tight rows, aligned-with-a-gap
+    /// planes — the scenario the tight/aligned distinction exists for)
+    /// generates the expected dispatch shape: the tight chain rides
+    /// `gid.x`, the one remaining aligned axis rides `gid.y` independently
+    /// (no wrap between them), and no `gid.z` unit is needed at rank 2.
+    #[test]
+    fn dst_buffer_tiled_body_2d_padded_row_shape() {
+        let src = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: PixelFormat::R8Uint,
+        };
+        let dst_layout = describe(PixelFormat::R8Uint).unwrap();
+        let src_layout = describe(PixelFormat::R8Uint).unwrap();
+
+        let units = DstTileUnits::new(2, 1);
+        let body = gen_dst_buffer_tiled_body(
+            src,
+            &dst_layout,
+            &src_layout,
+            Swizzle::IDENTITY,
+            AxisSwizzle::IDENTITY,
+            2,
+            2,
+            false,
+            units,
+        );
+
+        println!("{body}");
+
+        assert!(body.contains("gid.x"), "tight chain unit should ride gid.x");
+        assert!(
+            body.contains("gid.y"),
+            "the one remaining aligned axis should ride gid.y"
+        );
+        assert!(
+            !body.contains("gid.z"),
+            "no third dispatch dimension is needed for rank 2"
+        );
+        assert!(
+            body.contains("dst_c1_v1_"),
+            "axis 1 should be handled as its own independent aligned unit"
+        );
+        assert!(
+            body.contains("dst_c0_v0_"),
+            "axis 0 should be handled by the tight-chain (x) unit"
+        );
+    }
+
+    /// A rank-4 destination with no tight chain at all (`T == 0`) needs the
+    /// full `gid.x`/`gid.y`/`gid.z`-folded shape (3 remaining aligned axes
+    /// after axis 0 claims `gid.x`, so axes 2 and 3 fold into `gid.z`).
+    #[test]
+    fn dst_buffer_tiled_body_rank4_all_aligned_folds_into_z() {
+        let src = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: PixelFormat::Rgba8Unorm,
+        };
+        let dst_layout = describe(PixelFormat::Rgba8Unorm).unwrap();
+        let src_layout = describe(PixelFormat::Rgba8Unorm).unwrap();
+
+        let units = DstTileUnits::new(4, 0);
+        assert_eq!(units.z_unit(), ZUnit::Folded(2, 3));
+
+        let body = gen_dst_buffer_tiled_body(
+            src,
+            &dst_layout,
+            &src_layout,
+            Swizzle::IDENTITY,
+            AxisSwizzle::IDENTITY,
+            4,
+            4,
+            false,
+            units,
+        );
+
+        assert!(body.contains("group_zb"), "axis 2 should fold into gid.z");
+        assert!(body.contains("group_zc"), "axis 3 should fold into gid.z");
+        assert!(
+            body.contains("dst_c0_v0_"),
+            "axis 0 alone should ride gid.x (T == 0, not a chain)"
+        );
+        assert!(
+            body.contains("dst_c1_v1_"),
+            "axis 1 should ride gid.y directly"
+        );
     }
 }
