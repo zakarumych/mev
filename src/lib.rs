@@ -2,6 +2,13 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(unused)]
 
+// The `Arguments`/`AutoDeviceRepr`/`DeviceRepr`/`VertexBinding` derive macros
+// (and the `match_backend!` macro) are generated assuming they are used from
+// outside this crate, referring to it by its published name `mev`. Aliasing
+// the crate to itself lets code inside `mev` (e.g. `src/kernels`) use these
+// derives too.
+extern crate self as mev;
+
 /// Macro that passes-through any tokens inside if chosen backend is Metal.
 /// Otherwise, it unwraps to nothing.
 ///
@@ -213,6 +220,8 @@ mod private {
     /// It is used as subtrait to signal that that trait is not meant to be implemented outside of this crate.
     pub trait Sealed {}
 }
+
+pub mod kernels;
 
 pub use self::{backend::*, generic::*};
 pub use mev_proc::{Arguments, AutoDeviceRepr, DeviceRepr, VertexBinding, match_backend};

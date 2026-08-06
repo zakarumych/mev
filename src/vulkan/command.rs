@@ -324,7 +324,7 @@ impl ComputeCommandEncoder<'_> {
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
-        if !self.handle.is_null() {
+        if self.handle.is_null() {
             return;
         }
         barrier(&self.device, self.handle, after, before);

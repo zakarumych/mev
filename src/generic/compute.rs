@@ -1,4 +1,4 @@
-use crate::{generic::Shader, ArgumentGroupLayout};
+use crate::{ArgumentGroupLayout, generic::Shader};
 
 /// Compute pipeline descriptor.
 /// Used to create new compute pipelines.

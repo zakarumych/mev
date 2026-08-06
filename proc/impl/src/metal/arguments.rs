@@ -1,11 +1,14 @@
-use proc_easy::{private::Spanned, EasyAttributes};
+use proc_easy::{EasyAttributes, private::Spanned};
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use syn;
 
 use crate::args::*;
 
-pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_macro2::TokenStream> {
+pub fn derive(
+    input: &syn::DeriveInput,
+    mev: &TokenStream,
+) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
 
     if !input.generics.params.is_empty() {
@@ -21,7 +24,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_m
             return Err(syn::Error::new_spanned(
                 input,
                 "only structs are supported by `#[derive(Arguments)]`",
-            ))
+            ));
         }
     };
 

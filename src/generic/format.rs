@@ -920,3 +920,72 @@ pub enum ColorSpace {
     /// sRGB color space.
     SrgbNonLinear,
 }
+
+impl From<VertexFormat> for PixelFormat {
+    #[inline]
+    fn from(format: VertexFormat) -> Self {
+        use VertexFormat::*;
+
+        match format {
+            Uint8 => PixelFormat::R8Uint,
+            Uint16 => PixelFormat::R16Uint,
+            Uint32 => PixelFormat::R32Uint,
+            Sint8 => PixelFormat::R8Sint,
+            Sint16 => PixelFormat::R16Sint,
+            Sint32 => PixelFormat::R32Sint,
+            Unorm8 => PixelFormat::R8Unorm,
+            Unorm16 => PixelFormat::R16Unorm,
+            Unorm32 => PixelFormat::R32Unorm,
+            Snorm8 => PixelFormat::R8Snorm,
+            Snorm16 => PixelFormat::R16Snorm,
+            Snorm32 => PixelFormat::R32Snorm,
+            Float16 => PixelFormat::R16Float,
+            Float32 => PixelFormat::R32Float,
+
+            Uint8x2 => PixelFormat::Rg8Unorm,
+            Uint16x2 => PixelFormat::Rg16Uint,
+            Uint32x2 => PixelFormat::Rg32Uint,
+            Sint8x2 => PixelFormat::Rg8Sint,
+            Sint16x2 => PixelFormat::Rg16Sint,
+            Sint32x2 => PixelFormat::Rg32Sint,
+            Unorm8x2 => PixelFormat::Rg8Unorm,
+            Unorm16x2 => PixelFormat::Rg16Unorm,
+            Unorm32x2 => PixelFormat::Rg32Unorm,
+            Snorm8x2 => PixelFormat::Rg8Snorm,
+            Snorm16x2 => PixelFormat::Rg16Snorm,
+            Snorm32x2 => PixelFormat::Rg32Snorm,
+            Float16x2 => PixelFormat::Rg16Float,
+            Float32x2 => PixelFormat::Rg32Float,
+
+            Uint8x3 => PixelFormat::Rgb8Uint,
+            Uint16x3 => PixelFormat::Rgb16Uint,
+            Uint32x3 => PixelFormat::Rgb32Uint,
+            Sint8x3 => PixelFormat::Rgb8Sint,
+            Sint16x3 => PixelFormat::Rgb16Sint,
+            Sint32x3 => PixelFormat::Rgb32Sint,
+            Unorm8x3 => PixelFormat::Rgb8Unorm,
+            Unorm16x3 => PixelFormat::Rgb16Unorm,
+            Unorm32x3 => PixelFormat::Rgb32Unorm,
+            Snorm8x3 => PixelFormat::Rgb8Snorm,
+            Snorm16x3 => PixelFormat::Rgb16Snorm,
+            Snorm32x3 => PixelFormat::Rgb32Snorm,
+            Float16x3 => PixelFormat::Rgb16Float,
+            Float32x3 => PixelFormat::Rgb32Float,
+
+            Uint8x4 => PixelFormat::Rgba8Uint,
+            Uint16x4 => PixelFormat::Rgba16Uint,
+            Uint32x4 => PixelFormat::Rgba32Uint,
+            Sint8x4 => PixelFormat::Rgba8Sint,
+            Sint16x4 => PixelFormat::Rgba16Sint,
+            Sint32x4 => PixelFormat::Rgba32Sint,
+            Unorm8x4 => PixelFormat::Rgba8Unorm,
+            Unorm16x4 => PixelFormat::Rgba16Unorm,
+            Unorm32x4 => PixelFormat::Rgba32Unorm,
+            Snorm8x4 => PixelFormat::Rgba8Snorm,
+            Snorm16x4 => PixelFormat::Rgba16Snorm,
+            Snorm32x4 => PixelFormat::Rgba32Snorm,
+            Float16x4 => PixelFormat::Rgba16Float,
+            Float32x4 => PixelFormat::Rgba32Float,
+        }
+    }
+}

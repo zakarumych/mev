@@ -1,0 +1,3370 @@
+//! GPU-side format-converting copy kernel.
+//!
+//! `Cvt` converts between `Image`/`Buffer` endpoints described by
+//! `PixelFormat`/`VertexFormat`, decoding source components to a canonical
+//! value and re-encoding them into the destination's own type (not a raw
+//! bit copy), with component swizzle and axis remap
+//! (rotation/mirror/splat/diagonal-read) along the way.
+
+use std::fmt;
+
+use hashbrown::HashMap;
+use parking_lot::Mutex;
+
+use crate::{
+    AddressMode, Arguments, AttachmentDesc, Buffer, BufferInitDesc, BufferUsage, ColorTargetDesc,
+    CommandEncoder, ComputePipeline, ComputePipelineDesc, Culling, Device, Extent, Extent1,
+    Extent2, Extent3, Filter, FrontFace, Image, LibraryDesc, LibraryInput, MipMapMode, Offset2,
+    Offset3, PixelFormat, PrimitiveTopology, RasterDesc, RenderPassDesc, RenderPipeline,
+    RenderPipelineDesc, Sampler, SamplerDesc, Swizzle, VertexFormat,
+};
+
+// ============================================================================
+// Format description
+// ============================================================================
+
+/// Shader-level storage category of a format's components.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CanonicalKind {
+    Float,
+    Uint,
+    Sint,
+}
+
+/// Canonical channel identity, independent of physical memory order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Channel {
+    R,
+    G,
+    B,
+    A,
+}
+
+const CHANNELS: [Channel; 4] = [Channel::R, Channel::G, Channel::B, Channel::A];
+
+impl Channel {
+    fn lower(self) -> &'static str {
+        match self {
+            Channel::R => "r",
+            Channel::G => "g",
+            Channel::B => "b",
+            Channel::A => "a",
+        }
+    }
+
+    /// Default value used when a swizzle references a channel the format
+    /// does not physically carry (mirrors typical hardware texture
+    /// component defaults: RGB missing -> 0, alpha missing -> 1).
+    fn default_is_one(self) -> bool {
+        matches!(self, Channel::A)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ComponentDesc {
+    /// Canonical channel this physical/memory-order component represents.
+    channel: Channel,
+    /// Bit width: 8, 16 or 32.
+    bits: u32,
+    /// Whether this is a Unorm/Snorm component (only meaningful within
+    /// `CanonicalKind::Float`).
+    normalized: bool,
+    /// Whether this component is signed.
+    signed: bool,
+}
+
+struct FormatLayout {
+    kind: CanonicalKind,
+    srgb: bool,
+    byte_size: usize,
+    /// Components in physical/memory order. Length 1..=4.
+    components: Vec<ComponentDesc>,
+}
+
+impl FormatLayout {
+    fn channel_position(&self, channel: Channel) -> Option<usize> {
+        self.components.iter().position(|c| c.channel == channel)
+    }
+}
+
+fn comps(bits: u32, normalized: bool, signed: bool, channels: &[Channel]) -> Vec<ComponentDesc> {
+    channels
+        .iter()
+        .map(|&channel| ComponentDesc {
+            channel,
+            bits,
+            normalized,
+            signed,
+        })
+        .collect()
+}
+
+/// Describes a `PixelFormat` for `Cvt`'s purposes, or `None` if the format
+/// has no per-component decode model (depth/stencil or BC-compressed).
+fn describe(format: PixelFormat) -> Option<FormatLayout> {
+    use Channel::*;
+    use PixelFormat::*;
+
+    let byte_size = format.block_size();
+    let srgb = format.is_srgb();
+
+    let (kind, normalized, signed, bits, channels): (CanonicalKind, bool, bool, u32, &[Channel]) =
+        match format {
+            R8Unorm => (CanonicalKind::Float, true, false, 8, &[R]),
+            R8Snorm => (CanonicalKind::Float, true, true, 8, &[R]),
+            R8Uint => (CanonicalKind::Uint, false, false, 8, &[R]),
+            R8Sint => (CanonicalKind::Sint, false, true, 8, &[R]),
+            R8Srgb => (CanonicalKind::Float, true, false, 8, &[R]),
+            R16Unorm => (CanonicalKind::Float, true, false, 16, &[R]),
+            R16Snorm => (CanonicalKind::Float, true, true, 16, &[R]),
+            R16Uint => (CanonicalKind::Uint, false, false, 16, &[R]),
+            R16Sint => (CanonicalKind::Sint, false, true, 16, &[R]),
+            R16Float => (CanonicalKind::Float, false, false, 16, &[R]),
+            R32Unorm => (CanonicalKind::Float, true, false, 32, &[R]),
+            R32Snorm => (CanonicalKind::Float, true, true, 32, &[R]),
+            R32Uint => (CanonicalKind::Uint, false, false, 32, &[R]),
+            R32Sint => (CanonicalKind::Sint, false, true, 32, &[R]),
+            R32Float => (CanonicalKind::Float, false, false, 32, &[R]),
+
+            Rg8Unorm => (CanonicalKind::Float, true, false, 8, &[R, G]),
+            Rg8Snorm => (CanonicalKind::Float, true, true, 8, &[R, G]),
+            Rg8Uint => (CanonicalKind::Uint, false, false, 8, &[R, G]),
+            Rg8Sint => (CanonicalKind::Sint, false, true, 8, &[R, G]),
+            Rg8Srgb => (CanonicalKind::Float, true, false, 8, &[R, G]),
+            Rg16Unorm => (CanonicalKind::Float, true, false, 16, &[R, G]),
+            Rg16Snorm => (CanonicalKind::Float, true, true, 16, &[R, G]),
+            Rg16Uint => (CanonicalKind::Uint, false, false, 16, &[R, G]),
+            Rg16Sint => (CanonicalKind::Sint, false, true, 16, &[R, G]),
+            Rg16Float => (CanonicalKind::Float, false, false, 16, &[R, G]),
+            Rg32Unorm => (CanonicalKind::Float, true, false, 32, &[R, G]),
+            Rg32Snorm => (CanonicalKind::Float, true, true, 32, &[R, G]),
+            Rg32Uint => (CanonicalKind::Uint, false, false, 32, &[R, G]),
+            Rg32Sint => (CanonicalKind::Sint, false, true, 32, &[R, G]),
+            Rg32Float => (CanonicalKind::Float, false, false, 32, &[R, G]),
+
+            Rgb8Unorm => (CanonicalKind::Float, true, false, 8, &[R, G, B]),
+            Rgb8Snorm => (CanonicalKind::Float, true, true, 8, &[R, G, B]),
+            Rgb8Uint => (CanonicalKind::Uint, false, false, 8, &[R, G, B]),
+            Rgb8Sint => (CanonicalKind::Sint, false, true, 8, &[R, G, B]),
+            Rgb8Srgb => (CanonicalKind::Float, true, false, 8, &[R, G, B]),
+            Rgb16Unorm => (CanonicalKind::Float, true, false, 16, &[R, G, B]),
+            Rgb16Snorm => (CanonicalKind::Float, true, true, 16, &[R, G, B]),
+            Rgb16Uint => (CanonicalKind::Uint, false, false, 16, &[R, G, B]),
+            Rgb16Sint => (CanonicalKind::Sint, false, true, 16, &[R, G, B]),
+            Rgb16Float => (CanonicalKind::Float, false, false, 16, &[R, G, B]),
+            Rgb32Unorm => (CanonicalKind::Float, true, false, 32, &[R, G, B]),
+            Rgb32Snorm => (CanonicalKind::Float, true, true, 32, &[R, G, B]),
+            Rgb32Uint => (CanonicalKind::Uint, false, false, 32, &[R, G, B]),
+            Rgb32Sint => (CanonicalKind::Sint, false, true, 32, &[R, G, B]),
+            Rgb32Float => (CanonicalKind::Float, false, false, 32, &[R, G, B]),
+
+            Rgba8Unorm => (CanonicalKind::Float, true, false, 8, &[R, G, B, A]),
+            Rgba8Snorm => (CanonicalKind::Float, true, true, 8, &[R, G, B, A]),
+            Rgba8Uint => (CanonicalKind::Uint, false, false, 8, &[R, G, B, A]),
+            Rgba8Sint => (CanonicalKind::Sint, false, true, 8, &[R, G, B, A]),
+            Rgba8Srgb => (CanonicalKind::Float, true, false, 8, &[R, G, B, A]),
+            Rgba16Unorm => (CanonicalKind::Float, true, false, 16, &[R, G, B, A]),
+            Rgba16Snorm => (CanonicalKind::Float, true, true, 16, &[R, G, B, A]),
+            Rgba16Uint => (CanonicalKind::Uint, false, false, 16, &[R, G, B, A]),
+            Rgba16Sint => (CanonicalKind::Sint, false, true, 16, &[R, G, B, A]),
+            Rgba16Float => (CanonicalKind::Float, false, false, 16, &[R, G, B, A]),
+            Rgba32Unorm => (CanonicalKind::Float, true, false, 32, &[R, G, B, A]),
+            Rgba32Snorm => (CanonicalKind::Float, true, true, 32, &[R, G, B, A]),
+            Rgba32Uint => (CanonicalKind::Uint, false, false, 32, &[R, G, B, A]),
+            Rgba32Sint => (CanonicalKind::Sint, false, true, 32, &[R, G, B, A]),
+            Rgba32Float => (CanonicalKind::Float, false, false, 32, &[R, G, B, A]),
+
+            Bgr8Unorm => (CanonicalKind::Float, true, false, 8, &[B, G, R]),
+            Bgr8Snorm => (CanonicalKind::Float, true, true, 8, &[B, G, R]),
+            Bgr8Uint => (CanonicalKind::Uint, false, false, 8, &[B, G, R]),
+            Bgr8Sint => (CanonicalKind::Sint, false, true, 8, &[B, G, R]),
+            Bgr8Srgb => (CanonicalKind::Float, true, false, 8, &[B, G, R]),
+
+            Bgra8Unorm => (CanonicalKind::Float, true, false, 8, &[B, G, R, A]),
+            Bgra8Snorm => (CanonicalKind::Float, true, true, 8, &[B, G, R, A]),
+            Bgra8Uint => (CanonicalKind::Uint, false, false, 8, &[B, G, R, A]),
+            Bgra8Sint => (CanonicalKind::Sint, false, true, 8, &[B, G, R, A]),
+            Bgra8Srgb => (CanonicalKind::Float, true, false, 8, &[B, G, R, A]),
+
+            D16Unorm | D32Float | S8Uint | D16UnormS8Uint | D24UnormS8Uint | D32FloatS8Uint => {
+                return None;
+            }
+
+            Bc1RgbUnorm | Bc1RgbSrgb | Bc1RgbaUnorm | Bc1RgbaSrgb | Bc2Unorm | Bc2Srgb
+            | Bc3Unorm | Bc3Srgb | Bc4Unorm | Bc4Snorm | Bc5Unorm | Bc5Snorm => return None,
+        };
+
+    Some(FormatLayout {
+        kind,
+        srgb,
+        byte_size,
+        components: comps(bits, normalized, signed, channels),
+    })
+}
+
+/// `true` iff both formats describe (i.e. neither is depth/stencil/BC).
+/// Cross-`CanonicalKind` pairs ARE allowed — this is deliberately
+/// permissive beyond `Blit`'s own same-kind-only `classify`.
+pub fn compatible(src: PixelFormat, dst: PixelFormat) -> bool {
+    describe(src).is_some() && describe(dst).is_some()
+}
+
+// ============================================================================
+// Axis remapping
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Axis {
+    X,
+    Y,
+    Z,
+    W,
+}
+
+impl fmt::Display for Axis {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Axis::X => f.write_str("X"),
+            Axis::Y => f.write_str("Y"),
+            Axis::Z => f.write_str("Z"),
+            Axis::W => f.write_str("W"),
+        }
+    }
+}
+
+impl fmt::Debug for Axis {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AxisMap {
+    Zero,
+    Direct(Axis),
+    Mirror(Axis),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AxisSwizzle {
+    pub x: AxisMap,
+    pub y: AxisMap,
+    pub z: AxisMap,
+    pub w: AxisMap,
+}
+
+impl AxisSwizzle {
+    pub const IDENTITY: Self = AxisSwizzle {
+        x: AxisMap::Direct(Axis::X),
+        y: AxisMap::Direct(Axis::Y),
+        z: AxisMap::Direct(Axis::Z),
+        w: AxisMap::Direct(Axis::W),
+    };
+
+    pub fn index(&self, src: usize) -> AxisMap {
+        match src {
+            0 => self.x,
+            1 => self.y,
+            2 => self.z,
+            3 => self.w,
+            _ => panic!("AxisSwizzle::index out of range: {src}"),
+        }
+    }
+}
+
+impl Default for AxisSwizzle {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+// ============================================================================
+// `Cvt` kernel state and pipeline cache keys
+// ============================================================================
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum EndpointKind {
+    Image,
+    Buffer,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct EndpointDesc {
+    kind: EndpointKind,
+    format: PixelFormat,
+}
+
+/// Cache key for both the compute and render pipelines built by
+/// `make_compute_pipeline_nd`/`make_render_pipeline`. One pipeline shape per
+/// distinct (endpoint kinds/formats, swizzle, axis map, ranks, resample)
+/// combination actually used; `axes`'s slots beyond `src_rank` are ignored.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CvtKey {
+    src: EndpointDesc,
+    dst: EndpointDesc,
+    swizzle: Swizzle,
+    src_rank: u8,
+    dst_rank: u8,
+    axes: AxisSwizzle,
+    resample: bool,
+}
+
+/// Cache key for the dedicated single-resource in-place buffer pipeline.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct CvtInPlaceKey {
+    src_format: PixelFormat,
+    dst_format: PixelFormat,
+    swizzle: Swizzle,
+}
+
+/// Kernel that performs GPU-side format-converting copies between
+/// `Image`/`Buffer` endpoints (value-converting, not a raw bit copy), with
+/// component swizzle and axis remap (rotation/mirror/splat/diagonal-read).
+///
+/// Mirrors `Blit`'s architecture: pipelines are lazily built from
+/// `format!`-generated WGSL and cached by a small hashable key, one
+/// pipeline shape per distinct (formats, swizzle, axis map, resample)
+/// combination actually used.
+pub struct Cvt {
+    device: Device,
+    render_pipelines: Mutex<HashMap<CvtKey, RenderPipeline>>,
+    compute_pipelines: Mutex<HashMap<CvtKey, ComputePipeline>>,
+    in_place_pipelines: Mutex<HashMap<CvtInPlaceKey, ComputePipeline>>,
+    samplers: Mutex<HashMap<SamplerDesc, Sampler>>,
+}
+
+// ============================================================================
+// Small numeric helpers shared by codegen
+// ============================================================================
+
+/// Divisor used to decode/encode a normalized (Unorm/Snorm) component of
+/// `bits` width: `2^bits - 1` unsigned, `2^(bits-1) - 1` signed.
+fn normalized_max(bits: u32, signed: bool) -> f64 {
+    if signed {
+        ((1u64 << (bits - 1)) - 1) as f64
+    } else {
+        ((1u64 << bits) - 1) as f64
+    }
+}
+
+/// Representable integer range of a raw `Uint`/`Sint` component of `bits`
+/// width.
+fn int_range(bits: u32, signed: bool) -> (i64, i64) {
+    if signed {
+        let max = (1i64 << (bits - 1)) - 1;
+        let min = -(1i64 << (bits - 1));
+        (min, max)
+    } else {
+        (0, (1i64 << bits) - 1)
+    }
+}
+
+fn wgsl_scalar(kind: CanonicalKind) -> &'static str {
+    match kind {
+        CanonicalKind::Float => "f32",
+        CanonicalKind::Uint => "u32",
+        CanonicalKind::Sint => "i32",
+    }
+}
+
+/// Formats an `f64` as a WGSL `f32` literal (always with a decimal point,
+/// so it can't be mistaken for an abstract-int literal).
+fn fmt_f32(v: f64) -> String {
+    let s = format!("{v}");
+    if s.contains('.') || s.contains('e') || s.contains('E') {
+        s
+    } else {
+        format!("{s}.0")
+    }
+}
+
+/// Formats an `i64` as a WGSL integer literal of the given signedness.
+fn int_lit(v: i64, unsigned: bool) -> String {
+    if unsigned {
+        format!("{v}u")
+    } else {
+        format!("{v}")
+    }
+}
+
+impl FormatLayout {
+    /// Bit width shared by all components of this format.
+    fn bits(&self) -> u32 {
+        self.components[0].bits
+    }
+
+    /// Normalized flag shared by all components of this format.
+    fn normalized(&self) -> bool {
+        self.components[0].normalized
+    }
+
+    /// Signedness shared by all components of this format.
+    fn signed(&self) -> bool {
+        self.components[0].signed
+    }
+}
+
+// ============================================================================
+// WGSL codegen: shared helper function bodies
+// ============================================================================
+
+/// `apply_address_mode`, reused verbatim from `Blit`'s int pipeline: wraps
+/// or clamps an integer coordinate per `AddressMode` (0 = Repeat, 1 =
+/// MirrorRepeat, 2 = ClampToEdge — declaration-order discriminant).
+const ADDRESS_MODE_HELPER: &str = r#"
+fn apply_address_mode(x: i32, size: i32, mode: u32) -> i32 {
+    if (mode == 2u) {
+        return clamp(x, 0, size - 1);
+    } else if (mode == 1u) {
+        let period = 2 * size;
+        var m = x % period;
+        if (m < 0) { m = m + period; }
+        if (m >= size) { m = period - 1 - m; }
+        return m;
+    } else {
+        var m = x % size;
+        if (m < 0) { m = m + size; }
+        return m;
+    }
+}
+"#;
+
+/// Half<->float conversion, needed whenever a `Buffer` endpoint has a true
+/// (non-normalized) 16-bit float component (`VertexFormat::Float16` /
+/// `PixelFormat::R16Float`-family used as a buffer format). Image endpoints
+/// never need this — hardware handles f16 texture formats natively.
+const HALF_FLOAT_HELPERS: &str = r#"
+fn mev_half_to_float(h: u32) -> f32 {
+    return unpack2x16float(h).x;
+}
+
+fn mev_float_to_half(value: f32) -> u32 {
+    return pack2x16float(vec2<f32>(value, 0.0)) & 0xFFFFu;
+}
+"#;
+
+/// Generates the masked-atomic `store_u8`/`store_u16` helper pair for a
+/// sub-word-writable `array<atomic<u32>>` storage buffer named `target`.
+/// Each destination element is written by exactly one thread, so a plain
+/// `atomicAnd` (clear the target bits) followed by `atomicOr` (set them) is
+/// race-free regardless of interleaving with other threads writing
+/// disjoint bit ranges of the same `u32` word.
+fn store_bit_helpers(target: &str) -> String {
+    format!(
+        r#"
+fn mev_{target}_store_u8(byte_offset: u32, value: u32) {{
+    let word_index = byte_offset / 4u;
+    let bit_offset = (byte_offset % 4u) * 8u;
+    let mask = 0xFFu << bit_offset;
+    atomicAnd(&{target}[word_index], ~mask);
+    atomicOr(&{target}[word_index], (value << bit_offset) & mask);
+}}
+
+fn mev_{target}_store_u16(byte_offset: u32, value: u32) {{
+    let word_index = byte_offset / 4u;
+    let bit_offset = (byte_offset % 4u) * 8u;
+    let mask = 0xFFFFu << bit_offset;
+    atomicAnd(&{target}[word_index], ~mask);
+    atomicOr(&{target}[word_index], (value << bit_offset) & mask);
+}}
+"#
+    )
+}
+
+// ============================================================================
+// WGSL codegen: decode / swizzle / convert / encode
+// ============================================================================
+
+/// Generates `let {var}: {scalar} = ...;` decoding canonical channel
+/// `channel` of `layout` from a buffer element whose byte-offset expression
+/// is `elem_byte`.
+///
+/// The word index and in-word bit offset for this component are computed
+/// at *runtime* from `elem_byte` (not assumed to be a compile-time
+/// constant) — correct for any `elem_byte` value, as long as the caller
+/// keeps every component's absolute byte offset a multiple of that
+/// component's own byte width (1/2/4), which every entry point asserts up
+/// front (a component can never straddle a 4-byte storage word otherwise).
+///
+/// `buf` is the storage array's identifier. If `atomic_read` is set, `buf`
+/// is `array<atomic<u32>>` and reads go through `atomicLoad` (required
+/// in-place, when the same binding is also written with masked atomics).
+fn gen_buffer_decode_channel(
+    var: &str,
+    buf: &str,
+    elem_byte: &str,
+    layout: &FormatLayout,
+    channel: Channel,
+    atomic_read: bool,
+) -> String {
+    let scalar = wgsl_scalar(layout.kind);
+
+    let Some(i) = layout.channel_position(channel) else {
+        let lit = match layout.kind {
+            CanonicalKind::Float => {
+                if channel.default_is_one() {
+                    "1.0".to_string()
+                } else {
+                    "0.0".to_string()
+                }
+            }
+            CanonicalKind::Uint => {
+                if channel.default_is_one() {
+                    "1u".to_string()
+                } else {
+                    "0u".to_string()
+                }
+            }
+            CanonicalKind::Sint => {
+                if channel.default_is_one() {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
+        };
+        return format!("    let {var}: {scalar} = {lit};\n");
+    };
+
+    let comp = &layout.components[i];
+    let local_off = i * (comp.bits as usize / 8);
+    let comp_byte_expr = if local_off == 0 {
+        elem_byte.to_string()
+    } else {
+        format!("{elem_byte} + {local_off}u")
+    };
+
+    let mut prelude = format!("    let {var}_byte: u32 = {comp_byte_expr};\n");
+    prelude += &format!("    let {var}_word: u32 = {var}_byte / 4u;\n");
+    let bit_off = format!("{var}_bit");
+    if comp.bits != 32 {
+        prelude += &format!("    let {bit_off}: u32 = ({var}_byte % 4u) * 8u;\n");
+    }
+
+    let word_expr = if atomic_read {
+        format!("atomicLoad(&{buf}[{var}_word])")
+    } else {
+        format!("{buf}[{var}_word]")
+    };
+
+    let body = if layout.kind == CanonicalKind::Float && !comp.normalized && comp.bits == 32 {
+        format!("bitcast<f32>({word_expr})")
+    } else if layout.kind == CanonicalKind::Float && !comp.normalized && comp.bits == 16 {
+        format!("mev_half_to_float(extractBits({word_expr}, {bit_off}, 16u))")
+    } else if layout.kind == CanonicalKind::Float {
+        // Normalized (Unorm/Snorm), any width.
+        let max = fmt_f32(normalized_max(comp.bits, comp.signed));
+        let raw = if comp.signed {
+            if comp.bits == 32 {
+                format!("bitcast<i32>({word_expr})")
+            } else {
+                format!(
+                    "extractBits(bitcast<i32>({word_expr}), {bit_off}, {}u)",
+                    comp.bits
+                )
+            }
+        } else if comp.bits == 32 {
+            word_expr
+        } else {
+            format!("extractBits({word_expr}, {bit_off}, {}u)", comp.bits)
+        };
+        if comp.signed {
+            format!("max(f32({raw}) / {max}, -1.0)")
+        } else {
+            format!("(f32({raw}) / {max})")
+        }
+    } else if layout.kind == CanonicalKind::Uint {
+        if comp.bits == 32 {
+            word_expr
+        } else {
+            format!("extractBits({word_expr}, {bit_off}, {}u)", comp.bits)
+        }
+    } else {
+        // Sint
+        if comp.bits == 32 {
+            format!("bitcast<i32>({word_expr})")
+        } else {
+            format!(
+                "extractBits(bitcast<i32>({word_expr}), {bit_off}, {}u)",
+                comp.bits
+            )
+        }
+    };
+
+    format!("{prelude}    let {var}: {scalar} = {body};\n")
+}
+
+/// Generates the four `let sw_{r,g,b,a}: {scalar} = ...;` statements
+/// applying `swizzle` to the decoded `src_{r,g,b,a}` canonical values.
+fn gen_swizzle(swizzle: Swizzle, src_kind: CanonicalKind) -> String {
+    use crate::ComponentMap;
+
+    let scalar = wgsl_scalar(src_kind);
+    let (zero, one) = match src_kind {
+        CanonicalKind::Float => ("0.0", "1.0"),
+        CanonicalKind::Uint => ("0u", "1u"),
+        CanonicalKind::Sint => ("0", "1"),
+    };
+
+    let pick = |cs: ComponentMap, identity: &'static str| -> &'static str {
+        match cs {
+            ComponentMap::Zero => zero,
+            ComponentMap::One => one,
+            ComponentMap::R => "src_r",
+            ComponentMap::G => "src_g",
+            ComponentMap::B => "src_b",
+            ComponentMap::A => "src_a",
+        }
+    };
+
+    let r = pick(swizzle.r, "src_r");
+    let g = pick(swizzle.g, "src_g");
+    let b = pick(swizzle.b, "src_b");
+    let a = pick(swizzle.a, "src_a");
+
+    format!(
+        "    let sw_r: {scalar} = {r};\n    let sw_g: {scalar} = {g};\n    let sw_b: {scalar} = {b};\n    let sw_a: {scalar} = {a};\n"
+    )
+}
+
+/// Generates `let {var}: {ty} = ...;` converting swizzled canonical value
+/// `sw_var` (of `src`'s canonical type) into `dst`'s target representation,
+/// per the cross-kind conversion table (module docs / plan §3). Returns the
+/// WGSL scalar type name of the produced value.
+///
+/// When `dst_is_image` is set and `dst` is `Float`-kind, the final
+/// `* dst_max` requantization step is skipped: `textureStore` into a
+/// Unorm/Snorm/Float storage format auto-quantizes from the canonical
+/// `[0,1]`/`[-1,1]`/true-float value, so doing it manually here would
+/// double-scale.
+fn gen_convert_channel(
+    var: &str,
+    sw_var: &str,
+    src: &FormatLayout,
+    dst: &FormatLayout,
+    dst_is_image: bool,
+) -> (String, &'static str) {
+    let dst_bits = dst.bits();
+    let dst_signed = dst.signed();
+    let dst_normalized = dst.normalized();
+
+    let (expr, ty): (String, &'static str) = match (src.kind, dst.kind) {
+        (CanonicalKind::Float, CanonicalKind::Float) => {
+            if dst_normalized {
+                let (lo, hi) = if dst_signed {
+                    ("-1.0", "1.0")
+                } else {
+                    ("0.0", "1.0")
+                };
+                if dst_is_image {
+                    (format!("clamp({sw_var}, {lo}, {hi})"), "f32")
+                } else {
+                    let max = fmt_f32(normalized_max(dst_bits, dst_signed));
+                    (format!("round(clamp({sw_var}, {lo}, {hi}) * {max})"), "f32")
+                }
+            } else {
+                (sw_var.to_string(), "f32")
+            }
+        }
+
+        (CanonicalKind::Float, CanonicalKind::Uint)
+        | (CanonicalKind::Float, CanonicalKind::Sint) => {
+            let unsigned = dst.kind == CanonicalKind::Uint;
+            let cast_ty = if unsigned { "u32" } else { "i32" };
+            let (dmin, dmax) = int_range(dst_bits, dst_signed);
+            let dmin_lit = int_lit(dmin, false);
+            let dmax_lit = int_lit(dmax, false);
+
+            let magnitude = if src.normalized() {
+                let (lo, hi) = if src.signed() {
+                    ("-1.0", "1.0")
+                } else {
+                    ("0.0", "1.0")
+                };
+                let scale = fmt_f32(dmax as f64);
+                format!("round(clamp({sw_var}, {lo}, {hi}) * {scale})")
+            } else {
+                format!("round({sw_var})")
+            };
+
+            let clamped_i32 = format!("clamp(i32({magnitude}), {dmin_lit}, {dmax_lit})");
+            if unsigned {
+                (format!("u32({clamped_i32})"), cast_ty)
+            } else {
+                (clamped_i32, cast_ty)
+            }
+        }
+
+        (CanonicalKind::Uint, CanonicalKind::Float)
+        | (CanonicalKind::Sint, CanonicalKind::Float) => {
+            let src_max = fmt_f32(int_range(src.bits(), src.signed()).1 as f64);
+            let canonical = format!("(f32({sw_var}) / {src_max})");
+            if dst_normalized {
+                let (lo, hi) = if dst_signed {
+                    ("-1.0", "1.0")
+                } else {
+                    ("0.0", "1.0")
+                };
+                let clamped = format!("clamp({canonical}, {lo}, {hi})");
+                if dst_is_image {
+                    (clamped, "f32")
+                } else {
+                    let dmax = fmt_f32(normalized_max(dst_bits, dst_signed));
+                    (format!("round(({clamped}) * {dmax})"), "f32")
+                }
+            } else {
+                (format!("f32({sw_var})"), "f32")
+            }
+        }
+
+        (CanonicalKind::Uint, CanonicalKind::Uint) => {
+            let dmax = int_range(dst_bits, false).1;
+            (format!("min({sw_var}, {})", int_lit(dmax, true)), "u32")
+        }
+        (CanonicalKind::Sint, CanonicalKind::Sint) => {
+            let (dmin, dmax) = int_range(dst_bits, true);
+            (
+                format!(
+                    "clamp({sw_var}, {}, {})",
+                    int_lit(dmin, false),
+                    int_lit(dmax, false)
+                ),
+                "i32",
+            )
+        }
+        (CanonicalKind::Uint, CanonicalKind::Sint) => {
+            let dmax = int_range(dst_bits, true).1;
+            (
+                format!("i32(min({sw_var}, {}))", int_lit(dmax, true)),
+                "i32",
+            )
+        }
+        (CanonicalKind::Sint, CanonicalKind::Uint) => {
+            let dmax = int_range(dst_bits, false).1;
+            (
+                format!("u32(clamp({sw_var}, 0, {}))", int_lit(dmax, false)),
+                "u32",
+            )
+        }
+    };
+
+    (format!("    let {var}: {ty} = {expr};\n"), ty)
+}
+
+/// Generates the store statements writing `out_{r,g,b,a}` (already in
+/// `dst`'s target representation, per [`gen_convert_channel`]) into a
+/// buffer named `target`, at the element whose byte-offset expression is
+/// `elem_byte`. Components with `bits < 32` go through the masked-atomic
+/// `store_u8`/`store_u16` helpers (`target` must then be declared
+/// `array<atomic<u32>>`); `bits == 32` components are a plain store
+/// (`target` declared `array<u32>`).
+fn gen_buffer_encode(target: &str, elem_byte: &str, dst: &FormatLayout) -> String {
+    let mut s = String::new();
+
+    for (i, comp) in dst.components.iter().enumerate() {
+        let out_var = format!("out_{}", comp.channel.lower());
+        let byte_off = i * (comp.bits as usize / 8);
+        let byte_expr = if byte_off == 0 {
+            elem_byte.to_string()
+        } else {
+            format!("{elem_byte} + {byte_off}u")
+        };
+
+        let bits_expr = if dst.kind == CanonicalKind::Float && !comp.normalized && comp.bits == 32 {
+            format!("bitcast<u32>({out_var})")
+        } else if dst.kind == CanonicalKind::Float && !comp.normalized && comp.bits == 16 {
+            format!("mev_float_to_half({out_var})")
+        } else if dst.kind == CanonicalKind::Float {
+            if comp.signed {
+                format!("bitcast<u32>(i32({out_var}))")
+            } else {
+                format!("u32({out_var})")
+            }
+        } else if dst.kind == CanonicalKind::Sint {
+            format!("bitcast<u32>({out_var})")
+        } else {
+            out_var.clone()
+        };
+
+        if comp.bits == 32 {
+            s += &format!("    {target}[{byte_expr} / 4u] = {bits_expr};\n");
+        } else if comp.bits == 16 {
+            s += &format!("    mev_{target}_store_u16({byte_expr}, {bits_expr});\n");
+        } else {
+            s += &format!("    mev_{target}_store_u8({byte_expr}, {bits_expr});\n");
+        }
+    }
+
+    s
+}
+
+fn needs_half_float(layout: &FormatLayout) -> bool {
+    layout.kind == CanonicalKind::Float && !layout.normalized() && layout.bits() == 16
+}
+
+/// Byte size of one of `layout`'s (uniformly-sized) components: 1, 2 or 4.
+///
+/// A component can only ever straddle a 4-byte storage-buffer word if its
+/// absolute byte offset isn't a multiple of its own width — a 1-byte
+/// component never straddles regardless of offset; 2/4-byte components
+/// need their offset 2-/4-byte aligned respectively. Requiring every
+/// byte-offset/stride to be a multiple of `component_byte_size` (rather
+/// than a flat 4 bytes) is therefore the minimal correct precondition, and
+/// keeps common tightly-packed narrow-format buffers (e.g. a plain `R8`
+/// row) usable without artificial padding.
+fn component_byte_size(layout: &FormatLayout) -> usize {
+    layout.bits() as usize / 8
+}
+
+// ============================================================================
+// WGSL codegen: shared per-axis source addressing + decode/swizzle/convert
+// ============================================================================
+
+/// Appends, for each axis index `s` in `axis_indices` whose `axes.index(s)`
+/// is a resampled `MappedAxis::Dst` (i.e. has a `src_coord_f{s}` already
+/// generated), the `floor` + `apply_address_mode` lines that convert it to
+/// a final integer `src_coord{s}`, wrapped against `size_expr(s)`.
+/// `MappedAxis::Fixed` axes already have their final `src_coord{s}` from the
+/// caller's initial per-axis loop and are left untouched (no scaling
+/// participates).
+fn gen_resample_int_wrap(
+    body: &mut String,
+    axes: AxisSwizzle,
+    axis_indices: &[usize],
+    size_expr: impl Fn(usize) -> String,
+) {
+    for &s in axis_indices {
+        if let AxisMap::Direct(_) | AxisMap::Mirror(_) = axes.index(s) {
+            *body += &format!("    let src_texel{s}: i32 = i32(floor(src_coord_f{s}));\n");
+            *body += &format!(
+                "    let src_coord{s}: i32 = apply_address_mode(src_texel{s}, {}, constants.address_mode[{s}]);\n",
+                size_expr(s)
+            );
+        }
+    }
+}
+
+/// Generates the shared body (per-source-axis coordinate, decode, swizzle,
+/// convert) used by every compute/render pipeline variant, for a source
+/// endpoint of rank `src_rank` (<= 4) described by `axes` (source-axis
+/// indexed; a `MappedAxis::Dst` axis references a destination axis whose
+/// unraveled coordinate `dst_c{axis}` the caller has already computed
+/// before calling this). `dst_is_image` controls whether
+/// `gen_convert_channel` skips the final normalized-dst requantization
+/// (deferred to hardware on `textureStore`).
+///
+/// When `resample` is `false`, every source axis is exact-index: a plain
+/// integer `src_coord{s}`, either `constants.src_offset[s]`
+/// (`MappedAxis::Fixed`; `0` for endpoints with no offset concept, e.g.
+/// `Buffer<->Buffer`) or `constants.src_offset[s] + dst_c{axis}` (mirrored
+/// as `... + (dst_extent[axis] - 1 - dst_c{axis})`) for `MappedAxis::Dst`.
+///
+/// When `resample` is `true`, a `MappedAxis::Dst` source axis instead
+/// computes a ratio `t = (dst_c{axis} + 0.5) / dst_extent[axis]` (mirrored
+/// as `t = 1.0 - t`), then a continuous source coordinate `src_coord_f{s} =
+/// src_offset[s] + t * src_extent[s]`. What happens to that continuous
+/// coordinate then depends on the source endpoint:
+///
+/// - `Image`, `CanonicalKind::Float`: normalized into a `uv` and
+///   hardware-sampled via `textureSampleLevel` through a real `Sampler`
+///   (built by the caller from the requested filter/address mode), with
+///   address-mode wrapping handled by the sampler itself against the
+///   image's real physical extent.
+/// - `Image`, `CanonicalKind::Uint`/`Sint`: no hardware sampler exists for
+///   integer texture formats, so it's `floor`ed to an integer texel and
+///   wrapped manually via `apply_address_mode` against the image's real
+///   physical extent (`constants.src_image_size`), then read with
+///   `textureLoad` — always nearest, never filtered.
+/// - `Buffer` (regardless of `CanonicalKind`): buffers have no hardware
+///   sampler and no meaningful notion of bilinear interpolation between
+///   struct elements, so it's always `floor`ed and wrapped via
+///   `apply_address_mode` exactly like the integer-image case, but against
+///   the logical `constants.src_extent` region itself (there is no larger
+///   "physical buffer extent" concept in this API, unlike the image case).
+///
+/// `MappedAxis::Fixed` axes are unaffected by resampling (no scaling
+/// participates, same exact-index formula as above).
+#[allow(clippy::too_many_arguments)]
+fn gen_endpoint_decode_convert(
+    src: EndpointDesc,
+    dst_layout: &FormatLayout,
+    src_layout: &FormatLayout,
+    swizzle: Swizzle,
+    axes: AxisSwizzle,
+    src_rank: usize,
+    dst_is_image: bool,
+    resample: bool,
+) -> String {
+    let mut body = String::new();
+
+    let samples_via_sampler =
+        resample && src.kind == EndpointKind::Image && src_layout.kind == CanonicalKind::Float;
+
+    for s in 0..src_rank {
+        let line = match axes.index(s) {
+            AxisMap::Zero => {
+                format!("    let src_coord{s}: i32 = constants.src_offset[{s}];\n")
+            }
+            AxisMap::Direct(axis) if resample => {
+                let axis = axis as usize;
+
+                let mut line = format!(
+                    "    var t{s}: f32 = (f32(dst_c{axis}) + 0.5) / f32(constants.dst_extent[{axis}]);\n"
+                );
+                line += &format!(
+                    "    let src_coord_f{s}: f32 = f32(constants.src_offset[{s}]) + t{s} * constants.src_extent[{s}];\n"
+                );
+                line
+            }
+            AxisMap::Mirror(axis) if resample => {
+                let axis = axis as usize;
+
+                let mut line = format!(
+                    "    var t{s}: f32 = (f32(dst_c{axis}) + 0.5) / f32(constants.dst_extent[{axis}]);\n"
+                );
+
+                line += &format!("    t{s} = 1.0 - t{s};\n");
+
+                line += &format!(
+                    "    let src_coord_f{s}: f32 = f32(constants.src_offset[{s}]) + t{s} * constants.src_extent[{s}];\n"
+                );
+                line
+            }
+            AxisMap::Direct(axis) => {
+                let axis = axis as usize;
+                format!(
+                    "    let src_coord{s}: i32 = constants.src_offset[{s}] + i32(dst_c{axis});\n"
+                )
+            }
+            AxisMap::Mirror(axis) => {
+                let axis = axis as usize;
+                format!(
+                    "    let src_coord{s}: i32 = constants.src_offset[{s}] + i32(constants.dst_extent[{axis}]) - 1 - i32(dst_c{axis});\n"
+                )
+            }
+        };
+        body += &line;
+    }
+
+    match src.kind {
+        EndpointKind::Image => {
+            if samples_via_sampler {
+                let uv_expr = |s: usize| -> String {
+                    match axes.index(s) {
+                        AxisMap::Zero => format!(
+                            "(f32(src_coord{s}) + 0.5) / f32(constants.src_image_size[{s}])"
+                        ),
+                        AxisMap::Direct(_) | AxisMap::Mirror(_) => {
+                            format!("src_coord_f{s} / f32(constants.src_image_size[{s}])")
+                        }
+                    }
+                };
+                body += &format!("    let uv = vec2<f32>({}, {});\n", uv_expr(0), uv_expr(1));
+                body += "    let loaded = textureSampleLevel(src, src_sampler, uv, 0.0);\n";
+            } else {
+                if resample {
+                    gen_resample_int_wrap(&mut body, axes, &[0, 1], |s| {
+                        format!("i32(constants.src_image_size[{s}])")
+                    });
+                }
+                body +=
+                    "    let loaded = textureLoad(src, vec2<i32>(src_coord0, src_coord1), 0);\n";
+            }
+            body += "    let src_r = loaded.r;\n    let src_g = loaded.g;\n    let src_b = loaded.b;\n    let src_a = loaded.a;\n";
+        }
+        EndpointKind::Buffer => {
+            if resample {
+                let axis_indices: Vec<usize> = (0..src_rank).collect();
+                gen_resample_int_wrap(&mut body, axes, &axis_indices, |s| {
+                    format!("i32(constants.src_extent[{s}])")
+                });
+            }
+            let mut src_byte_expr = "constants.src_byte_offset".to_string();
+            for s in 0..src_rank {
+                src_byte_expr += &format!(" + u32(src_coord{s}) * constants.src_stride[{s}]");
+            }
+            body += &format!("    let src_elem_byte: u32 = {src_byte_expr};\n");
+            for &ch in &CHANNELS {
+                body += &gen_buffer_decode_channel(
+                    &format!("src_{}", ch.lower()),
+                    "src",
+                    "src_elem_byte",
+                    src_layout,
+                    ch,
+                    false,
+                );
+            }
+        }
+    }
+
+    body += &gen_swizzle(swizzle, src_layout.kind);
+
+    for &ch in &CHANNELS {
+        let var = format!("out_{}", ch.lower());
+        let sw_var = format!("sw_{}", ch.lower());
+        let (line, _ty) = gen_convert_channel(&var, &sw_var, src_layout, dst_layout, dst_is_image);
+        body += &line;
+    }
+
+    body
+}
+
+// ============================================================================
+// WGSL codegen: storage-format keywords
+// ============================================================================
+
+/// Maps a describable, non-sRGB `PixelFormat` to the WGSL storage-format
+/// keyword for a `texture_storage_2d<FORMAT, write>` binding, for
+/// `Float`-kind (Unorm/Snorm/Float) destinations. Mirrors `Blit`'s own
+/// table exactly: WGSL's storage-format keyword set has no entry for
+/// 3-channel (`Rgb*`) or 32-bit-normalized (`R32Unorm`/`R32Snorm`/...)
+/// formats, so `Image` destinations of those formats are not supported by
+/// the compute path (panics) — the same inherent limitation `Blit` has.
+fn wgsl_storage_format(format: PixelFormat) -> &'static str {
+    match format {
+        PixelFormat::R8Unorm => "r8unorm",
+        PixelFormat::R8Snorm => "r8snorm",
+        PixelFormat::R16Unorm => "r16unorm",
+        PixelFormat::R16Snorm => "r16snorm",
+        PixelFormat::R16Float => "r16float",
+        PixelFormat::R32Float => "r32float",
+        PixelFormat::Rg8Unorm => "rg8unorm",
+        PixelFormat::Rg8Snorm => "rg8snorm",
+        PixelFormat::Rg16Unorm => "rg16unorm",
+        PixelFormat::Rg16Snorm => "rg16snorm",
+        PixelFormat::Rg16Float => "rg16float",
+        PixelFormat::Rg32Float => "rg32float",
+        PixelFormat::Rgba8Unorm => "rgba8unorm",
+        PixelFormat::Rgba8Snorm => "rgba8snorm",
+        PixelFormat::Rgba16Unorm => "rgba16unorm",
+        PixelFormat::Rgba16Snorm => "rgba16snorm",
+        PixelFormat::Rgba16Float => "rgba16float",
+        PixelFormat::Rgba32Float => "rgba32float",
+        PixelFormat::Bgra8Unorm => "bgra8unorm",
+        _ => panic!(
+            "Cvt: pixel format {:?} has no WGSL storage-format keyword and cannot be used as an Image destination",
+            format
+        ),
+    }
+}
+
+/// Same as [`wgsl_storage_format`], for `Uint`/`Sint`-kind destinations.
+/// No `Bgra8Uint`/`Bgra8Sint` entry: WGSL has no such storage-format
+/// keyword.
+fn wgsl_int_storage_format(format: PixelFormat) -> &'static str {
+    match format {
+        PixelFormat::R8Uint => "r8uint",
+        PixelFormat::R8Sint => "r8sint",
+        PixelFormat::R16Uint => "r16uint",
+        PixelFormat::R16Sint => "r16sint",
+        PixelFormat::R32Uint => "r32uint",
+        PixelFormat::R32Sint => "r32sint",
+        PixelFormat::Rg8Uint => "rg8uint",
+        PixelFormat::Rg8Sint => "rg8sint",
+        PixelFormat::Rg16Uint => "rg16uint",
+        PixelFormat::Rg16Sint => "rg16sint",
+        PixelFormat::Rg32Uint => "rg32uint",
+        PixelFormat::Rg32Sint => "rg32sint",
+        PixelFormat::Rgba8Uint => "rgba8uint",
+        PixelFormat::Rgba8Sint => "rgba8sint",
+        PixelFormat::Rgba16Uint => "rgba16uint",
+        PixelFormat::Rgba16Sint => "rgba16sint",
+        PixelFormat::Rgba32Uint => "rgba32uint",
+        PixelFormat::Rgba32Sint => "rgba32sint",
+        _ => panic!(
+            "Cvt: pixel format {:?} has no WGSL storage-format keyword and cannot be used as an Image destination",
+            format
+        ),
+    }
+}
+
+fn dst_image_storage_format(dst_layout: &FormatLayout, format: PixelFormat) -> &'static str {
+    match dst_layout.kind {
+        CanonicalKind::Float => wgsl_storage_format(format),
+        CanonicalKind::Uint | CanonicalKind::Sint => wgsl_int_storage_format(format),
+    }
+}
+
+// ============================================================================
+// ND compute pipeline (`Buffer<->Buffer`, `Image<->Image`, `Image<->Buffer`,
+// `Buffer<->Image`; any rank <= 4)
+// ============================================================================
+
+// The constants buffer is bound as `storage, read` rather than `uniform`:
+// WGSL's uniform address space requires `array<T,N>` element stride to be a
+// multiple of 16 bytes, which would silently desynchronize the WGSL
+// struct's byte layout from `CvtConstantsNd`'s tightly-packed
+// `AutoDeviceRepr` layout (mixing `[T;4]` array fields with plain `u32`
+// scalars breaks the uniform-only padding rule). The storage address space
+// has no such rule for scalar arrays, so `array<T,4>` there is tightly
+// packed exactly like `[T;4]` in Rust.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Zeroable, bytemuck::Pod, mev::AutoDeviceRepr)]
+struct CvtConstantsNd {
+    dst_extent: [u32; 4],
+    /// `Image` dst only: pixel offset of the destination region within the
+    /// physical image. Zero/unused for `Buffer` dst.
+    dst_offset: [i32; 4],
+    /// `Image` dst only (first 2 slots): the destination image's physical
+    /// extent, used for the write-bounds check. Zero/unused for `Buffer`
+    /// dst.
+    dst_image_size: [u32; 2],
+    /// `Buffer` dst only.
+    dst_byte_offset: u32,
+    /// `Buffer` dst only.
+    dst_stride: [u32; 4],
+    /// The fixed/starting source coordinate along each axis: an `Image`
+    /// src's region offset, or `0` for endpoints with no offset concept
+    /// (`Buffer` src — fold any desired starting coordinate into
+    /// `src_byte_offset` instead).
+    src_offset: [i32; 4],
+    /// `Image` src only (first 2 slots): the source image's physical
+    /// extent, used by the resample path's `apply_address_mode` wrapping.
+    /// Zero/unused for `Buffer` src or the exact-index path.
+    src_image_size: [u32; 2],
+    /// `Buffer` src only.
+    src_byte_offset: u32,
+    /// `Buffer` src only.
+    src_stride: [u32; 4],
+    total_dst_elements: u32,
+    /// Resample-only: the logical source region extent, used both to scale
+    /// the destination-driven ratio `t` into a source coordinate, and (for
+    /// `Uint`/`Sint` `Image` src or any `Buffer` src) as the wrap boundary
+    /// for `apply_address_mode`.
+    src_extent: [f32; 4],
+    /// Resample-only: per-axis `AddressMode` (declaration-order
+    /// discriminant: Repeat=0, MirrorRepeat=1, ClampToEdge=2).
+    address_mode: [u32; 4],
+}
+
+#[derive(Arguments)]
+struct CvtNdArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    src: Buffer,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Buffer,
+}
+
+#[derive(Arguments)]
+struct CvtImageToImageArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(compute)]
+    src: Image,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Image,
+}
+
+#[derive(Arguments)]
+struct CvtImageToBufferArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(compute)]
+    src: Image,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Buffer,
+}
+
+#[derive(Arguments)]
+struct CvtBufferToImageArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    src: Buffer,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Image,
+}
+
+/// Argument layout for the `_resample` `Image->Image` pipeline when the
+/// source is `CanonicalKind::Float` (hardware-sampled through `sampler`).
+/// Not used for `Uint`/`Sint` source kinds — those have no hardware sampler
+/// and reuse the plain [`CvtImageToImageArguments`] layout, doing manual
+/// `textureLoad` + `apply_address_mode` instead.
+#[derive(Arguments)]
+struct CvtImageToImageResampleArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(compute)]
+    src: Image,
+
+    #[mev(compute)]
+    sampler: Sampler,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Image,
+}
+
+/// `_resample` counterpart of [`CvtImageToImageResampleArguments`] for an
+/// `Image->Buffer` pipeline with a `CanonicalKind::Float` source.
+#[derive(Arguments)]
+struct CvtImageToBufferResampleArguments {
+    #[mev(storage)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(compute)]
+    src: Image,
+
+    #[mev(compute)]
+    sampler: Sampler,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    dst: Buffer,
+}
+
+#[derive(Arguments)]
+struct CvtImageSrcRenderArguments {
+    #[mev(storage)]
+    #[mev(fragment)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(fragment)]
+    src: Image,
+}
+
+/// `_resample` counterpart of [`CvtImageSrcRenderArguments`] for a
+/// `CanonicalKind::Float` `Image` source (hardware-sampled through
+/// `sampler`). Not used for `Uint`/`Sint` source kinds — those have no
+/// hardware sampler and reuse the plain [`CvtImageSrcRenderArguments`]
+/// layout, doing manual `textureLoad` + `apply_address_mode` instead
+/// (mirrors [`CvtImageToImageResampleArguments`] on the compute side).
+#[derive(Arguments)]
+struct CvtImageSrcRenderResampleArguments {
+    #[mev(storage)]
+    #[mev(fragment)]
+    constants: Buffer,
+
+    #[mev(sampled)]
+    #[mev(fragment)]
+    src: Image,
+
+    #[mev(fragment)]
+    sampler: Sampler,
+}
+
+#[derive(Arguments)]
+struct CvtBufferSrcRenderArguments {
+    #[mev(storage)]
+    #[mev(fragment)]
+    constants: Buffer,
+
+    #[mev(storage)]
+    #[mev(fragment)]
+    src: Buffer,
+}
+
+const CVT_ND_CONSTANTS_WGSL: &str = r#"struct Constants {
+    dst_extent: array<u32, 4>,
+    dst_offset: array<i32, 4>,
+    dst_image_size: array<u32, 2>,
+    dst_byte_offset: u32,
+    dst_stride: array<u32, 4>,
+    src_offset: array<i32, 4>,
+    src_image_size: array<u32, 2>,
+    src_byte_offset: u32,
+    src_stride: array<u32, 4>,
+    total_dst_elements: u32,
+    src_extent: array<f32, 4>,
+    address_mode: array<u32, 4>,
+}
+"#;
+
+/// Builds the compute pipeline for one specific `(src, dst, swizzle, ranks,
+/// axes, resample)` combination, for every endpoint-kind pairing except
+/// sRGB `Image` destinations (WGSL storage textures have no sRGB write
+/// format — those route through [`make_render_pipeline`] instead; callers
+/// must reject sRGB `Image` destinations for `_resample` entry points
+/// before reaching here, since the render pipeline does not support
+/// `resample`).
+///
+/// `src_rank`/`dst_rank` (each <= 4) and `axes` are baked into the
+/// generated WGSL as compile-time-unrolled code (no runtime rank
+/// branching), matching the `CvtNdKey` cache key that selects this
+/// pipeline. `Image` endpoints are always addressed at rank 3 by every
+/// current call site (2 spatial axes + 1 always-degenerate iteration
+/// axis), but this function does not assume that — a `Buffer` endpoint
+/// paired with an `Image` endpoint may be described at any rank up to 4.
+///
+/// When `resample` is `true` and the source is an `Image` of
+/// `CanonicalKind::Float`, an extra `sampler` binding is declared and the
+/// argument layout switches to the matching `*ResampleArguments` struct
+/// (see [`gen_endpoint_decode_convert`]). Every other `(src, dst)`
+/// combination keeps using the plain argument struct regardless of
+/// `resample`, since only the hardware-sampled path needs a bound `Sampler`
+/// resource (integer-image and buffer resample paths do their own
+/// address-mode wrapping from a plain `u32` uniform, no extra binding
+/// required).
+#[allow(clippy::too_many_arguments)]
+fn make_compute_pipeline_nd(
+    device: &Device,
+    src: EndpointDesc,
+    dst: EndpointDesc,
+    swizzle: Swizzle,
+    src_rank: usize,
+    dst_rank: usize,
+    axes: AxisSwizzle,
+    resample: bool,
+) -> ComputePipeline {
+    let src_layout = describe(src.format).expect("Cvt: src format is not describable");
+    let dst_layout = describe(dst.format).expect("Cvt: dst format is not describable");
+    assert!(
+        !(dst.kind == EndpointKind::Image && dst_layout.srgb),
+        "Cvt: sRGB Image destinations must use the render pipeline"
+    );
+
+    let dst_atomic = dst.kind == EndpointKind::Buffer && dst_layout.bits() < 32;
+    let dst_arr_ty = if dst_atomic { "atomic<u32>" } else { "u32" };
+    let dst_is_image = dst.kind == EndpointKind::Image;
+    let needs_sampler =
+        resample && src.kind == EndpointKind::Image && src_layout.kind == CanonicalKind::Float;
+
+    let mut body = String::new();
+
+    // Unravel the linear destination index into per-axis `dst_c{d}`
+    // coordinates (row-major, fastest-varying last) — endpoint-kind- and
+    // rank-agnostic.
+    body += "    var rem = linear;\n";
+    for d in 0..dst_rank {
+        body += &format!(
+            "    let dst_c{d} = rem % constants.dst_extent[{d}];\n    rem = rem / constants.dst_extent[{d}];\n"
+        );
+    }
+
+    body += &gen_endpoint_decode_convert(
+        src,
+        &dst_layout,
+        &src_layout,
+        swizzle,
+        axes,
+        src_rank,
+        dst_is_image,
+        resample,
+    );
+
+    let (bindings, arguments_layout): (String, &'static str) = match (src.kind, dst.kind) {
+        (EndpointKind::Buffer, EndpointKind::Buffer) => (
+            format!(
+                "@group(0) @binding(1) var<storage, read> src: array<u32>;\n@group(0) @binding(2) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
+            ),
+            "CvtNdArguments",
+        ),
+        (EndpointKind::Image, EndpointKind::Image) if needs_sampler => (
+            format!(
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var src_sampler: sampler;\n@group(0) @binding(3) var dst: texture_storage_2d<{}, write>;\n",
+                wgsl_scalar(src_layout.kind),
+                dst_image_storage_format(&dst_layout, dst.format),
+            ),
+            "CvtImageToImageResampleArguments",
+        ),
+        (EndpointKind::Image, EndpointKind::Image) => (
+            format!(
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var dst: texture_storage_2d<{}, write>;\n",
+                wgsl_scalar(src_layout.kind),
+                dst_image_storage_format(&dst_layout, dst.format),
+            ),
+            "CvtImageToImageArguments",
+        ),
+        (EndpointKind::Image, EndpointKind::Buffer) if needs_sampler => (
+            format!(
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var src_sampler: sampler;\n@group(0) @binding(3) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
+                wgsl_scalar(src_layout.kind),
+            ),
+            "CvtImageToBufferResampleArguments",
+        ),
+        (EndpointKind::Image, EndpointKind::Buffer) => (
+            format!(
+                "@group(0) @binding(1) var src: texture_2d<{}>;\n@group(0) @binding(2) var<storage, read_write> dst: array<{dst_arr_ty}>;\n",
+                wgsl_scalar(src_layout.kind),
+            ),
+            "CvtImageToBufferArguments",
+        ),
+        (EndpointKind::Buffer, EndpointKind::Image) => (
+            format!(
+                "@group(0) @binding(1) var<storage, read> src: array<u32>;\n@group(0) @binding(2) var dst: texture_storage_2d<{}, write>;\n",
+                dst_image_storage_format(&dst_layout, dst.format),
+            ),
+            "CvtBufferToImageArguments",
+        ),
+    };
+
+    match dst.kind {
+        EndpointKind::Image => {
+            body += "    let dst_px0 = constants.dst_offset[0] + i32(dst_c0);\n    let dst_px1 = constants.dst_offset[1] + i32(dst_c1);\n";
+            body += "    if (dst_px0 < 0 || dst_px1 < 0 || u32(dst_px0) >= constants.dst_image_size[0] || u32(dst_px1) >= constants.dst_image_size[1]) {\n        return;\n    }\n";
+            let scalar = wgsl_scalar(dst_layout.kind);
+            body += &format!(
+                "    textureStore(dst, vec2<i32>(dst_px0, dst_px1), vec4<{scalar}>(out_r, out_g, out_b, out_a));\n"
+            );
+        }
+        EndpointKind::Buffer => {
+            let mut dst_byte_expr = "constants.dst_byte_offset".to_string();
+            for d in 0..dst_rank {
+                dst_byte_expr += &format!(" + dst_c{d} * constants.dst_stride[{d}]");
+            }
+            body += &format!("    let dst_elem_byte: u32 = {dst_byte_expr};\n");
+            body += &gen_buffer_encode("dst", "dst_elem_byte", &dst_layout);
+        }
+    }
+
+    let mut helpers = String::new();
+    if needs_half_float(&src_layout) || needs_half_float(&dst_layout) {
+        helpers += HALF_FLOAT_HELPERS;
+    }
+    if resample && !needs_sampler {
+        helpers += ADDRESS_MODE_HELPER;
+    }
+    if dst_atomic {
+        helpers += &store_bit_helpers("dst");
+    }
+
+    let code = format!(
+        r#"
+{CVT_ND_CONSTANTS_WGSL}
+@group(0) @binding(0) var<storage, read> constants: Constants;
+{bindings}{helpers}
+@compute @workgroup_size(64, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let linear = gid.x;
+    if (linear >= constants.total_dst_elements) {{
+        return;
+    }}
+{body}
+}}
+"#,
+    );
+
+    let library = device
+        .new_shader_library(LibraryDesc {
+            name: "cvt_nd",
+            input: LibraryInput::wgsl(code),
+        })
+        .expect("Cvt: failed to compile nd shader library");
+
+    let arguments = match arguments_layout {
+        "CvtNdArguments" => CvtNdArguments::LAYOUT,
+        "CvtImageToImageArguments" => CvtImageToImageArguments::LAYOUT,
+        "CvtImageToImageResampleArguments" => CvtImageToImageResampleArguments::LAYOUT,
+        "CvtImageToBufferArguments" => CvtImageToBufferArguments::LAYOUT,
+        "CvtImageToBufferResampleArguments" => CvtImageToBufferResampleArguments::LAYOUT,
+        "CvtBufferToImageArguments" => CvtBufferToImageArguments::LAYOUT,
+        _ => unreachable!(),
+    };
+
+    device
+        .new_compute_pipeline(ComputePipelineDesc {
+            name: "cvt_nd",
+            shader: library.entry("main"),
+            work_group_size: [64, 1, 1],
+            constants: 0,
+            arguments: &[arguments],
+        })
+        .expect("Cvt: failed to create nd compute pipeline")
+}
+
+/// Builds the render pipeline for an sRGB `Image` destination (fullscreen
+/// triangle + fragment shader; hardware gamma-encodes on write to the sRGB
+/// color attachment, mirroring `Blit`'s `BlitKind::Srgb` path exactly). The
+/// destination is always an `Image` addressed at rank 3 (2 spatial axes
+/// driven by `frag_pos`, one always-degenerate iteration axis) — only
+/// `Image` destinations reach this pipeline in the first place.
+///
+/// `src_rank` (<= 4) generalizes the source endpoint's addressed rank: for
+/// an `Image` source this is always 3 (only 2 axes are ever addressable —
+/// see [`gen_endpoint_decode_convert`]), but a `Buffer` source may be
+/// described at any rank up to 4, exactly like the compute path's `Buffer`
+/// endpoints.
+///
+/// When `resample` is `true` and the source is an `Image` of
+/// `CanonicalKind::Float`, an extra `sampler` binding is declared and the
+/// argument layout switches to [`CvtImageSrcRenderResampleArguments`],
+/// mirroring how `make_compute_pipeline_nd` picks its own
+/// `*ResampleArguments` struct for the same condition. Every other `(src,
+/// dst)` combination keeps using the plain argument struct regardless of
+/// `resample` (integer-image and buffer resample paths do their own
+/// address-mode wrapping from a plain `u32` uniform, no extra binding
+/// required).
+fn make_render_pipeline(
+    device: &Device,
+    src: EndpointDesc,
+    dst_format: PixelFormat,
+    swizzle: Swizzle,
+    axes: AxisSwizzle,
+    src_rank: usize,
+    resample: bool,
+) -> RenderPipeline {
+    let src_layout = describe(src.format).expect("Cvt: src format is not describable");
+    let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+
+    let mut body = String::new();
+    body += "    let dst_c0 = u32(clamp(i32(frag_pos.x) - constants.dst_offset[0], 0, i32(constants.dst_extent[0]) - 1));\n";
+    body += "    let dst_c1 = u32(clamp(i32(frag_pos.y) - constants.dst_offset[1], 0, i32(constants.dst_extent[1]) - 1));\n";
+    body += "    let dst_c2 = 0u;\n";
+
+    body += &gen_endpoint_decode_convert(
+        src,
+        &dst_layout,
+        &src_layout,
+        swizzle,
+        axes,
+        src_rank,
+        true,
+        resample,
+    );
+    body += "    return vec4<f32>(out_r, out_g, out_b, out_a);\n";
+
+    let needs_sampler =
+        resample && src.kind == EndpointKind::Image && src_layout.kind == CanonicalKind::Float;
+
+    let (binding, arguments_layout): (&str, &'static str) = match src.kind {
+        EndpointKind::Image if needs_sampler => (
+            "@group(0) @binding(1) var src: texture_2d<f32>;\n@group(0) @binding(2) var src_sampler: sampler;\n",
+            "CvtImageSrcRenderResampleArguments",
+        ),
+        EndpointKind::Image => (
+            "@group(0) @binding(1) var src: texture_2d<f32>;\n",
+            "CvtImageSrcRenderArguments",
+        ),
+        EndpointKind::Buffer => (
+            "@group(0) @binding(1) var<storage, read> src: array<u32>;\n",
+            "CvtBufferSrcRenderArguments",
+        ),
+    };
+
+    let mut helpers = String::new();
+    if needs_half_float(&src_layout) {
+        helpers += HALF_FLOAT_HELPERS;
+    }
+    if resample && !needs_sampler {
+        helpers += ADDRESS_MODE_HELPER;
+    }
+
+    let code = format!(
+        r#"
+{CVT_ND_CONSTANTS_WGSL}
+@group(0) @binding(0) var<storage, read> constants: Constants;
+{binding}{helpers}
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {{
+    let x = f32((vertex_index << 1u) & 2u);
+    let y = f32(vertex_index & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+}}
+
+@fragment
+fn fs_main(@builtin(position) frag_pos: vec4<f32>) -> @location(0) vec4<f32> {{
+{body}
+}}
+"#,
+    );
+
+    let library = device
+        .new_shader_library(LibraryDesc {
+            name: "cvt_srgb",
+            input: LibraryInput::wgsl(code),
+        })
+        .expect("Cvt: failed to compile srgb shader library");
+
+    let arguments = match arguments_layout {
+        "CvtImageSrcRenderArguments" => CvtImageSrcRenderArguments::LAYOUT,
+        "CvtImageSrcRenderResampleArguments" => CvtImageSrcRenderResampleArguments::LAYOUT,
+        "CvtBufferSrcRenderArguments" => CvtBufferSrcRenderArguments::LAYOUT,
+        _ => unreachable!(),
+    };
+
+    device
+        .new_render_pipeline(RenderPipelineDesc {
+            name: "cvt_srgb",
+            vertex_shader: library.entry("vs_main"),
+            vertex_attributes: vec![],
+            vertex_layouts: vec![],
+            primitive_topology: PrimitiveTopology::Triangle,
+            raster: Some(RasterDesc {
+                fragment_shader: Some(library.entry("fs_main")),
+                color_targets: vec![ColorTargetDesc::new(dst_format)],
+                depth_stencil: None,
+                front_face: FrontFace::default(),
+                culling: Culling::None,
+            }),
+            arguments: &[arguments],
+            constants: 0,
+        })
+        .expect("Cvt: failed to create srgb render pipeline")
+}
+
+// ============================================================================
+// Buffer in-place compute pipeline (single-resource)
+// ============================================================================
+
+/// Argument layout for the dedicated in-place pipeline: a single
+/// `storage, read_write` buffer binding, not two `Buffer` handles aliasing
+/// the same allocation through two `Arguments` fields.
+#[derive(Arguments)]
+struct CvtInPlaceArguments {
+    #[mev(uniform)]
+    #[mev(compute)]
+    constants: Buffer,
+
+    #[mev(storage)]
+    #[mev(compute)]
+    buf: Buffer,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Zeroable, bytemuck::Pod, mev::AutoDeviceRepr)]
+struct CvtInPlaceConstants {
+    byte_offset: u32,
+    element_count: u32,
+}
+
+fn make_in_place_pipeline(
+    device: &Device,
+    src_format: PixelFormat,
+    dst_format: PixelFormat,
+    swizzle: Swizzle,
+) -> ComputePipeline {
+    let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+    let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+
+    assert_eq!(
+        src_layout.byte_size, dst_layout.byte_size,
+        "Cvt: in-place conversion requires src/dst element byte size to match"
+    );
+
+    let dst_atomic = dst_layout.bits() < 32;
+    let buf_arr_ty = if dst_atomic { "atomic<u32>" } else { "u32" };
+    // The single `buf` binding's declared type is dictated by dst's write
+    // requirements; if it's atomic-typed, reads must also go through
+    // `atomicLoad` (WGSL requires uniform access mode per binding).
+    let atomic_read = dst_atomic;
+
+    let byte_size = dst_layout.byte_size;
+
+    let mut body = String::new();
+    body += &format!("    let elem_byte: u32 = constants.byte_offset + linear * {byte_size}u;\n");
+
+    for &ch in &CHANNELS {
+        body += &gen_buffer_decode_channel(
+            &format!("src_{}", ch.lower()),
+            "buf",
+            "elem_byte",
+            &src_layout,
+            ch,
+            atomic_read,
+        );
+    }
+
+    body += &gen_swizzle(swizzle, src_layout.kind);
+
+    for &ch in &CHANNELS {
+        let var = format!("out_{}", ch.lower());
+        let sw_var = format!("sw_{}", ch.lower());
+        let (line, _ty) = gen_convert_channel(&var, &sw_var, &src_layout, &dst_layout, false);
+        body += &line;
+    }
+
+    body += &gen_buffer_encode("buf", "elem_byte", &dst_layout);
+
+    let mut helpers = String::new();
+    if needs_half_float(&src_layout) || needs_half_float(&dst_layout) {
+        helpers += HALF_FLOAT_HELPERS;
+    }
+    if dst_atomic {
+        helpers += &store_bit_helpers("buf");
+    }
+
+    let code = format!(
+        r#"
+struct Constants {{
+    byte_offset: u32,
+    element_count: u32,
+}}
+
+@group(0) @binding(0) var<uniform> constants: Constants;
+@group(0) @binding(1) var<storage, read_write> buf: array<{buf_arr_ty}>;
+{helpers}
+@compute @workgroup_size(64, 1, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
+    let linear = gid.x;
+    if (linear >= constants.element_count) {{
+        return;
+    }}
+{body}
+}}
+"#,
+    );
+
+    let library = device
+        .new_shader_library(LibraryDesc {
+            name: "cvt_in_place",
+            input: LibraryInput::wgsl(code),
+        })
+        .expect("Cvt: failed to compile in-place shader library");
+
+    device
+        .new_compute_pipeline(ComputePipelineDesc {
+            name: "cvt_in_place",
+            shader: library.entry("main"),
+            work_group_size: [64, 1, 1],
+            constants: 0,
+            arguments: &[CvtInPlaceArguments::LAYOUT],
+        })
+        .expect("Cvt: failed to create in-place compute pipeline")
+}
+
+// ============================================================================
+// Small helpers shared by the public API
+// ============================================================================
+
+fn pad4_u32<const N: usize>(a: [u32; N]) -> [u32; 4] {
+    let mut out = [0u32; 4];
+    out[..N].copy_from_slice(&a);
+    out
+}
+
+fn pad4_i32<const N: usize>(a: [i32; N]) -> [i32; 4] {
+    let mut out = [0i32; 4];
+    out[..N].copy_from_slice(&a);
+    out
+}
+
+fn pad4_f32<const N: usize>(a: [f32; N]) -> [f32; 4] {
+    let mut out = [0f32; 4];
+    out[..N].copy_from_slice(&a);
+    out
+}
+
+fn pad4_addr_mode<const N: usize>(a: [AddressMode; N]) -> [u32; 4] {
+    let mut out = [0u32; 4];
+    for i in 0..N {
+        out[i] = a[i] as u32;
+    }
+    out
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+impl Cvt {
+    pub fn new(device: &Device) -> Self {
+        Cvt {
+            device: device.clone(),
+            compute_pipelines: Mutex::new(HashMap::new()),
+            render_pipelines: Mutex::new(HashMap::new()),
+            in_place_pipelines: Mutex::new(HashMap::new()),
+            samplers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Panics if any `MappedAxis::Dst` axis's source/destination extents
+    /// differ (exact-index entry points do not resample).
+    fn assert_exact_extents<const SRC: usize, const DST: usize>(
+        axis_map: AxisSwizzle,
+        src_extent: [u32; SRC],
+        dst_extent: [u32; DST],
+    ) {
+        for s in 0..SRC {
+            if let AxisMap::Direct(axis) | AxisMap::Mirror(axis) = axis_map.index(s) {
+                assert_eq!(
+                    src_extent[s], dst_extent[axis as usize],
+                    "Cvt: requires matching extents along mapped axes (no resampling); source axis {s} -> destination axis {axis}"
+                );
+            }
+        }
+    }
+
+    fn sampler_for(&self, sampler_desc: SamplerDesc) -> Sampler {
+        let mut samplers = self.samplers.lock();
+        samplers
+            .entry(sampler_desc)
+            .or_insert_with(|| self.device.new_sampler(sampler_desc))
+            .clone()
+    }
+
+    /// Converts `src`'s contents into `dst`, both `Buffer` endpoints, up to
+    /// 4 dimensions. Panics (before recording any GPU work) if the formats
+    /// are not `compatible`, or `SRC`/`DST` exceed 4, or a mapped axis's
+    /// source/destination extents differ (this entry point does not
+    /// resample - extents must match along every mapped axis; use
+    /// `cvt_buffer_to_buffer_resample` for mismatched extents), or any byte
+    /// offset/stride isn't a multiple of its side's component byte size
+    /// (1/2/4 — required so that no component write ever straddles a
+    /// 4-byte storage-buffer word, keeping the masked-atomic sub-word
+    /// writes correct and simple).
+    #[allow(clippy::too_many_arguments)]
+    pub fn buffer_to_buffer<const SRC: usize, const DST: usize>(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Buffer,
+        src_byte_offset: usize,
+        src_format: PixelFormat,
+        src_strides: [usize; SRC],
+        src_extent: Extent<u32, SRC>,
+        dst: &Buffer,
+        dst_byte_offset: usize,
+        dst_format: PixelFormat,
+        dst_strides: [usize; DST],
+        dst_extent: Extent<u32, DST>,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+    ) {
+        assert!(SRC <= 4, "Cvt: buffer<->buffer source rank must be <= 4");
+        assert!(
+            DST <= 4,
+            "Cvt: buffer<->buffer destination rank must be <= 4"
+        );
+
+        let src_format: PixelFormat = src_format.into();
+        let dst_format: PixelFormat = dst_format.into();
+
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let src_align =
+            component_byte_size(&describe(src_format).expect("Cvt: src format is not describable"));
+        let dst_align =
+            component_byte_size(&describe(dst_format).expect("Cvt: dst format is not describable"));
+
+        assert_eq!(
+            src_byte_offset % src_align,
+            0,
+            "Cvt: src_byte_offset must be a multiple of {src_align} (src's component byte size)"
+        );
+        assert_eq!(
+            dst_byte_offset % dst_align,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of {dst_align} (dst's component byte size)"
+        );
+        for &s in &src_strides {
+            assert_eq!(
+                s % src_align,
+                0,
+                "Cvt: src strides must be a multiple of {src_align} (src's component byte size)"
+            );
+        }
+        for &s in &dst_strides {
+            assert_eq!(
+                s % dst_align,
+                0,
+                "Cvt: dst strides must be a multiple of {dst_align} (dst's component byte size)"
+            );
+        }
+
+        Self::assert_exact_extents(axes, src_extent.0, dst_extent.0);
+
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: SRC as u8,
+            dst_rank: DST as u8,
+            axes,
+            resample: false,
+        };
+
+        let pipeline = {
+            let mut pipelines = self.compute_pipelines.lock();
+            pipelines
+                .entry(key)
+                .or_insert_with(|| {
+                    make_compute_pipeline_nd(
+                        &self.device,
+                        src_endpoint,
+                        dst_endpoint,
+                        swizzle,
+                        SRC,
+                        DST,
+                        axes,
+                        false,
+                    )
+                })
+                .clone()
+        };
+
+        let mut dst_stride4 = [0u32; 4];
+        for d in 0..DST {
+            dst_stride4[d] = dst_strides[d] as u32;
+        }
+        let mut src_stride4 = [0u32; 4];
+        for s in 0..SRC {
+            src_stride4[s] = src_strides[s] as u32;
+        }
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: [0; 4],
+            dst_image_size: [0; 2],
+            dst_byte_offset: dst_byte_offset as u32,
+            dst_stride: dst_stride4,
+            src_offset: [0; 4],
+            src_image_size: [0; 2],
+            src_byte_offset: src_byte_offset as u32,
+            src_stride: src_stride4,
+            total_dst_elements,
+            src_extent: [0.0; 4],
+            address_mode: [0; 4],
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_constants",
+        });
+
+        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+        let mut compute = encoder.compute();
+        compute.with_pipeline(&pipeline);
+        compute.with_arguments(
+            0,
+            &CvtNdArguments {
+                constants: cbuf,
+                src: src.clone(),
+                dst: dst.clone(),
+            },
+        );
+        compute.dispatch(groups);
+    }
+
+    /// Resampling counterpart of [`Cvt::buffer_to_buffer`]: allows the
+    /// source/destination extents along mapped axes to differ, reading each
+    /// destination element from a source coordinate computed by scaling the
+    /// destination's position ratio across `src_extent` (see the module's
+    /// resample codegen for the exact per-axis formula) instead of requiring
+    /// an exact 1:1 index correspondence.
+    ///
+    /// There is deliberately no `filter` parameter: buffers have no
+    /// hardware sampler and no meaningful notion of bilinear interpolation
+    /// between struct elements, so buffer<->buffer resampling is always
+    /// nearest-index, wrapped by `address_mode` against the `src_extent`
+    /// region itself (there is no larger "physical buffer extent" concept
+    /// in this API, unlike `Image` endpoints which wrap against their real
+    /// physical extent). A caller wanting filtered resampling must decode to
+    /// an `Image` first and use `cvt_buffer_to_image_resample` /
+    /// `cvt_image_to_image_resample`.
+    ///
+    /// Panics under the same conditions as `cvt_buffer_to_buffer`, minus
+    /// the matching-extents requirement.
+    #[allow(clippy::too_many_arguments)]
+    pub fn buffer_to_buffer_resample<const SRC: usize, const DST: usize>(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Buffer,
+        src_byte_offset: usize,
+        src_format: PixelFormat,
+        src_strides: [usize; SRC],
+        src_extent: Extent<u32, SRC>,
+        dst: &Buffer,
+        dst_byte_offset: usize,
+        dst_format: PixelFormat,
+        dst_strides: [usize; DST],
+        dst_extent: Extent<u32, DST>,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+        address_mode: [AddressMode; SRC],
+    ) {
+        assert!(SRC <= 4, "Cvt: buffer<->buffer source rank must be <= 4");
+        assert!(
+            DST <= 4,
+            "Cvt: buffer<->buffer destination rank must be <= 4"
+        );
+
+        let src_format: PixelFormat = src_format.into();
+        let dst_format: PixelFormat = dst_format.into();
+
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let src_align =
+            component_byte_size(&describe(src_format).expect("Cvt: src format is not describable"));
+        let dst_align =
+            component_byte_size(&describe(dst_format).expect("Cvt: dst format is not describable"));
+
+        assert_eq!(
+            src_byte_offset % src_align,
+            0,
+            "Cvt: src_byte_offset must be a multiple of {src_align} (src's component byte size)"
+        );
+        assert_eq!(
+            dst_byte_offset % dst_align,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of {dst_align} (dst's component byte size)"
+        );
+        for &s in &src_strides {
+            assert_eq!(
+                s % src_align,
+                0,
+                "Cvt: src strides must be a multiple of {src_align} (src's component byte size)"
+            );
+        }
+        for &s in &dst_strides {
+            assert_eq!(
+                s % dst_align,
+                0,
+                "Cvt: dst strides must be a multiple of {dst_align} (dst's component byte size)"
+            );
+        }
+
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: SRC as u8,
+            dst_rank: DST as u8,
+            axes,
+            resample: true,
+        };
+
+        let pipeline = {
+            let mut pipelines = self.compute_pipelines.lock();
+            pipelines
+                .entry(key)
+                .or_insert_with(|| {
+                    make_compute_pipeline_nd(
+                        &self.device,
+                        src_endpoint,
+                        dst_endpoint,
+                        swizzle,
+                        SRC,
+                        DST,
+                        axes,
+                        true,
+                    )
+                })
+                .clone()
+        };
+
+        let mut dst_stride4 = [0u32; 4];
+        for d in 0..DST {
+            dst_stride4[d] = dst_strides[d] as u32;
+        }
+        let mut src_stride4 = [0u32; 4];
+        for s in 0..SRC {
+            src_stride4[s] = src_strides[s] as u32;
+        }
+        let mut src_extent4 = [0.0f32; 4];
+        for s in 0..SRC {
+            src_extent4[s] = src_extent.0[s] as f32;
+        }
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: [0; 4],
+            dst_image_size: [0; 2],
+            dst_byte_offset: dst_byte_offset as u32,
+            dst_stride: dst_stride4,
+            src_offset: [0; 4],
+            src_image_size: [0; 2],
+            src_byte_offset: src_byte_offset as u32,
+            src_stride: src_stride4,
+            total_dst_elements,
+            src_extent: src_extent4,
+            address_mode: pad4_addr_mode(address_mode),
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_resample_constants",
+        });
+
+        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+        let mut compute = encoder.compute();
+        compute.with_pipeline(&pipeline);
+        compute.with_arguments(
+            0,
+            &CvtNdArguments {
+                constants: cbuf,
+                src: src.clone(),
+                dst: dst.clone(),
+            },
+        );
+        compute.dispatch(groups);
+    }
+
+    /// Converts a buffer's contents in place: reads each element through
+    /// `src_format`, converts, and writes it back through `dst_format` at
+    /// the same element position, starting at byte offset `0`.
+    ///
+    /// Buffer-only (there is no `cvt_image_in_place`); requires
+    /// `describe(src_format).byte_size == describe(dst_format).byte_size`
+    /// (asserted). Uses a dedicated pipeline binding exactly one storage
+    /// resource — not a two-`Buffer` alias of the two-resource copy path.
+    /// Takes `src_format`/`dst_format`/`swizzle` directly rather than a
+    /// `CvtDesc`: there is no axis map here (a single buffer, same element
+    /// position in and out).
+    pub fn buffer_in_place(
+        &self,
+        encoder: &mut CommandEncoder,
+        buffer: &Buffer,
+        src_format: PixelFormat,
+        dst_format: PixelFormat,
+        element_count: u32,
+        swizzle: Swizzle,
+    ) {
+        let src_format: PixelFormat = src_format.into();
+        let dst_format: PixelFormat = dst_format.into();
+
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        assert_eq!(
+            src_layout.byte_size, dst_layout.byte_size,
+            "Cvt: in-place conversion requires src/dst element byte size to match"
+        );
+
+        let key = CvtInPlaceKey {
+            src_format,
+            dst_format,
+            swizzle,
+        };
+
+        let pipeline = {
+            let mut pipelines = self.in_place_pipelines.lock();
+            pipelines
+                .entry(key)
+                .or_insert_with(|| {
+                    make_in_place_pipeline(&self.device, src_format, dst_format, swizzle)
+                })
+                .clone()
+        };
+
+        let constants = CvtInPlaceConstants {
+            byte_offset: 0,
+            element_count,
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::UNIFORM,
+            name: "cvt_in_place_constants",
+        });
+
+        let groups = Extent3::new(element_count.div_ceil(64), 1, 1);
+
+        let mut compute = encoder.compute();
+        compute.with_pipeline(&pipeline);
+        compute.with_arguments(
+            0,
+            &CvtInPlaceArguments {
+                constants: cbuf,
+                buf: buffer.clone(),
+            },
+        );
+        compute.dispatch(groups);
+    }
+
+    /// Converts a rectangular region of `src` into a rectangular region of
+    /// `dst`, both `Image`s. Panics (before recording any GPU work) if the
+    /// formats are not `compatible`, or a mapped axis's source/destination
+    /// extents differ (this entry point does not resample - extents must
+    /// match along every mapped axis; use `cvt_image_to_image_resample` for
+    /// mismatched extents).
+    ///
+    /// Routes through a render pipeline (fullscreen triangle) when `dst`'s
+    /// format is sRGB (`textureStore` cannot target an sRGB WGSL storage
+    /// format), a compute pipeline otherwise — mirroring `Blit`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_to_image(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Image,
+        src_offset: Offset3,
+        src_extent: Extent3,
+        dst: &Image,
+        dst_offset: Offset3,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+    ) {
+        let src_format = src.format();
+        let dst_format = dst.format();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        Self::assert_exact_extents(axes, src_extent.0, dst_extent.0);
+
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: false,
+        };
+
+        let dst_image_size = dst.extent().into_2d();
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: pad4_i32(dst_offset.0),
+            dst_image_size: [dst_image_size.width(), dst_image_size.height()],
+            dst_byte_offset: 0,
+            dst_stride: [0; 4],
+            src_offset: pad4_i32(src_offset.0),
+            src_image_size: [0, 0],
+            src_byte_offset: 0,
+            src_stride: [0; 4],
+            total_dst_elements,
+            src_extent: [0.0; 4],
+            address_mode: [0; 4],
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_constants",
+        });
+
+        if dst_layout.srgb {
+            let pipeline = {
+                let mut pipelines = self.render_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_render_pipeline(
+                            &self.device,
+                            src_endpoint,
+                            dst.format(),
+                            swizzle,
+                            axes,
+                            3,
+                            false,
+                        )
+                    })
+                    .clone()
+            };
+
+            let viewport_offset = Offset3::new(
+                dst_offset.x().min(dst_image_size.width() as i32) as f32,
+                dst_offset.y().min(dst_image_size.height() as i32) as f32,
+                0.0,
+            );
+            let viewport_extent = Extent3::new(
+                dst_extent.width().min(dst_image_size.width()) as f32,
+                dst_extent.height().min(dst_image_size.height()) as f32,
+                1.0,
+            );
+
+            let vx0 = dst_offset.x().max(0);
+            let vy0 = dst_offset.y().max(0);
+            let vx1 =
+                (dst_offset.x() + dst_extent.width() as i32).min(dst_image_size.width() as i32);
+            let vy1 =
+                (dst_offset.y() + dst_extent.height() as i32).min(dst_image_size.height() as i32);
+
+            if vx1 <= vx0 || vy1 <= vy0 {
+                return;
+            }
+
+            let mut render = encoder.render(RenderPassDesc {
+                name: "cvt_srgb",
+                color_attachments: &[AttachmentDesc::new(dst)],
+                depth_stencil_attachment: None,
+            });
+
+            render.with_pipeline(&pipeline);
+            render.with_viewport(viewport_offset, viewport_extent);
+            render.with_scissor(
+                Offset2::new(vx0, vy0),
+                Extent2::new((vx1 - vx0) as u32, (vy1 - vy0) as u32),
+            );
+            render.with_arguments(
+                0,
+                &CvtImageSrcRenderArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                },
+            );
+            render.draw(0..3, 0..1);
+        } else {
+            let pipeline = {
+                let mut pipelines = self.compute_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_compute_pipeline_nd(
+                            &self.device,
+                            src_endpoint,
+                            dst_endpoint,
+                            swizzle,
+                            3,
+                            3,
+                            axes,
+                            false,
+                        )
+                    })
+                    .clone()
+            };
+
+            let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+            let mut compute = encoder.compute();
+            compute.with_pipeline(&pipeline);
+            compute.with_arguments(
+                0,
+                &CvtImageToImageArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                    dst: dst.clone(),
+                },
+            );
+            compute.dispatch(groups);
+        }
+    }
+
+    /// Resampling counterpart of [`Cvt::image_to_image`]: allows the
+    /// src/dst extents to differ along mapped axes, reading `dst`'s content
+    /// from `src` by scaling each destination axis's position ratio across
+    /// `src_extent` (see [`gen_endpoint_decode_convert`] for the exact
+    /// per-axis formula), instead of requiring an exact 1:1 index
+    /// correspondence.
+    ///
+    /// `filter`/`address_mode` are mandatory, explicit parameters, not
+    /// sourced from `CvtDesc` — a caller cannot get a resample without
+    /// deciding what they want. When `src`'s pixel format is
+    /// float-representable (Unorm/Snorm/Float), the source is hardware
+    /// sampled through a real `Sampler` built from these; when it is
+    /// `Uint`/`Sint`, there is no hardware sampler for integer texture
+    /// formats, so it is always nearest-index with manual address-mode
+    /// wrapping regardless of `filter` — requesting `Filter::Linear` for an
+    /// integer-kind `src` panics rather than silently falling back to
+    /// nearest.
+    ///
+    /// Panics (before recording any GPU work) if the formats are not
+    /// `compatible`, or if `filter` is `Filter::Linear` and `src`'s pixel
+    /// format is `Uint`/`Sint`-kind.
+    ///
+    /// Routes through a render pipeline (fullscreen triangle), same as
+    /// `cvt_image_to_image`, when `dst`'s format is sRGB — resampling into
+    /// an sRGB `Image` destination is supported: the fragment shader
+    /// computes the same continuous source coordinate (and, for a
+    /// `CanonicalKind::Float` src, the same hardware `textureSampleLevel`)
+    /// as the compute path, hardware gamma-encodes on write.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_to_image_resample(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Image,
+        src_offset: Offset3,
+        src_extent: Extent3,
+        dst: &Image,
+        dst_offset: Offset3,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+        filter: Filter,
+        address_mode: [AddressMode; 3],
+    ) {
+        let src_format = src.format();
+        let dst_format = dst.format();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        assert!(
+            !(filter == Filter::Linear && src_layout.kind != CanonicalKind::Float),
+            "Cvt: only Filter::Nearest is supported for integer-kind (Uint/Sint) image src pixel formats"
+        );
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: true,
+        };
+
+        let src_image_size = src.extent().into_2d();
+        let dst_image_size = dst.extent().into_2d();
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: pad4_i32(dst_offset.0),
+            dst_image_size: [dst_image_size.width(), dst_image_size.height()],
+            dst_byte_offset: 0,
+            dst_stride: [0; 4],
+            src_offset: pad4_i32(src_offset.0),
+            src_image_size: [src_image_size.width(), src_image_size.height()],
+            src_byte_offset: 0,
+            src_stride: [0; 4],
+            total_dst_elements,
+            src_extent: pad4_f32(src_extent.0.map(|v| v as f32)),
+            address_mode: pad4_addr_mode(address_mode),
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_resample_constants",
+        });
+
+        if dst_layout.srgb {
+            let pipeline = {
+                let mut pipelines = self.render_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_render_pipeline(
+                            &self.device,
+                            src_endpoint,
+                            dst.format(),
+                            swizzle,
+                            axes,
+                            3,
+                            true,
+                        )
+                    })
+                    .clone()
+            };
+
+            let viewport_offset = Offset3::new(
+                dst_offset.x().min(dst_image_size.width() as i32) as f32,
+                dst_offset.y().min(dst_image_size.height() as i32) as f32,
+                0.0,
+            );
+            let viewport_extent = Extent3::new(
+                dst_extent.width().min(dst_image_size.width()) as f32,
+                dst_extent.height().min(dst_image_size.height()) as f32,
+                1.0,
+            );
+
+            let vx0 = dst_offset.x().max(0);
+            let vy0 = dst_offset.y().max(0);
+            let vx1 =
+                (dst_offset.x() + dst_extent.width() as i32).min(dst_image_size.width() as i32);
+            let vy1 =
+                (dst_offset.y() + dst_extent.height() as i32).min(dst_image_size.height() as i32);
+
+            if vx1 <= vx0 || vy1 <= vy0 {
+                return;
+            }
+
+            let mut render = encoder.render(RenderPassDesc {
+                name: "cvt_srgb",
+                color_attachments: &[AttachmentDesc::new(dst)],
+                depth_stencil_attachment: None,
+            });
+
+            render.with_pipeline(&pipeline);
+            render.with_viewport(viewport_offset, viewport_extent);
+            render.with_scissor(
+                Offset2::new(vx0, vy0),
+                Extent2::new((vx1 - vx0) as u32, (vy1 - vy0) as u32),
+            );
+
+            if src_layout.kind == CanonicalKind::Float {
+                let sampler_desc = SamplerDesc {
+                    min_filter: filter,
+                    mag_filter: filter,
+                    mip_map_mode: MipMapMode::Nearest,
+                    address_mode,
+                    anisotropy: None,
+                    min_lod: 0.0,
+                    max_lod: 0.0,
+                    normalized: true,
+                };
+                let sampler = self.sampler_for(sampler_desc);
+                render.with_arguments(
+                    0,
+                    &CvtImageSrcRenderResampleArguments {
+                        constants: cbuf,
+                        src: src.clone(),
+                        sampler,
+                    },
+                );
+            } else {
+                render.with_arguments(
+                    0,
+                    &CvtImageSrcRenderArguments {
+                        constants: cbuf,
+                        src: src.clone(),
+                    },
+                );
+            }
+            render.draw(0..3, 0..1);
+        } else {
+            let pipeline = {
+                let mut pipelines = self.compute_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_compute_pipeline_nd(
+                            &self.device,
+                            src_endpoint,
+                            dst_endpoint,
+                            swizzle,
+                            3,
+                            3,
+                            axes,
+                            true,
+                        )
+                    })
+                    .clone()
+            };
+
+            let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+            let mut compute = encoder.compute();
+            compute.with_pipeline(&pipeline);
+
+            if src_layout.kind == CanonicalKind::Float {
+                let sampler_desc = SamplerDesc {
+                    min_filter: filter,
+                    mag_filter: filter,
+                    mip_map_mode: MipMapMode::Nearest,
+                    address_mode,
+                    anisotropy: None,
+                    min_lod: 0.0,
+                    max_lod: 0.0,
+                    normalized: true,
+                };
+                let sampler = self.sampler_for(sampler_desc);
+                compute.with_arguments(
+                    0,
+                    &CvtImageToImageResampleArguments {
+                        constants: cbuf,
+                        src: src.clone(),
+                        sampler,
+                        dst: dst.clone(),
+                    },
+                );
+            } else {
+                compute.with_arguments(
+                    0,
+                    &CvtImageToImageArguments {
+                        constants: cbuf,
+                        src: src.clone(),
+                        dst: dst.clone(),
+                    },
+                );
+            }
+            compute.dispatch(groups);
+        }
+    }
+
+    /// Converts a rectangular region of `src` (an `Image`) into `dst` (a
+    /// `Buffer`), described by `dst_format` with row/plane byte pitches
+    /// `dst_row_pitch`/`dst_plane_pitch` (matching
+    /// `CopyCommandEncoder::copy_image_to_buffer`'s convention — the
+    /// fastest-varying axis is tightly packed at the format's own element
+    /// byte size). Panics (before recording any GPU work) under the same
+    /// conditions as `cvt_image_to_image`, plus misaligned byte
+    /// offset/pitches (see `cvt_buffer_to_buffer`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_to_buffer(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Image,
+        src_offset: Offset3,
+        src_extent: Extent3,
+        dst: &Buffer,
+        dst_byte_offset: usize,
+        dst_format: PixelFormat,
+        dst_row_pitch: usize,
+        dst_plane_pitch: usize,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+    ) {
+        let src_format = src.format();
+        let dst_format: PixelFormat = dst_format.into();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        Self::assert_exact_extents(axes, src_extent.0, dst_extent.0);
+
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        let align = component_byte_size(&dst_layout);
+        assert_eq!(
+            dst_byte_offset % align,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of {align} (dst's component byte size)"
+        );
+        assert_eq!(
+            dst_row_pitch % align,
+            0,
+            "Cvt: dst_row_pitch must be a multiple of {align} (dst's component byte size)"
+        );
+        assert_eq!(
+            dst_plane_pitch % align,
+            0,
+            "Cvt: dst_plane_pitch must be a multiple of {align} (dst's component byte size)"
+        );
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: false,
+        };
+
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: [0; 4],
+            dst_image_size: [0; 2],
+            dst_byte_offset: dst_byte_offset as u32,
+            dst_stride: pad4_u32([
+                dst_layout.byte_size as u32,
+                dst_row_pitch as u32,
+                dst_plane_pitch as u32,
+            ]),
+            src_offset: pad4_i32(src_offset.0),
+            src_image_size: [0, 0],
+            src_byte_offset: 0,
+            src_stride: [0; 4],
+            total_dst_elements,
+            src_extent: [0.0; 4],
+            address_mode: [0; 4],
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_constants",
+        });
+
+        let pipeline = {
+            let mut pipelines = self.compute_pipelines.lock();
+            pipelines
+                .entry(key)
+                .or_insert_with(|| {
+                    make_compute_pipeline_nd(
+                        &self.device,
+                        src_endpoint,
+                        dst_endpoint,
+                        swizzle,
+                        3,
+                        3,
+                        axes,
+                        false,
+                    )
+                })
+                .clone()
+        };
+
+        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+        let mut compute = encoder.compute();
+        compute.with_pipeline(&pipeline);
+        compute.with_arguments(
+            0,
+            &CvtImageToBufferArguments {
+                constants: cbuf,
+                src: src.clone(),
+                dst: dst.clone(),
+            },
+        );
+        compute.dispatch(groups);
+    }
+
+    /// Resampling counterpart of [`Cvt::image_to_buffer`]: allows the
+    /// src/dst extents to differ along mapped axes. See
+    /// `cvt_image_to_image_resample`'s docs for the `filter`/`address_mode`
+    /// semantics (hardware-sampled for a float-representable `src`, manual
+    /// nearest-index address-mode wrapping for `Uint`/`Sint`) - they apply
+    /// identically here, keyed off `src`'s (the `Image`) pixel format.
+    ///
+    /// Panics (before recording any GPU work) under the same conditions as
+    /// `cvt_image_to_image_resample` (formats not `compatible`,
+    /// `Filter::Linear` requested for an integer-kind `src`), plus
+    /// misaligned byte offset/pitches (see `cvt_buffer_to_buffer`). There is
+    /// no sRGB-destination restriction here: `dst` is a `Buffer`, so there
+    /// is no hardware gamma-encode-on-write path to route through in the
+    /// first place.
+    #[allow(clippy::too_many_arguments)]
+    pub fn image_to_buffer_resample(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Image,
+        src_offset: Offset3,
+        src_extent: Extent3,
+        dst: &Buffer,
+        dst_byte_offset: usize,
+        dst_format: PixelFormat,
+        dst_row_pitch: usize,
+        dst_plane_pitch: usize,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+        filter: Filter,
+        address_mode: [AddressMode; 3],
+    ) {
+        let src_format = src.format();
+        let dst_format: PixelFormat = dst_format.into();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+        assert!(
+            !(filter == Filter::Linear && src_layout.kind != CanonicalKind::Float),
+            "Cvt: only Filter::Nearest is supported for integer-kind (Uint/Sint) image src pixel formats"
+        );
+
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        let align = component_byte_size(&dst_layout);
+        assert_eq!(
+            dst_byte_offset % align,
+            0,
+            "Cvt: dst_byte_offset must be a multiple of {align} (dst's component byte size)"
+        );
+        assert_eq!(
+            dst_row_pitch % align,
+            0,
+            "Cvt: dst_row_pitch must be a multiple of {align} (dst's component byte size)"
+        );
+        assert_eq!(
+            dst_plane_pitch % align,
+            0,
+            "Cvt: dst_plane_pitch must be a multiple of {align} (dst's component byte size)"
+        );
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: true,
+        };
+
+        let src_image_size = src.extent().into_2d();
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: [0; 4],
+            dst_image_size: [0; 2],
+            dst_byte_offset: dst_byte_offset as u32,
+            dst_stride: pad4_u32([
+                dst_layout.byte_size as u32,
+                dst_row_pitch as u32,
+                dst_plane_pitch as u32,
+            ]),
+            src_offset: pad4_i32(src_offset.0),
+            src_image_size: [src_image_size.width(), src_image_size.height()],
+            src_byte_offset: 0,
+            src_stride: [0; 4],
+            total_dst_elements,
+            src_extent: pad4_f32(src_extent.0.map(|v| v as f32)),
+            address_mode: pad4_addr_mode(address_mode),
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_resample_constants",
+        });
+
+        let pipeline = {
+            let mut pipelines = self.compute_pipelines.lock();
+            pipelines
+                .entry(key)
+                .or_insert_with(|| {
+                    make_compute_pipeline_nd(
+                        &self.device,
+                        src_endpoint,
+                        dst_endpoint,
+                        swizzle,
+                        3,
+                        3,
+                        axes,
+                        true,
+                    )
+                })
+                .clone()
+        };
+
+        let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+        let mut compute = encoder.compute();
+        compute.with_pipeline(&pipeline);
+
+        if src_layout.kind == CanonicalKind::Float {
+            let sampler_desc = SamplerDesc {
+                min_filter: filter,
+                mag_filter: filter,
+                mip_map_mode: MipMapMode::Nearest,
+                address_mode,
+                anisotropy: None,
+                min_lod: 0.0,
+                max_lod: 0.0,
+                normalized: true,
+            };
+            let sampler = self.sampler_for(sampler_desc);
+            compute.with_arguments(
+                0,
+                &CvtImageToBufferResampleArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                    sampler,
+                    dst: dst.clone(),
+                },
+            );
+        } else {
+            compute.with_arguments(
+                0,
+                &CvtImageToBufferArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                    dst: dst.clone(),
+                },
+            );
+        }
+        compute.dispatch(groups);
+    }
+
+    /// Converts `src` (a `Buffer`, described by `src_format` with row/plane
+    /// byte pitches `src_row_pitch`/`src_plane_pitch`) into a rectangular
+    /// region of `dst` (an `Image`). Mirror of `cvt_image_to_buffer`; see
+    /// its docs for the panic conditions. Routes through the sRGB render
+    /// pipeline when `dst`'s format is sRGB.
+    #[allow(clippy::too_many_arguments)]
+    pub fn buffer_to_image(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Buffer,
+        src_byte_offset: usize,
+        src_format: PixelFormat,
+        src_row_pitch: usize,
+        src_plane_pitch: usize,
+        src_extent: Extent3,
+        dst: &Image,
+        dst_offset: Offset3,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+    ) {
+        let dst_format = dst.format();
+        let src_format: PixelFormat = src_format.into();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        Self::assert_exact_extents(axes, src_extent.0, dst_extent.0);
+
+        let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+        let align = component_byte_size(&src_layout);
+        assert_eq!(
+            src_byte_offset % align,
+            0,
+            "Cvt: src_byte_offset must be a multiple of {align} (src's component byte size)"
+        );
+        assert_eq!(
+            src_row_pitch % align,
+            0,
+            "Cvt: src_row_pitch must be a multiple of {align} (src's component byte size)"
+        );
+        assert_eq!(
+            src_plane_pitch % align,
+            0,
+            "Cvt: src_plane_pitch must be a multiple of {align} (src's component byte size)"
+        );
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: false,
+        };
+
+        let dst_image_size = dst.extent().into_2d();
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: pad4_i32(dst_offset.0),
+            dst_image_size: [dst_image_size.width(), dst_image_size.height()],
+            dst_byte_offset: 0,
+            dst_stride: [0; 4],
+            // `Buffer` sources have no `Offset` coordinate parameter (only
+            // `src_byte_offset`), so a fixed/starting axis coordinate is
+            // always 0 here; fold any desired starting coordinate into
+            // `src_byte_offset` instead.
+            src_offset: [0; 4],
+            src_image_size: [0, 0],
+            src_byte_offset: src_byte_offset as u32,
+            src_stride: pad4_u32([
+                src_layout.byte_size as u32,
+                src_row_pitch as u32,
+                src_plane_pitch as u32,
+            ]),
+            total_dst_elements,
+            src_extent: [0.0; 4],
+            address_mode: [0; 4],
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_constants",
+        });
+
+        if dst_layout.srgb {
+            let pipeline = {
+                let mut pipelines = self.render_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_render_pipeline(
+                            &self.device,
+                            src_endpoint,
+                            dst.format(),
+                            swizzle,
+                            axes,
+                            3,
+                            false,
+                        )
+                    })
+                    .clone()
+            };
+
+            let viewport_offset = Offset3::new(
+                dst_offset.x().min(dst_image_size.width() as i32) as f32,
+                dst_offset.y().min(dst_image_size.height() as i32) as f32,
+                0.0,
+            );
+            let viewport_extent = Extent3::new(
+                dst_extent.width().min(dst_image_size.width()) as f32,
+                dst_extent.height().min(dst_image_size.height()) as f32,
+                1.0,
+            );
+
+            let vx0 = dst_offset.x().max(0);
+            let vy0 = dst_offset.y().max(0);
+            let vx1 =
+                (dst_offset.x() + dst_extent.width() as i32).min(dst_image_size.width() as i32);
+            let vy1 =
+                (dst_offset.y() + dst_extent.height() as i32).min(dst_image_size.height() as i32);
+
+            if vx1 <= vx0 || vy1 <= vy0 {
+                return;
+            }
+
+            let mut render = encoder.render(RenderPassDesc {
+                name: "cvt_srgb",
+                color_attachments: &[AttachmentDesc::new(dst)],
+                depth_stencil_attachment: None,
+            });
+
+            render.with_pipeline(&pipeline);
+            render.with_viewport(viewport_offset, viewport_extent);
+            render.with_scissor(
+                Offset2::new(vx0, vy0),
+                Extent2::new((vx1 - vx0) as u32, (vy1 - vy0) as u32),
+            );
+            render.with_arguments(
+                0,
+                &CvtBufferSrcRenderArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                },
+            );
+            render.draw(0..3, 0..1);
+        } else {
+            let pipeline = {
+                let mut pipelines = self.compute_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_compute_pipeline_nd(
+                            &self.device,
+                            src_endpoint,
+                            dst_endpoint,
+                            swizzle,
+                            3,
+                            3,
+                            axes,
+                            false,
+                        )
+                    })
+                    .clone()
+            };
+
+            let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+            let mut compute = encoder.compute();
+            compute.with_pipeline(&pipeline);
+            compute.with_arguments(
+                0,
+                &CvtBufferToImageArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                    dst: dst.clone(),
+                },
+            );
+            compute.dispatch(groups);
+        }
+    }
+
+    /// Resampling counterpart of [`Cvt::buffer_to_image`]: allows the
+    /// src/dst extents to differ along mapped axes.
+    ///
+    /// `filter` exists as a parameter for shape-symmetry with the other
+    /// `_resample` entry points, but since `src` here is always a `Buffer`
+    /// (no hardware sampler, no meaningful notion of bilinear interpolation
+    /// between struct elements, see `cvt_buffer_to_buffer_resample` for the
+    /// same reasoning), resampling is always nearest-index with manual
+    /// `address_mode` wrapping against the logical `src_extent` region:
+    /// requesting `Filter::Linear` panics rather than silently falling back
+    /// to nearest.
+    ///
+    /// Panics (before recording any GPU work) if the formats are not
+    /// `compatible`, if `filter` is `Filter::Linear`, or under misaligned
+    /// byte offset/pitches (see `cvt_buffer_to_buffer`).
+    ///
+    /// Routes through a render pipeline (fullscreen triangle), same as
+    /// `cvt_buffer_to_image`, when `dst`'s format is sRGB — resampling into
+    /// an sRGB `Image` destination is supported (a `Buffer` src never uses a
+    /// hardware sampler regardless, so this just changes how the
+    /// destination fragment is produced/written).
+    #[allow(clippy::too_many_arguments)]
+    pub fn buffer_to_image_resample(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Buffer,
+        src_byte_offset: usize,
+        src_format: PixelFormat,
+        src_row_pitch: usize,
+        src_plane_pitch: usize,
+        src_extent: Extent3,
+        dst: &Image,
+        dst_offset: Offset3,
+        dst_extent: Extent3,
+        axes: AxisSwizzle,
+        swizzle: Swizzle,
+        filter: Filter,
+        address_mode: [AddressMode; 3],
+    ) {
+        assert!(
+            filter == Filter::Nearest,
+            "Cvt: only Filter::Nearest is supported when the resample src is a Buffer (no hardware sampler, always nearest-index)"
+        );
+
+        let dst_format = dst.format();
+        let src_format: PixelFormat = src_format.into();
+        assert!(
+            compatible(src_format, dst_format),
+            "Cvt: src format {:?} is not compatible with dst format {:?}",
+            src_format,
+            dst_format
+        );
+
+        let dst_layout = describe(dst_format).expect("Cvt: dst format is not describable");
+
+        let src_layout = describe(src_format).expect("Cvt: src format is not describable");
+        let align = component_byte_size(&src_layout);
+        assert_eq!(
+            src_byte_offset % align,
+            0,
+            "Cvt: src_byte_offset must be a multiple of {align} (src's component byte size)"
+        );
+        assert_eq!(
+            src_row_pitch % align,
+            0,
+            "Cvt: src_row_pitch must be a multiple of {align} (src's component byte size)"
+        );
+        assert_eq!(
+            src_plane_pitch % align,
+            0,
+            "Cvt: src_plane_pitch must be a multiple of {align} (src's component byte size)"
+        );
+
+        let src_endpoint = EndpointDesc {
+            kind: EndpointKind::Buffer,
+            format: src_format,
+        };
+        let dst_endpoint = EndpointDesc {
+            kind: EndpointKind::Image,
+            format: dst_format,
+        };
+
+        let key = CvtKey {
+            src: src_endpoint,
+            dst: dst_endpoint,
+            swizzle,
+            src_rank: 3,
+            dst_rank: 3,
+            axes,
+            resample: true,
+        };
+
+        let dst_image_size = dst.extent().into_2d();
+        let total_dst_elements: u32 = dst_extent.0.iter().product();
+
+        let constants = CvtConstantsNd {
+            dst_extent: pad4_u32(dst_extent.0),
+            dst_offset: pad4_i32(dst_offset.0),
+            dst_image_size: [dst_image_size.width(), dst_image_size.height()],
+            dst_byte_offset: 0,
+            dst_stride: [0; 4],
+            // `Buffer` sources have no `Offset` coordinate parameter (only
+            // `src_byte_offset`), so a fixed/starting axis coordinate is
+            // always 0 here; fold any desired starting coordinate into
+            // `src_byte_offset` instead.
+            src_offset: [0; 4],
+            src_image_size: [0, 0],
+            src_byte_offset: src_byte_offset as u32,
+            src_stride: pad4_u32([
+                src_layout.byte_size as u32,
+                src_row_pitch as u32,
+                src_plane_pitch as u32,
+            ]),
+            total_dst_elements,
+            src_extent: pad4_f32(src_extent.0.map(|v| v as f32)),
+            address_mode: pad4_addr_mode(address_mode),
+        };
+
+        let cbuf = self.device.new_buffer_init(BufferInitDesc {
+            data: bytemuck::bytes_of(&constants),
+            usage: BufferUsage::STORAGE,
+            name: "cvt_nd_resample_constants",
+        });
+
+        if dst_layout.srgb {
+            let pipeline = {
+                let mut pipelines = self.render_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_render_pipeline(
+                            &self.device,
+                            src_endpoint,
+                            dst.format(),
+                            swizzle,
+                            axes,
+                            3,
+                            true,
+                        )
+                    })
+                    .clone()
+            };
+
+            let viewport_offset = Offset3::new(
+                dst_offset.x().min(dst_image_size.width() as i32) as f32,
+                dst_offset.y().min(dst_image_size.height() as i32) as f32,
+                0.0,
+            );
+            let viewport_extent = Extent3::new(
+                dst_extent.width().min(dst_image_size.width()) as f32,
+                dst_extent.height().min(dst_image_size.height()) as f32,
+                1.0,
+            );
+
+            let vx0 = dst_offset.x().max(0);
+            let vy0 = dst_offset.y().max(0);
+            let vx1 =
+                (dst_offset.x() + dst_extent.width() as i32).min(dst_image_size.width() as i32);
+            let vy1 =
+                (dst_offset.y() + dst_extent.height() as i32).min(dst_image_size.height() as i32);
+
+            if vx1 <= vx0 || vy1 <= vy0 {
+                return;
+            }
+
+            let mut render = encoder.render(RenderPassDesc {
+                name: "cvt_srgb",
+                color_attachments: &[AttachmentDesc::new(dst)],
+                depth_stencil_attachment: None,
+            });
+
+            render.with_pipeline(&pipeline);
+            render.with_viewport(viewport_offset, viewport_extent);
+            render.with_scissor(
+                Offset2::new(vx0, vy0),
+                Extent2::new((vx1 - vx0) as u32, (vy1 - vy0) as u32),
+            );
+            render.with_arguments(
+                0,
+                &CvtBufferSrcRenderArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                },
+            );
+            render.draw(0..3, 0..1);
+        } else {
+            let pipeline = {
+                let mut pipelines = self.compute_pipelines.lock();
+                pipelines
+                    .entry(key)
+                    .or_insert_with(|| {
+                        make_compute_pipeline_nd(
+                            &self.device,
+                            src_endpoint,
+                            dst_endpoint,
+                            swizzle,
+                            3,
+                            3,
+                            axes,
+                            true,
+                        )
+                    })
+                    .clone()
+            };
+
+            let groups = Extent3::new(total_dst_elements.div_ceil(64), 1, 1);
+
+            let mut compute = encoder.compute();
+            compute.with_pipeline(&pipeline);
+            compute.with_arguments(
+                0,
+                &CvtBufferToImageArguments {
+                    constants: cbuf,
+                    src: src.clone(),
+                    dst: dst.clone(),
+                },
+            );
+            compute.dispatch(groups);
+        }
+    }
+}

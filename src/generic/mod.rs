@@ -39,7 +39,7 @@ pub use self::{
     data::*,
     feature::Features,
     format::{ColorSpace, PixelFormat, VertexFormat},
-    image::{ComponentSwizzle, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
+    image::{ComponentMap, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
     instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
     queue::QueueFlags,
     render::{

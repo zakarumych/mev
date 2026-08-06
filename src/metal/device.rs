@@ -62,7 +62,10 @@ impl Device {
         Device { device }
     }
 
-    pub(super) fn set_last_cbuf(device: Retained<ProtocolObject<dyn MTLDevice>>, queues: usize) -> Self {
+    pub(super) fn set_last_cbuf(
+        device: Retained<ProtocolObject<dyn MTLDevice>>,
+        queues: usize,
+    ) -> Self {
         Device { device }
     }
 }
@@ -259,26 +262,27 @@ impl crate::traits::Device for Device {
 
             let color_attachments = mdesc.colorAttachments();
             for (idx, color_desc) in raster.color_targets.iter().enumerate() {
-                let color_attachment = unsafe { color_attachments.objectAtIndexedSubscript(idx as _) };
+                let color_attachment =
+                    unsafe { color_attachments.objectAtIndexedSubscript(idx as _) };
                 color_attachment.setPixelFormat(color_desc.format.try_into_metal().unwrap());
+                color_attachment.setWriteMask(color_desc.mask.into_metal());
 
                 if let Some(blend_desc) = &color_desc.blend {
                     color_attachment.setBlendingEnabled(true);
-                    color_attachment.setWriteMask(blend_desc.mask.into_metal());
                     color_attachment.setRgbBlendOperation(blend_desc.color.op.into_metal());
                     color_attachment.setSourceRGBBlendFactor(blend_desc.color.src.into_metal());
                     color_attachment
                         .setDestinationRGBBlendFactor(blend_desc.color.dst.into_metal());
                     color_attachment.setAlphaBlendOperation(blend_desc.alpha.op.into_metal());
-                    color_attachment
-                        .setSourceAlphaBlendFactor(blend_desc.alpha.src.into_metal());
+                    color_attachment.setSourceAlphaBlendFactor(blend_desc.alpha.src.into_metal());
                     color_attachment
                         .setDestinationAlphaBlendFactor(blend_desc.alpha.dst.into_metal());
                 } else {
                     color_attachment.setBlendingEnabled(false);
                 }
                 unsafe {
-                    color_attachments.setObject_atIndexedSubscript(Some(&color_attachment), idx as _);
+                    color_attachments
+                        .setObject_atIndexedSubscript(Some(&color_attachment), idx as _);
                 }
             }
 

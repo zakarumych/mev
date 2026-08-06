@@ -260,11 +260,7 @@ impl crate::traits::Device for Device {
                         Some(wgpu::ColorTargetState {
                             format: ct.format.expect_into_wgpu(),
                             blend,
-                            write_mask: ct
-                                .blend
-                                .as_ref()
-                                .map(|b| b.mask.into_wgpu())
-                                .unwrap_or(wgpu::ColorWrites::ALL),
+                            write_mask: ct.mask.into_wgpu(),
                         })
                     })
                     .collect();

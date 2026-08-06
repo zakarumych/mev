@@ -1,4 +1,4 @@
-use proc_easy::{private::Spanned, EasyAttributes};
+use proc_easy::{EasyAttributes, private::Spanned};
 use proc_macro2::TokenStream;
 use quote::quote_spanned;
 use syn;
@@ -24,7 +24,7 @@ pub fn derive(
             return Err(syn::Error::new_spanned(
                 input,
                 "only structs are supported by `#[derive(Arguments)]`",
-            ))
+            ));
         }
     };
 

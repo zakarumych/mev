@@ -4,12 +4,11 @@ use std::{
     ops::{Mul, Range},
 };
 
-use super::{format::PixelFormat, Extent1, Extent2, Extent3};
+use super::{Extent1, Extent2, Extent3, format::PixelFormat};
 
 /// Image component swizzle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ComponentSwizzle {
-    Identity,
+pub enum ComponentMap {
     Zero,
     One,
     R,
@@ -18,47 +17,47 @@ pub enum ComponentSwizzle {
     A,
 }
 
-impl Default for ComponentSwizzle {
-    fn default() -> Self {
-        ComponentSwizzle::Identity
-    }
-}
-
 /// Image swizzle for each component.
 ///
 /// It is used to remap components of an image in image views.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Swizzle {
-    pub r: ComponentSwizzle,
-    pub g: ComponentSwizzle,
-    pub b: ComponentSwizzle,
-    pub a: ComponentSwizzle,
+    pub r: ComponentMap,
+    pub g: ComponentMap,
+    pub b: ComponentMap,
+    pub a: ComponentMap,
+}
+
+impl Default for Swizzle {
+    fn default() -> Self {
+        Swizzle::IDENTITY
+    }
 }
 
 impl Swizzle {
     /// Identity swizzle.
     /// i.e. use as-is.
     pub const IDENTITY: Self = Swizzle {
-        r: ComponentSwizzle::Identity,
-        g: ComponentSwizzle::Identity,
-        b: ComponentSwizzle::Identity,
-        a: ComponentSwizzle::Identity,
+        r: ComponentMap::R,
+        g: ComponentMap::G,
+        b: ComponentMap::B,
+        a: ComponentMap::A,
     };
 
     /// Map all components to R component.
     pub const RRRR: Self = Swizzle {
-        r: ComponentSwizzle::R,
-        g: ComponentSwizzle::R,
-        b: ComponentSwizzle::R,
-        a: ComponentSwizzle::R,
+        r: ComponentMap::R,
+        g: ComponentMap::R,
+        b: ComponentMap::R,
+        a: ComponentMap::R,
     };
 
     /// Map components R, G and B to one and Alpha to R.
     pub const _111R: Self = Swizzle {
-        r: ComponentSwizzle::One,
-        g: ComponentSwizzle::One,
-        b: ComponentSwizzle::One,
-        a: ComponentSwizzle::R,
+        r: ComponentMap::One,
+        g: ComponentMap::One,
+        b: ComponentMap::One,
+        a: ComponentMap::R,
     };
 }
 
@@ -68,10 +67,9 @@ impl Mul for Swizzle {
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
-        use ComponentSwizzle::*;
+        use ComponentMap::*;
 
-        let mul = |rhs: ComponentSwizzle, i| match rhs {
-            Identity => i,
+        let mul = |rhs: ComponentMap, i| match rhs {
             Zero => Zero,
             One => One,
             R => self.r,

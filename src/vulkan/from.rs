@@ -1,7 +1,7 @@
 use ash::vk;
 
 use crate::generic::{
-    AddressMode, BlendFactor, BlendOp, BufferUsage, ColorSpace, CompareFunction, ComponentSwizzle,
+    AddressMode, BlendFactor, BlendOp, BufferUsage, ColorSpace, CompareFunction, ComponentMap,
     Culling, Extent2, Extent3, FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
     MipMapMode, Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, PresentMode,
     QueueFlags, ShaderStage, ShaderStages, Swizzle, VertexFormat, WriteMask,
@@ -721,17 +721,16 @@ impl AshFrom<Offset3> for ash::vk::Offset3D {
     }
 }
 
-impl AshFrom<ComponentSwizzle> for ash::vk::ComponentSwizzle {
+impl AshFrom<ComponentMap> for ash::vk::ComponentSwizzle {
     #[inline]
-    fn ash_from(component: ComponentSwizzle) -> Self {
+    fn ash_from(component: ComponentMap) -> Self {
         match component {
-            ComponentSwizzle::Identity => ash::vk::ComponentSwizzle::IDENTITY,
-            ComponentSwizzle::Zero => ash::vk::ComponentSwizzle::ZERO,
-            ComponentSwizzle::One => ash::vk::ComponentSwizzle::ONE,
-            ComponentSwizzle::R => ash::vk::ComponentSwizzle::R,
-            ComponentSwizzle::G => ash::vk::ComponentSwizzle::G,
-            ComponentSwizzle::B => ash::vk::ComponentSwizzle::B,
-            ComponentSwizzle::A => ash::vk::ComponentSwizzle::A,
+            ComponentMap::Zero => ash::vk::ComponentSwizzle::ZERO,
+            ComponentMap::One => ash::vk::ComponentSwizzle::ONE,
+            ComponentMap::R => ash::vk::ComponentSwizzle::R,
+            ComponentMap::G => ash::vk::ComponentSwizzle::G,
+            ComponentMap::B => ash::vk::ComponentSwizzle::B,
+            ComponentMap::A => ash::vk::ComponentSwizzle::A,
         }
     }
 }

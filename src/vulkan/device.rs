@@ -24,7 +24,7 @@ use crate::{
         BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError, Features,
         ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PrimitiveTopology,
         RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, Swizzle,
-        TlasDesc, VertexStepMode, ViewDesc, parse_shader,
+        TlasDesc, VertexStepMode, ViewDesc, WriteMask, parse_shader,
     },
 };
 
@@ -1380,7 +1380,15 @@ impl crate::traits::Device for Device {
             }
 
             for color in &raster.color_targets {
-                let mut blend_state = vk::PipelineColorBlendAttachmentState::default();
+                // `colorWriteMask` gates which components are written to the
+                // attachment independently of `blendEnable` - it is not
+                // implied to be "all channels" just because blending is
+                // disabled. Default to writing every channel (matching
+                // `BlendDesc::default()`'s own `mask: WriteMask::all()`);
+                // `Some(blend)` below overrides it with the caller's chosen
+                // mask.
+                let mut blend_state = vk::PipelineColorBlendAttachmentState::default()
+                    .color_write_mask(color.mask.into_ash());
                 if let Some(blend) = color.blend {
                     blend_state = blend_state
                         .blend_enable(true)
@@ -1389,8 +1397,7 @@ impl crate::traits::Device for Device {
                         .color_blend_op(blend.color.op.into_ash())
                         .src_alpha_blend_factor(blend.alpha.src.into_ash())
                         .dst_alpha_blend_factor(blend.alpha.dst.into_ash())
-                        .alpha_blend_op(blend.alpha.op.into_ash())
-                        .color_write_mask(blend.mask.into_ash());
+                        .alpha_blend_op(blend.alpha.op.into_ash());
                 }
                 attachments.push(blend_state);
                 color_attachment_formats.push(color.format.try_into_ash().unwrap());

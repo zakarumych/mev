@@ -4,17 +4,17 @@ use super::{BufferSlice, VertexFormat};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AccelerationStructureSizes {
     /// Size of the acceleration structure in bytes.
-    /// 
+    ///
     /// Allocate this amount of memory in buffer that will contain the acceleration structure.
     pub size: usize,
 
     /// Size of the scratch memory in bytes.
-    /// 
+    ///
     /// Allocate this amount of memory in buffer that will be used during acceleration structure build.
     pub scratch_size: usize,
 
     /// Size of the update scratch memory in bytes.
-    /// 
+    ///
     /// Allocate this amount of memory in buffer that will be used during acceleration structure update.
     pub update_scratch_size: usize,
 }
@@ -26,13 +26,13 @@ pub enum AccelerationStructurePerformance {
     Default,
 
     /// Prefer fast trace performance.
-    /// 
+    ///
     /// This may result in slower build times.
     /// Use this when acceleration structure will be used repeatedly.
     FastTrace,
 
     /// Prefer fast build performance.
-    /// 
+    ///
     /// This may result in slower trace times.
     /// Use this when acceleration structure will be rebuilt frequently.
     FastBuild,
@@ -58,7 +58,7 @@ pub struct BlasTriangles<'a> {
     /// Flag to indicate if geometry is opaque.
     /// If true, tracing will stop on hit to this geometry.
     /// Otherwise opaque test may be invoked.
-    /// 
+    ///
     /// Set this flag is there are not non-opaque surfaces using this geometry.
     pub opaque: bool,
 

@@ -132,10 +132,7 @@ impl TriangleApp {
                             library,
                             entry: "fs_main".into(),
                         }),
-                        color_targets: vec![mev::ColorTargetDesc {
-                            format: target_format,
-                            blend: Some(mev::BlendDesc::default()),
-                        }],
+                        color_targets: vec![mev::ColorTargetDesc::new(target_format)],
                         depth_stencil: None,
                         front_face: mev::FrontFace::default(),
                         culling: mev::Culling::Back,

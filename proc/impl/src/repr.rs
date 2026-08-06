@@ -20,7 +20,7 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenS
             return Err(syn::Error::new_spanned(
                 input,
                 "only structs are supported by `#[derive(DeviceRepr)]`",
-            ))
+            ));
         }
     };
 

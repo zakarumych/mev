@@ -1,9 +1,9 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::{backend::Image, DataType, ScalarType, VectorSize, VertexAttributes};
+use crate::{DataType, ScalarType, VectorSize, VertexAttributes, backend::Image};
 
-use super::{arguments::ArgumentGroupLayout, PixelFormat, Shader, VertexFormat};
+use super::{PixelFormat, Shader, VertexFormat, arguments::ArgumentGroupLayout};
 
 /// Load operation for an attachment.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -239,16 +239,26 @@ pub struct ColorTargetDesc {
     /// It must be a color format.
     pub format: PixelFormat,
 
+    /// Masks which channels to write.
+    pub mask: WriteMask,
+
     /// Blending options for the color target.
     pub blend: Option<BlendDesc>,
+}
+
+impl ColorTargetDesc {
+    pub fn new(format: PixelFormat) -> Self {
+        ColorTargetDesc {
+            format,
+            mask: WriteMask::all(),
+            blend: None,
+        }
+    }
 }
 
 /// Describes blending options for color render target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BlendDesc {
-    /// Masks which channels to write.
-    pub mask: WriteMask,
-
     /// Blending option for color channels.
     pub color: Blend,
 
@@ -260,7 +270,6 @@ pub struct BlendDesc {
 impl Default for BlendDesc {
     fn default() -> Self {
         BlendDesc {
-            mask: WriteMask::all(),
             color: Blend {
                 op: BlendOp::Add,
                 src: BlendFactor::One,
@@ -298,6 +307,12 @@ bitflags::bitflags! {
         const GREEN = 0x2;
         const BLUE = 0x4;
         const ALPHA = 0x8;
+    }
+}
+
+impl Default for WriteMask {
+    fn default() -> Self {
+        WriteMask::all()
     }
 }
 
