@@ -700,9 +700,9 @@ impl AshFrom<ImageExtent> for ash::vk::Extent3D {
     }
 }
 
-impl AshFrom<Offset2> for ash::vk::Offset2D {
+impl AshFrom<Offset2<i32>> for ash::vk::Offset2D {
     #[inline]
-    fn ash_from(mev: Offset2) -> Self {
+    fn ash_from(mev: Offset2<i32>) -> Self {
         ash::vk::Offset2D {
             x: mev.x(),
             y: mev.y(),
@@ -710,14 +710,41 @@ impl AshFrom<Offset2> for ash::vk::Offset2D {
     }
 }
 
-impl AshFrom<Offset3> for ash::vk::Offset3D {
+impl AshFrom<Offset3<i32>> for ash::vk::Offset3D {
     #[inline]
-    fn ash_from(mev: Offset3) -> Self {
+    fn ash_from(mev: Offset3<i32>) -> Self {
         ash::vk::Offset3D {
             x: mev.x(),
             y: mev.y(),
             z: mev.z(),
         }
+    }
+}
+
+impl<T> TryAshFrom<Offset2<T>> for ash::vk::Offset2D
+where
+    T: Copy + TryInto<i32>,
+{
+    #[inline]
+    fn try_ash_from(mev: Offset2<T>) -> Option<Self> {
+        Some(ash::vk::Offset2D {
+            x: mev.x().try_into().ok()?,
+            y: mev.y().try_into().ok()?,
+        })
+    }
+}
+
+impl<T> TryAshFrom<Offset3<T>> for ash::vk::Offset3D
+where
+    T: Copy + TryInto<i32>,
+{
+    #[inline]
+    fn try_ash_from(mev: Offset3<T>) -> Option<Self> {
+        Some(ash::vk::Offset3D {
+            x: mev.x().try_into().ok()?,
+            y: mev.y().try_into().ok()?,
+            z: mev.z().try_into().ok()?,
+        })
     }
 }
 

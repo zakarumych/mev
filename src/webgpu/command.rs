@@ -7,9 +7,9 @@ use crate::{
     AutoDeviceRepr,
     backend::from::IntoWgpu,
     generic::{
-        Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr,
-        Extent2, Extent3, LoadOp, Offset2, Offset3, PipelineStages, RenderPassDesc, StoreOp,
-        TlasBuildDesc,
+        Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent,
+        Extent2, Extent3, LoadOp, Offset2, Offset3, PipelineStages, PixelFormat, RenderPassDesc,
+        StoreOp, TexelShape, TlasBuildDesc,
     },
 };
 
@@ -22,6 +22,34 @@ use super::{
     render::RenderPipeline,
     surface::Frame,
 };
+
+/// Pads `shape`'s extent/resolved stride out to the 3 axes (element/row/
+/// plane) every native buffer<->image copy command needs, regardless of
+/// how many axes `shape` itself specifies (`N` is `1..=3` at these call
+/// sites). Any axis at or beyond `N` defaults to a tightly-packed value
+/// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives
+/// any unset axis).
+fn pad_shape_to_3<const N: usize>(shape: &TexelShape<N>) -> (Extent3<u32>, [usize; 3]) {
+    let resolved = shape.resolve();
+
+    let mut extent = [1u32; 3];
+    for i in 0..N {
+        extent[i] = shape.extent.0[i];
+    }
+
+    let mut out = [0usize; 3];
+    for i in 0..3 {
+        out[i] = if i < N {
+            resolved[i]
+        } else if i == 0 {
+            shape.format.block_size()
+        } else {
+            out[i - 1] * extent[i - 1] as usize
+        };
+    }
+
+    (Extent(extent), out)
+}
 
 pub struct CommandBuffer {
     pub(super) buffer: wgpu::CommandBuffer,
@@ -245,40 +273,57 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data));
     }
 
-    fn copy_buffer_to_buffer(
-        &mut self,
-        src: &Buffer,
-        src_offset: usize,
-        dst: &Buffer,
-        dst_offset: usize,
-        size: usize,
-    ) {
+    fn copy_buffer_to_buffer(&mut self, src: &impl AsBufferSlice, dst: &impl AsBufferSlice) {
+        let src = src.as_buffer_slice();
+        let dst = dst.as_buffer_slice();
+
+        assert_eq!(
+            src.size(),
+            dst.size(),
+            "copy_buffer_to_buffer requires src and dst to have the same size (mirrors slice::copy_from_slice)"
+        );
+
         self.encoder.copy_buffer_to_buffer(
-            src.wgpu(),
-            src_offset as u64,
-            dst.wgpu(),
-            dst_offset as u64,
-            size as u64,
+            src.buffer().wgpu(),
+            src.offset() as u64,
+            dst.buffer().wgpu(),
+            dst.offset() as u64,
+            src.size() as u64,
         );
     }
 
-    fn copy_buffer_to_image(
+    fn copy_buffer_to_image<const N: usize>(
         &mut self,
-        src: &Buffer,
-        src_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
+        src: &impl AsBufferSlice,
+        src_shape: TexelShape<N>,
         dst: &Image,
         dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
         layers: Range<u32>,
         level: u32,
     ) {
+        const {
+            assert!(
+                N >= 1 && N <= 3,
+                "copy_buffer_to_image: TexelShape rank must be 1..=3"
+            )
+        };
+
+        let src = src.as_buffer_slice();
+        let (extent, resolved) = pad_shape_to_3(&src_shape);
+
+        let block_size = dst.format().block_size();
+        assert_eq!(
+            resolved[0], block_size,
+            "copy_buffer_to_image: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
+        );
+        let bytes_per_line = resolved[1];
+        let bytes_per_plane = resolved[2];
+
         self.encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
-                buffer: src.wgpu(),
+                buffer: src.buffer().wgpu(),
                 layout: wgpu::TexelCopyBufferLayout {
-                    offset: src_offset as u64,
+                    offset: src.offset() as u64,
                     bytes_per_row: Some(bytes_per_line as u32),
                     rows_per_image: Some((bytes_per_plane / bytes_per_line) as u32),
                 },
@@ -344,18 +389,33 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline]
-    fn copy_image_to_buffer(
+    fn copy_image_to_buffer<const N: usize>(
         &mut self,
         src: &Image,
         src_offset: Offset3<u32>,
-        extent: Extent3<u32>,
         layers: Range<u32>,
         level: u32,
-        dst: &Buffer,
-        dst_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
+        dst: &impl AsBufferSlice,
+        dst_shape: TexelShape<N>,
     ) {
+        const {
+            assert!(
+                N >= 1 && N <= 3,
+                "copy_image_to_buffer: TexelShape rank must be 1..=3"
+            )
+        };
+
+        let dst = dst.as_buffer_slice();
+        let (extent, resolved) = pad_shape_to_3(&dst_shape);
+
+        let block_size = src.format().block_size();
+        assert_eq!(
+            resolved[0], block_size,
+            "copy_image_to_buffer: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
+        );
+        let bytes_per_line = resolved[1];
+        let bytes_per_plane = resolved[2];
+
         self.encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: src.wgpu_view().texture(),
@@ -368,9 +428,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: dst.wgpu(),
+                buffer: dst.buffer().wgpu(),
                 layout: wgpu::TexelCopyBufferLayout {
-                    offset: dst_offset as u64,
+                    offset: dst.offset() as u64,
                     bytes_per_row: Some(bytes_per_line as u32),
                     rows_per_image: Some((bytes_per_plane / bytes_per_line) as u32),
                 },

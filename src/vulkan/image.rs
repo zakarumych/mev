@@ -12,8 +12,8 @@ use hashbrown::{HashMap, hash_map::Entry};
 use parking_lot::Mutex;
 
 use crate::generic::{
-    ArgumentKind, Automatic, ImageExtent, ImageUsage, OutOfMemory, PixelFormat, Sampled, Storage,
-    Swizzle, ViewDesc,
+    ArgumentKind, Automatic, ImageArrayN, ImageExtent, ImageN, ImageUsage, OutOfMemory,
+    PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
 };
 
 use super::{
@@ -120,10 +120,8 @@ impl Image {
         let extent = extent.into();
         let desc = ViewDesc {
             format,
-            base_layer: 0,
-            layers,
-            base_level: 0,
-            levels,
+            layers: (0..layers).into(),
+            levels: (0..levels).into(),
             swizzle: Swizzle::IDENTITY,
         };
 
@@ -215,10 +213,8 @@ impl Image {
     ) -> Self {
         let desc = ViewDesc {
             format,
-            base_layer: 0,
-            layers,
-            base_level: 0,
-            levels,
+            layers: (0..layers).into(),
+            levels: (0..levels).into(),
             swizzle: Swizzle::IDENTITY,
         };
         Image {
@@ -244,68 +240,6 @@ impl Image {
     }
 
     #[inline]
-    pub(super) fn get_view(&self, device: &Device, desc: ViewDesc) -> Image {
-        if self.handle.is_null() || self.view.is_null() {
-            return Image {
-                handle: vk::Image::null(),
-                view: vk::ImageView::null(),
-                inner: Arc::new(Inner {
-                    data: self.inner.data.clone(),
-                    desc,
-                    extent: self.inner.extent,
-                    usage: self.inner.usage,
-                    owner: self.inner.owner.clone(),
-                }),
-            };
-        }
-
-        let desc = ViewDesc {
-            base_layer: desc.base_layer + self.inner.desc.base_layer,
-            base_level: desc.base_level + self.inner.desc.base_level,
-            ..desc
-        };
-
-        if self.inner.desc == desc {
-            return self.clone();
-        }
-
-        let view = match self.inner.data.views.lock().entry(desc) {
-            Entry::Occupied(entry) => entry.get().0,
-            Entry::Vacant(entry) => {
-                match device.new_image_view(self.handle, self.inner.extent.into_ash(), desc) {
-                    Ok((view, idx)) => entry.insert((view, idx)).0,
-                    Err(OutOfMemory) => {
-                        device.set_oom();
-                        return Image {
-                            handle: vk::Image::null(),
-                            view: vk::ImageView::null(),
-                            inner: Arc::new(Inner {
-                                data: self.inner.data.clone(),
-                                desc,
-                                extent: self.inner.extent,
-                                usage: self.inner.usage,
-                                owner: self.inner.owner.clone(),
-                            }),
-                        };
-                    }
-                }
-            }
-        };
-
-        Image {
-            handle: self.handle,
-            view,
-            inner: Arc::new(Inner {
-                data: self.inner.data.clone(),
-                desc,
-                extent: self.inner.extent,
-                usage: self.inner.usage,
-                owner: self.inner.owner.clone(),
-            }),
-        }
-    }
-
-    #[inline]
     pub(super) fn handle(&self) -> vk::Image {
         self.handle
     }
@@ -317,12 +251,22 @@ impl Image {
 
     #[inline]
     pub(super) fn base_layer(&self) -> u32 {
-        self.inner.desc.base_layer
+        self.inner.desc.layers.start
+    }
+
+    #[inline]
+    pub(super) fn layer_count(&self) -> u32 {
+        self.inner.desc.layers.end - self.inner.desc.layers.start
     }
 
     #[inline]
     pub(super) fn base_level(&self) -> u32 {
-        self.inner.desc.base_level
+        self.inner.desc.levels.start
+    }
+
+    #[inline]
+    pub(super) fn level_count(&self) -> u32 {
+        self.inner.desc.levels.end - self.inner.desc.levels.start
     }
 }
 
@@ -342,12 +286,14 @@ impl crate::traits::Image for Image {
 
     #[inline]
     fn layers(&self) -> u32 {
-        self.inner.desc.layers
+        let layers = self.inner.desc.layers;
+        layers.end - layers.start
     }
 
     #[inline]
     fn levels(&self) -> u32 {
-        self.inner.desc.levels
+        let levels = self.inner.desc.levels;
+        levels.end - levels.start
     }
 
     #[inline]
@@ -357,7 +303,73 @@ impl crate::traits::Image for Image {
 
     #[inline]
     fn view(&self, device: &Device, desc: ViewDesc) -> Image {
-        self.get_view(device, desc)
+        let levels_start = desc.levels.start + self.inner.desc.levels.start;
+        let levels_end = desc.levels.end + self.inner.desc.levels.start;
+        let layers_start = desc.layers.start + self.inner.desc.layers.start;
+        let layers_end = desc.layers.end + self.inner.desc.layers.start;
+
+        assert!(levels_end <= self.inner.data.levels);
+        assert!(layers_end <= self.inner.data.layers);
+
+        let desc = ViewDesc {
+            levels: (levels_start..levels_end).into(),
+            layers: (layers_start..layers_end).into(),
+            ..desc
+        };
+
+        if self.handle.is_null() || self.view.is_null() {
+            let base_level = desc.levels.start + self.inner.desc.levels.start;
+            return Image {
+                handle: vk::Image::null(),
+                view: vk::ImageView::null(),
+                inner: Arc::new(Inner {
+                    data: self.inner.data.clone(),
+                    desc,
+                    extent: self.inner.data.extent.at_level(base_level),
+                    usage: self.inner.usage,
+                    owner: self.inner.owner.clone(),
+                }),
+            };
+        }
+
+        if self.inner.desc == desc {
+            return self.clone();
+        }
+
+        let view = match self.inner.data.views.lock().entry(desc) {
+            Entry::Occupied(entry) => entry.get().0,
+            Entry::Vacant(entry) => {
+                match device.new_image_view(self.handle, self.inner.extent.into_ash(), desc) {
+                    Ok((view, idx)) => entry.insert((view, idx)).0,
+                    Err(OutOfMemory) => {
+                        device.set_oom();
+                        return Image {
+                            handle: vk::Image::null(),
+                            view: vk::ImageView::null(),
+                            inner: Arc::new(Inner {
+                                data: self.inner.data.clone(),
+                                desc,
+                                extent: self.inner.data.extent.at_level(desc.levels.start),
+                                usage: self.inner.usage,
+                                owner: self.inner.owner.clone(),
+                            }),
+                        };
+                    }
+                }
+            }
+        };
+
+        Image {
+            handle: self.handle,
+            view,
+            inner: Arc::new(Inner {
+                data: self.inner.data.clone(),
+                desc,
+                extent: self.inner.data.extent.at_level(desc.levels.start),
+                usage: self.inner.usage,
+                owner: self.inner.owner.clone(),
+            }),
+        }
     }
 
     #[inline]
@@ -435,3 +447,33 @@ impl ArgumentsField<Storage> for Image {
         refs.add_image(self.clone());
     }
 }
+
+macro_rules! forward_image_arguments_field {
+    ($ty:ident, $marker:ident) => {
+        impl<const D: usize> ArgumentsField<$marker> for $ty<D> {
+            const KIND: ArgumentKind = <Image as ArgumentsField<$marker>>::KIND;
+            const SIZE: Option<NonZero<usize>> = <Image as ArgumentsField<$marker>>::SIZE;
+            const OFFSET: usize = <Image as ArgumentsField<$marker>>::OFFSET;
+            const STRIDE: usize = <Image as ArgumentsField<$marker>>::STRIDE;
+
+            type Update = <Image as ArgumentsField<$marker>>::Update;
+
+            #[inline]
+            fn update(&self) -> Self::Update {
+                <Image as ArgumentsField<$marker>>::update(self.as_image())
+            }
+
+            #[inline]
+            fn add_refs(&self, refs: &mut Refs) {
+                <Image as ArgumentsField<$marker>>::add_refs(self.as_image(), refs)
+            }
+        }
+    };
+}
+
+forward_image_arguments_field!(ImageN, Automatic);
+forward_image_arguments_field!(ImageN, Sampled);
+forward_image_arguments_field!(ImageN, Storage);
+forward_image_arguments_field!(ImageArrayN, Automatic);
+forward_image_arguments_field!(ImageArrayN, Sampled);
+forward_image_arguments_field!(ImageArrayN, Storage);

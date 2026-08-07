@@ -17,8 +17,8 @@ use objc2_metal::{
 use crate::{
     ImageUsage,
     generic::{
-        ArgumentKind, Automatic, ComponentSwizzle, Extent1, Extent2, Extent3, ImageExtent,
-        OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
+        ArgumentKind, Automatic, ComponentSwizzle, Extent1, Extent2, Extent3, ImageArrayN,
+        ImageExtent, ImageN, OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
     },
 };
 
@@ -264,3 +264,46 @@ impl ArgumentsField<Storage> for Image {
         }
     }
 }
+
+macro_rules! forward_image_arguments_field {
+    ($ty:ident, $marker:ident) => {
+        impl<const D: usize> ArgumentsField<$marker> for $ty<D> {
+            const KIND: ArgumentKind = <Image as ArgumentsField<$marker>>::KIND;
+            const SIZE: Option<NonZero<usize>> = <Image as ArgumentsField<$marker>>::SIZE;
+
+            #[inline(always)]
+            fn bind_vertex(
+                &self,
+                slot: u32,
+                encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+            ) {
+                <Image as ArgumentsField<$marker>>::bind_vertex(self.as_image(), slot, encoder)
+            }
+
+            #[inline(always)]
+            fn bind_fragment(
+                &self,
+                slot: u32,
+                encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
+            ) {
+                <Image as ArgumentsField<$marker>>::bind_fragment(self.as_image(), slot, encoder)
+            }
+
+            #[inline(always)]
+            fn bind_compute(
+                &self,
+                slot: u32,
+                encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>,
+            ) {
+                <Image as ArgumentsField<$marker>>::bind_compute(self.as_image(), slot, encoder)
+            }
+        }
+    };
+}
+
+forward_image_arguments_field!(ImageN, Automatic);
+forward_image_arguments_field!(ImageN, Sampled);
+forward_image_arguments_field!(ImageN, Storage);
+forward_image_arguments_field!(ImageArrayN, Automatic);
+forward_image_arguments_field!(ImageArrayN, Sampled);
+forward_image_arguments_field!(ImageArrayN, Storage);

@@ -154,7 +154,7 @@ impl TriangleApp {
         encoder.init_image(
             mev::PipelineStages::empty(),
             mev::PipelineStages::COLOR_OUTPUT,
-            frame.image(),
+            frame.image().as_image(),
         );
 
         {
@@ -181,13 +181,14 @@ impl TriangleApp {
             let mut render = encoder.render(mev::RenderPassDesc {
                 name: "main",
                 color_attachments: &[
-                    mev::AttachmentDesc::new(frame.image()).clear(mev::ClearColor::DARK_GRAY)
+                    mev::AttachmentDesc::new(frame.image().as_image())
+                        .clear(mev::ClearColor::DARK_GRAY)
                 ],
                 depth_stencil_attachment: None,
             });
 
-            render.with_viewport(mev::Offset3::ZERO, target_extent.into_3d().cast_as_f32());
-            render.with_scissor(mev::Offset2::ZERO, target_extent.into_2d());
+            render.with_viewport(mev::Offset3::ZERO, target_extent.to_3d().cast_as_f32());
+            render.with_scissor(mev::Offset2::ZERO, target_extent.to_2d());
             render.with_pipeline(pipeline);
             render.with_arguments(
                 0,

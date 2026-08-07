@@ -3,7 +3,7 @@ use std::fmt;
 use crate::{
     ColorSpace, Extent2, ImageUsage, PresentMode,
     backend::from::{TryFromWgpu, TryIntoWgpu, TryWgpuInto},
-    generic::{PixelFormat, SurfaceError},
+    generic::{Image2D, ImageN, PixelFormat, SurfaceError},
 };
 
 use super::{
@@ -160,20 +160,23 @@ impl crate::traits::Surface for Surface {
 
         let image = Image::new(view, 1, 1);
 
-        Ok(Frame { texture, image })
+        Ok(Frame {
+            texture,
+            image: ImageN::new_unchecked(image),
+        })
     }
 }
 
 pub struct Frame {
     pub(super) texture: wgpu::SurfaceTexture,
-    image: Image,
+    image: Image2D,
 }
 
 impl crate::traits::Resource for Frame {}
 
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {
-    fn image(&self) -> &Image {
+    fn image(&self) -> &Image2D {
         &self.image
     }
 }

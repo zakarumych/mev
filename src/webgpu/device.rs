@@ -8,9 +8,9 @@ use crate::{
     ArgumentGroupLayout, PixelFormat,
     backend::from::{IntoWgpu, TryIntoWgpu, TryWgpuFrom, WgpuFrom},
     generic::{
-        BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageExtent,
-        LibraryDesc, LibraryInput, PipelineError, RenderPipelineDesc, SamplerDesc, ShaderLanguage,
-        ShaderLibraryError, SurfaceError, TlasDesc,
+        BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageDims,
+        ImageExtent, ImageUsage, LibraryDesc, LibraryInput, PipelineError, RenderPipelineDesc,
+        SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc,
     },
 };
 
@@ -347,14 +347,18 @@ impl crate::traits::Device for Device {
         Buffer::new(buffer)
     }
 
-    fn new_image(&self, desc: ImageDesc) -> Image {
-        let (dimension, size) = match desc.extent {
+    fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {
+        desc.dims.validate();
+        let extent = desc.dims.extent();
+        let layers = desc.dims.layers();
+
+        let (dimension, size) = match extent {
             ImageExtent::D1(e) => (
                 wgpu::TextureDimension::D1,
                 wgpu::Extent3d {
                     width: e.width(),
                     height: 1,
-                    depth_or_array_layers: desc.layers,
+                    depth_or_array_layers: layers,
                 },
             ),
             ImageExtent::D2(e) => (
@@ -362,7 +366,7 @@ impl crate::traits::Device for Device {
                 wgpu::Extent3d {
                     width: e.width(),
                     height: e.height(),
-                    depth_or_array_layers: desc.layers,
+                    depth_or_array_layers: layers,
                 },
             ),
             ImageExtent::D3(e) => (
@@ -395,10 +399,10 @@ impl crate::traits::Device for Device {
             base_mip_level: 0,
             mip_level_count: Some(desc.levels),
             base_array_layer: 0,
-            array_layer_count: Some(desc.layers),
+            array_layer_count: Some(layers),
         });
 
-        Image::new(view, desc.layers, desc.levels)
+        T::wrap(Image::new(view, layers, desc.levels))
     }
 
     fn new_sampler(&self, desc: SamplerDesc) -> Sampler {

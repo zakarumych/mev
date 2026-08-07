@@ -33,7 +33,7 @@ impl crate::traits::Device for Device {
         todo!()
     }
 
-    fn new_image(&self, desc: crate::ImageDesc) -> crate::backend::Image {
+    fn new_image<T: crate::ImageDims>(&self, desc: crate::ImageDesc<T>) -> T::Image {
         todo!()
     }
 

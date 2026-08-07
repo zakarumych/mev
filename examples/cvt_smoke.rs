@@ -5,11 +5,11 @@
 //! isolation, then each `Cvt` op family, asserting results on the CPU
 //! after reading buffers back.
 
-use mev::kernels::cvt::{Axis, AxisMap, AxisSwizzle, Cvt};
+use mev::kernels::{Axis, AxisMap, AxisSwizzle, Cvt};
 use mev::{
     AddressMode, Arguments, Buffer, BufferInitDesc, BufferUsage, ComputePipelineDesc, DeviceDesc,
-    Extent1, Extent2, Extent3, Features, Filter, LibraryDesc, LibraryInput, Offset3,
-    PipelineStages, PixelFormat, Swizzle, VertexFormat,
+    Extent1, Extent2, Extent3, Features, Filter, LibraryDesc, LibraryInput, PipelineStages,
+    PixelFormat, Swizzle, TexelShape, VertexFormat,
 };
 
 #[derive(Arguments)]
@@ -22,7 +22,7 @@ struct AtomicSmokeArguments {
 /// Standalone smoke test for the masked-atomic `atomicAnd`/`atomicOr`
 /// sub-word buffer-write pattern `Cvt`'s buffer encode path relies on,
 /// run through naga's actual SPIR-V lowering and this machine's Vulkan
-/// backend (not just compiled — executed and checked).
+/// backend (not just compiled - executed and checked).
 fn atomic_smoke_test(device: &mev::Device, queue: &mut mev::Queue) {
     let code = r#"
 @group(0) @binding(0) var<storage, read_write> buf: array<atomic<u32>>;
@@ -103,15 +103,9 @@ fn test_cross_kind_unorm8_to_uint8(device: &mev::Device, queue: &mut mev::Queue,
     cvt.buffer_to_buffer::<1, 1>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Unorm8.into(),
-        [1],
-        Extent1::new(1),
+        TexelShape::new(VertexFormat::Unorm8.into(), Extent1::new(1)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(1),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1)),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -148,15 +142,9 @@ fn test_transpose_mirror_2d(device: &mev::Device, queue: &mut mev::Queue, cvt: &
     cvt.buffer_to_buffer::<2, 2>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 2],
-        Extent2::new(2, 2),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(2, 2)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 2],
-        Extent2::new(2, 2),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(2, 2)),
         axes,
         Swizzle::IDENTITY,
     );
@@ -187,15 +175,9 @@ fn test_diagonal_read(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
     cvt.buffer_to_buffer::<2, 1>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 3],
-        Extent2::new(3, 3),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 3)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(3),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(3)),
         axes,
         Swizzle::IDENTITY,
     );
@@ -226,15 +208,9 @@ fn test_splat(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
     cvt.buffer_to_buffer::<1, 2>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(3),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(3)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 3],
-        Extent2::new(3, 2),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
         axes,
         Swizzle::IDENTITY,
     );
@@ -322,14 +298,8 @@ fn test_image_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) 
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, extent).with_row_stride(2 * 4),
             &src_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
     }
@@ -341,14 +311,10 @@ fn test_image_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) 
         a: mev::ComponentMap::A,
     };
 
-    cvt.image_to_image(
+    cvt.image_to_image::<2, 2>(
         &mut encoder,
         &src_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         &dst_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         AxisSwizzle::IDENTITY,
         swizzle,
     );
@@ -358,14 +324,8 @@ fn test_image_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) 
         copy.barrier(PipelineStages::COMPUTE_SHADER, PipelineStages::TRANSFER);
         copy.copy_image_to_buffer(
             &dst_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
             &readback,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, extent).with_row_stride(2 * 4),
         );
     }
 
@@ -457,26 +417,16 @@ fn test_image_to_image_srgb_dst(device: &mev::Device, queue: &mut mev::Queue, cv
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, extent).with_row_stride(2 * 4),
             &src_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COLOR_OUTPUT);
     }
 
-    cvt.image_to_image(
+    cvt.image_to_image::<2, 2>(
         &mut encoder,
         &src_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         &dst_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -486,14 +436,8 @@ fn test_image_to_image_srgb_dst(device: &mev::Device, queue: &mut mev::Queue, cv
         copy.barrier(PipelineStages::COLOR_OUTPUT, PipelineStages::TRANSFER);
         copy.copy_image_to_buffer(
             &dst_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
             &readback,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Srgb, extent).with_row_stride(2 * 4),
         );
     }
 
@@ -591,30 +535,20 @@ fn test_image_to_image_srgb_dst_resample(device: &mev::Device, queue: &mut mev::
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, src_extent).with_row_stride(2 * 4),
             &src_image,
-            mev::Offset3::ZERO,
-            src_extent.to_3d(),
-            0..1,
-            0,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COLOR_OUTPUT);
     }
 
-    cvt.image_to_image_resample(
+    cvt.image_to_image_resample::<2, 2>(
         &mut encoder,
         &src_image,
-        Offset3::ZERO,
-        src_extent.to_3d(),
         &dst_image,
-        Offset3::ZERO,
-        dst_extent.to_3d(),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
         Filter::Nearest,
-        [AddressMode::ClampToEdge; 3],
+        [AddressMode::ClampToEdge; 2],
     );
 
     {
@@ -622,14 +556,8 @@ fn test_image_to_image_srgb_dst_resample(device: &mev::Device, queue: &mut mev::
         copy.barrier(PipelineStages::COLOR_OUTPUT, PipelineStages::TRANSFER);
         copy.copy_image_to_buffer(
             &dst_image,
-            mev::Offset3::ZERO,
-            dst_extent.to_3d(),
-            0..1,
-            0,
             &readback,
-            0,
-            4 * 4,
-            4 * 4 * 4,
+            TexelShape::new(PixelFormat::Rgba8Srgb, dst_extent).with_row_stride(4 * 4),
         );
     }
 
@@ -706,17 +634,11 @@ fn test_buffer_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt)
         &dst_image,
     );
 
-    cvt.buffer_to_image(
+    cvt.buffer_to_image::<3, 2>(
         &mut encoder,
         &src,
-        0,
-        PixelFormat::Rgba8Unorm,
-        2 * 4,
-        2 * 2 * 4,
-        extent.to_3d(),
+        TexelShape::new(PixelFormat::Rgba8Unorm, extent.to_3d()),
         &dst_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -726,14 +648,8 @@ fn test_buffer_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt)
         copy.barrier(PipelineStages::COMPUTE_SHADER, PipelineStages::TRANSFER);
         copy.copy_image_to_buffer(
             &dst_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
             &readback,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, extent).with_row_stride(2 * 4),
         );
     }
 
@@ -779,29 +695,17 @@ fn test_image_to_buffer(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt)
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, extent).with_row_stride(2 * 4),
             &src_image,
-            mev::Offset3::ZERO,
-            extent.to_3d(),
-            0..1,
-            0,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
     }
 
-    cvt.image_to_buffer(
+    cvt.image_to_buffer::<2, 3>(
         &mut encoder,
         &src_image,
-        Offset3::ZERO,
-        extent.to_3d(),
         &dst,
-        0,
-        PixelFormat::Rgba8Unorm,
-        2 * 4,
-        2 * 2 * 4,
-        extent.to_3d(),
+        TexelShape::new(PixelFormat::Rgba8Unorm, extent.to_3d()),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -838,14 +742,10 @@ fn test_extent_mismatch_panics(device: &mev::Device, queue: &mut mev::Queue, cvt
 
     let mut encoder = queue.new_command_encoder();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        cvt.image_to_image(
+        cvt.image_to_image::<2, 2>(
             &mut encoder,
             &src_image,
-            Offset3::ZERO,
-            mev::Extent2::new(2, 2).to_3d(),
             &dst_image,
-            Offset3::ZERO,
-            mev::Extent2::new(4, 4).to_3d(),
             AxisSwizzle::IDENTITY,
             Swizzle::IDENTITY,
         );
@@ -922,30 +822,20 @@ fn test_image_to_image_resample(device: &mev::Device, queue: &mut mev::Queue, cv
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            0,
-            2 * 4,
-            2 * 2 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, src_extent).with_row_stride(2 * 4),
             &src_image,
-            mev::Offset3::ZERO,
-            src_extent.to_3d(),
-            0..1,
-            0,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
     }
 
-    cvt.image_to_image_resample(
+    cvt.image_to_image_resample::<2, 2>(
         &mut encoder,
         &src_image,
-        Offset3::ZERO,
-        src_extent.to_3d(),
         &dst_image,
-        Offset3::ZERO,
-        dst_extent.to_3d(),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
         Filter::Nearest,
-        [AddressMode::ClampToEdge; 3],
+        [AddressMode::ClampToEdge; 2],
     );
 
     {
@@ -953,14 +843,8 @@ fn test_image_to_image_resample(device: &mev::Device, queue: &mut mev::Queue, cv
         copy.barrier(PipelineStages::COMPUTE_SHADER, PipelineStages::TRANSFER);
         copy.copy_image_to_buffer(
             &dst_image,
-            mev::Offset3::ZERO,
-            dst_extent.to_3d(),
-            0..1,
-            0,
             &readback,
-            0,
-            4 * 4,
-            4 * 4 * 4,
+            TexelShape::new(PixelFormat::Rgba8Unorm, dst_extent).with_row_stride(4 * 4),
         );
     }
 
@@ -1009,15 +893,9 @@ fn test_buffer_to_buffer_resample(device: &mev::Device, queue: &mut mev::Queue, 
     cvt.buffer_to_buffer_resample::<1, 1>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(2),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(2)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(4),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(4)),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
         [AddressMode::ClampToEdge; 1],
@@ -1056,17 +934,11 @@ fn test_buffer_to_image_resample_linear_panics(
 
     let mut encoder = queue.new_command_encoder();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        cvt.buffer_to_image_resample(
+        cvt.buffer_to_image_resample::<3, 2>(
             &mut encoder,
             &src,
-            0,
-            PixelFormat::Rgba8Unorm,
-            2 * 4,
-            2 * 2 * 4,
-            mev::Extent2::new(2, 2).to_3d(),
+            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2).to_3d()),
             &dst_image,
-            Offset3::ZERO,
-            mev::Extent2::new(2, 2).to_3d(),
             AxisSwizzle::IDENTITY,
             Swizzle::IDENTITY,
             Filter::Linear,
@@ -1089,7 +961,7 @@ fn test_buffer_to_image_resample_linear_panics(
 /// The tiled non-atomic dispatch processes 4 destination elements per
 /// thread; a destination element count that isn't a multiple of 4
 /// exercises the tail-block bounds check within the tight chain (group 1
-/// covers only element 4 of `{4,5,6,7}` — sub-ids 1..4 in that group must
+/// covers only element 4 of `{4,5,6,7}` - sub-ids 1..4 in that group must
 /// be skipped, not read/written out of bounds).
 fn test_tail_block_non_multiple_of_4(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
     let src_data = [10u8, 20, 30, 40, 50];
@@ -1100,15 +972,9 @@ fn test_tail_block_non_multiple_of_4(device: &mev::Device, queue: &mut mev::Queu
     cvt.buffer_to_buffer::<1, 1>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(5),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(5)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1],
-        Extent1::new(5),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(5)),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -1128,7 +994,7 @@ fn test_tail_block_non_multiple_of_4(device: &mev::Device, queue: &mut mev::Queu
 }
 
 /// A 2D destination with an explicitly padded row stride (rows tight,
-/// planes word-aligned with a gap — the exact scenario the tight/aligned
+/// planes word-aligned with a gap - the exact scenario the tight/aligned
 /// dispatch distinction exists for). The destination is pre-filled with a
 /// sentinel byte so padding bytes, which no thread should ever touch, are
 /// directly observable in the readback alongside the real, correctly
@@ -1142,15 +1008,12 @@ fn test_padded_dst_stride_sentinel(device: &mev::Device, queue: &mut mev::Queue,
     cvt.buffer_to_buffer::<2, 2>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 3],
-        Extent2::new(3, 2),
+        TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
         &dst,
-        0,
-        VertexFormat::Uint8.into(),
-        [1, 4],
-        Extent2::new(3, 2),
+        TexelShape {
+            stride: [Some(1), Some(4)],
+            ..TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2))
+        },
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );
@@ -1171,7 +1034,7 @@ fn test_padded_dst_stride_sentinel(device: &mev::Device, queue: &mut mev::Queue,
 /// The two new destination-stride preconditions the tiled non-atomic
 /// dispatch's safety argument depends on must panic (before any GPU work)
 /// rather than silently produce wrong output: (a) `dst_stride[0] >=
-/// byte_size` — `stride == 0` slips past the older `stride %
+/// byte_size` - `stride == 0` slips past the older `stride %
 /// component_byte_size == 0` check (`0 % x == 0`) but is a real aliasing
 /// hazard; (b) a stride that is neither word-aligned nor tight against its
 /// predecessor ("bad", unsupported).
@@ -1190,15 +1053,12 @@ fn test_new_dst_stride_preconditions_panic(
             cvt.buffer_to_buffer::<1, 1>(
                 &mut encoder,
                 &src,
-                0,
-                VertexFormat::Uint8.into(),
-                [1],
-                Extent1::new(1),
+                TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1)),
                 &dst,
-                0,
-                VertexFormat::Uint8.into(),
-                [0],
-                Extent1::new(1),
+                TexelShape {
+                    stride: [Some(0)],
+                    ..TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1))
+                },
                 AxisSwizzle::IDENTITY,
                 Swizzle::IDENTITY,
             );
@@ -1218,15 +1078,12 @@ fn test_new_dst_stride_preconditions_panic(
             cvt.buffer_to_buffer::<2, 2>(
                 &mut encoder,
                 &src,
-                0,
-                VertexFormat::Uint8.into(),
-                [1, 3],
-                Extent2::new(3, 2),
+                TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
                 &dst,
-                0,
-                VertexFormat::Uint8.into(),
-                [1, 5],
-                Extent2::new(3, 2),
+                TexelShape {
+                    stride: [Some(1), Some(5)],
+                    ..TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2))
+                },
                 AxisSwizzle::IDENTITY,
                 Swizzle::IDENTITY,
             );
@@ -1244,10 +1101,10 @@ fn test_new_dst_stride_preconditions_panic(
 }
 
 /// Rank-4 destination with every axis classified `aligned` (`T == 0`,
-/// fully packed `Uint32` — dense word-sized strides are always
+/// fully packed `Uint32` - dense word-sized strides are always
 /// word-aligned, so `aligned` wins over the numerically tight equality at
 /// every level): axis 0 rides `gid.x`, axis 1 rides `gid.y` directly, and
-/// axes 2/3 fold together into `gid.z` — the one dispatch shape that needs
+/// axes 2/3 fold together into `gid.z` - the one dispatch shape that needs
 /// a secondary flat unravel, only reachable at rank 4. Exercises that shape
 /// on real hardware, not just its generated-WGSL structure.
 fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
@@ -1256,22 +1113,15 @@ fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, c
     let src = make_readback_buffer(device, &src_data, "rank4_src");
     let dst = make_readback_buffer(device, &vec![0u8; 64], "rank4_dst");
 
-    let strides = [4usize, 8, 16, 32];
-    let extent = mev::Extent::<u32, 4>([2, 2, 2, 2]);
+    let extent = mev::Extent([2, 2, 2, 2]);
 
     let mut encoder = queue.new_command_encoder();
     cvt.buffer_to_buffer::<4, 4>(
         &mut encoder,
         &src,
-        0,
-        VertexFormat::Uint32.into(),
-        strides,
-        extent,
+        TexelShape::new(VertexFormat::Uint32.into(), extent),
         &dst,
-        0,
-        VertexFormat::Uint32.into(),
-        strides,
-        extent,
+        TexelShape::new(VertexFormat::Uint32.into(), extent),
         AxisSwizzle::IDENTITY,
         Swizzle::IDENTITY,
     );

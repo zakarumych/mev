@@ -22,9 +22,10 @@ use crate::{
     BufferUsage,
     generic::{
         BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError, Features,
-        ImageDesc, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PrimitiveTopology,
-        RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, Swizzle,
-        TlasDesc, VertexStepMode, ViewDesc, WriteMask, parse_shader,
+        ImageDesc, ImageDims, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
+        PixelFormat, PrimitiveTopology, RenderPipelineDesc, SamplerDesc, ShaderLanguage,
+        ShaderLibraryError, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc, WriteMask,
+        parse_shader,
     },
 };
 
@@ -1047,10 +1048,10 @@ impl Device {
                     .subresource_range(
                         vk::ImageSubresourceRange::default()
                             .aspect_mask(format_aspect(desc.format))
-                            .base_mip_level(desc.base_level)
-                            .level_count(desc.levels)
-                            .base_array_layer(desc.base_layer)
-                            .layer_count(desc.layers),
+                            .base_mip_level(desc.levels.start)
+                            .level_count(desc.levels.end - desc.levels.start)
+                            .base_array_layer(desc.layers.start)
+                            .layer_count(desc.layers.end - desc.layers.start),
                     )
                     .components(desc.swizzle.into_ash()),
                 None,
@@ -1608,24 +1609,22 @@ impl crate::traits::Device for Device {
         buffer
     }
 
-    fn new_image(&self, desc: ImageDesc) -> Image {
+    fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {
+        desc.dims.validate();
+        let extent = desc.dims.extent();
+        let layers = desc.dims.layers();
+
         if self.inner.error_state.is_some() {
-            return Image::null(
-                desc.extent,
-                desc.format,
-                desc.usage,
-                desc.layers,
-                desc.levels,
-            );
+            return T::wrap(Image::null(extent, desc.format, desc.usage, layers, desc.levels));
         }
 
         let result = unsafe {
             self.inner.device.create_image(
                 &vk::ImageCreateInfo::default()
-                    .image_type(desc.extent.into_ash())
+                    .image_type(extent.into_ash())
                     .format(desc.format.try_into_ash().expect("Unsupported format"))
-                    .extent(desc.extent.into_ash())
-                    .array_layers(desc.layers)
+                    .extent(extent.into_ash())
+                    .array_layers(layers)
                     .mip_levels(desc.levels)
                     .samples(vk::SampleCountFlags::TYPE_1)
                     .tiling(vk::ImageTiling::OPTIMAL)
@@ -1641,13 +1640,7 @@ impl crate::traits::Device for Device {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                     self.set_oom();
-                    return Image::null(
-                        desc.extent,
-                        desc.format,
-                        desc.usage,
-                        desc.layers,
-                        desc.levels,
-                    );
+                    return T::wrap(Image::null(extent, desc.format, desc.usage, layers, desc.levels));
                 }
                 _ => unexpected_error(err),
             },
@@ -1678,13 +1671,13 @@ impl crate::traits::Device for Device {
                     gpu_alloc::AllocationError::OutOfHostMemory => handle_host_oom(),
                     _ => {
                         self.set_oom();
-                        return Image::null(
-                            desc.extent,
+                        return T::wrap(Image::null(
+                            extent,
                             desc.format,
                             desc.usage,
-                            desc.layers,
+                            layers,
                             desc.levels,
-                        );
+                        ));
                     }
                 }
             }
@@ -1706,13 +1699,13 @@ impl crate::traits::Device for Device {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                     self.set_oom();
-                    return Image::null(
-                        desc.extent,
+                    return T::wrap(Image::null(
+                        extent,
                         desc.format,
                         desc.usage,
-                        desc.layers,
+                        layers,
                         desc.levels,
-                    );
+                    ));
                 }
                 _ => unexpected_error(err),
             }
@@ -1720,13 +1713,11 @@ impl crate::traits::Device for Device {
 
         let result = self.new_image_view(
             image,
-            desc.extent.into_ash(),
+            extent.into_ash(),
             ViewDesc {
                 format: desc.format,
-                base_layer: 0,
-                layers: desc.layers,
-                base_level: 0,
-                levels: desc.levels,
+                layers: (0..layers).into(),
+                levels: (0..desc.levels).into(),
                 swizzle: Swizzle::IDENTITY,
             },
         );
@@ -1740,13 +1731,13 @@ impl crate::traits::Device for Device {
                 }
 
                 self.set_oom();
-                return Image::null(
-                    desc.extent,
+                return T::wrap(Image::null(
+                    extent,
                     desc.format,
                     desc.usage,
-                    desc.layers,
+                    layers,
                     desc.levels,
-                );
+                ));
             }
         };
 
@@ -1755,19 +1746,19 @@ impl crate::traits::Device for Device {
 
         let idx = self.inner.images.lock().insert(image);
 
-        Image::new(
+        T::wrap(Image::new(
             self.weak(),
             image,
             view,
             view_idx,
-            desc.extent,
+            extent,
             desc.format,
             desc.usage,
-            desc.layers,
+            layers,
             desc.levels,
             block,
             idx,
-        )
+        ))
     }
 
     fn new_sampler(&self, desc: SamplerDesc) -> Sampler {

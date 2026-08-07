@@ -20,10 +20,10 @@ use objc2_quartz_core::CAMetalLayer;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::generic::{
-    ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, Extent3, ImageDesc,
-    ImageExtent, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, RenderPipelineDesc,
-    SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc, VertexStepMode,
-    parse_shader,
+    ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageDims,
+    ImageExtent, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PixelFormat,
+    RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc,
+    VertexStepMode, parse_shader,
 };
 
 use super::{
@@ -365,11 +365,15 @@ impl crate::traits::Device for Device {
         Buffer::new(buffer, desc.usage)
     }
 
-    fn new_image(&self, desc: ImageDesc) -> Image {
+    fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {
+        desc.dims.validate();
+        let extent = desc.dims.extent();
+        let layers = desc.dims.layers();
+
         let mdesc = MTLTextureDescriptor::new();
         mdesc.setPixelFormat(desc.format.try_into_metal().unwrap());
         unsafe {
-            match desc.extent {
+            match extent {
                 ImageExtent::D1(extent) => {
                     mdesc.setTextureType(MTLTextureType::Type1D);
                     mdesc.setWidth(extent.width() as _);
@@ -387,7 +391,7 @@ impl crate::traits::Device for Device {
                 }
             }
             mdesc.setMipmapLevelCount(desc.levels as _);
-            mdesc.setArrayLength(desc.layers as _);
+            mdesc.setArrayLength(layers as _);
             mdesc.setSampleCount(1);
         }
         mdesc.setUsage(desc.usage.into_metal());
@@ -398,7 +402,7 @@ impl crate::traits::Device for Device {
             .newTextureWithDescriptor(&mdesc)
             .expect("Failed to create texture");
         texture.setLabel(Some(&NSString::from_str(desc.name)));
-        Image::new(texture)
+        T::wrap(Image::new(texture))
     }
 
     fn new_sampler(&self, desc: SamplerDesc) -> Sampler {

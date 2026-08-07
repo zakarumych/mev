@@ -10,7 +10,7 @@ use crate::{
         from::{AshFrom, FromAsh, IntoAsh, TryFromAsh, TryIntoAsh},
         new_semaphore, unknown_error,
     },
-    generic::{Extent2, ImageExtent, SurfaceError, Swizzle, ViewDesc},
+    generic::{Extent2, Image2D, ImageExtent, ImageN, SurfaceError, Swizzle, ViewDesc},
 };
 
 use super::{
@@ -493,10 +493,9 @@ impl Surface {
             }
 
             let image = self.device.new_image(ImageDesc {
-                extent: ImageExtent::D2(Extent2::new(1, 1)),
+                dims: ImageExtent::D2(Extent2::new(1, 1)),
                 format: use_format.format.try_ash_into().unwrap(),
                 usage: self.preferred_usage.unwrap_or(ImageUsage::empty()),
-                layers: 1,
                 levels: 1,
                 name: "fake-swapchain-image",
             });
@@ -610,10 +609,8 @@ impl Surface {
                     vk::ImageViewType::TYPE_2D,
                     ViewDesc {
                         format: use_mev_format,
-                        base_layer: 0,
-                        layers: 1,
-                        base_level: 0,
-                        levels: 1,
+                        layers: (0..1).into(),
+                        levels: (0..1).into(),
                         swizzle: Swizzle::IDENTITY,
                     },
                 )
@@ -871,7 +868,7 @@ impl crate::traits::Surface for Surface {
 
                     return Ok(Frame {
                         swapchain: swapchain.handle,
-                        image: image.clone(),
+                        image: ImageN::new_unchecked(image.clone()),
                         idx,
                         acquire: *acquire,
                         present,
@@ -889,7 +886,7 @@ impl crate::traits::Surface for Surface {
 
                     let frame = Frame {
                         swapchain: vk::SwapchainKHR::null(),
-                        image: fake.image.clone(),
+                        image: ImageN::new_unchecked(fake.image.clone()),
                         idx: 0,
                         acquire: if fake.frame_idx > 0 {
                             fake.semaphore
@@ -909,7 +906,7 @@ impl crate::traits::Surface for Surface {
 }
 
 pub struct Frame {
-    pub(super) image: Image,
+    pub(super) image: Image2D,
     pub(super) swapchain: vk::SwapchainKHR,
     pub(super) idx: u32,
     pub(super) acquire: vk::Semaphore,
@@ -939,7 +936,7 @@ impl crate::traits::Resource for Frame {}
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {
     #[inline]
-    fn image(&self) -> &Image {
+    fn image(&self) -> &Image2D {
         &self.image
     }
 }

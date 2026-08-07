@@ -3,7 +3,7 @@ use std::{fmt, hash, num::NonZero, rc::Rc};
 use crate::{
     ArgumentKind, Automatic, Sampled, Storage,
     backend::from::{TryIntoWgpu, TryWgpuInto},
-    generic::{ImageDesc, ImageExtent, ImageUsage, PixelFormat, ViewDesc},
+    generic::{ImageArrayN, ImageDesc, ImageExtent, ImageN, ImageUsage, PixelFormat, ViewDesc},
 };
 
 use super::{
@@ -84,7 +84,9 @@ impl crate::traits::Image for Image {
     }
 
     fn extent(&self) -> ImageExtent {
-        (self.view.texture().dimension(), self.view.texture().size()).wgpu_into()
+        let base: ImageExtent = (self.view.texture().dimension(), self.view.texture().size())
+            .wgpu_into();
+        base.at_level(self.base_level)
     }
 
     fn layers(&self) -> u32 {
@@ -154,3 +156,23 @@ impl ArgumentsField<Storage> for Image {
         wgpu::BindingResource::TextureView(self.wgpu_view())
     }
 }
+
+macro_rules! forward_image_arguments_field {
+    ($ty:ident, $marker:ident) => {
+        impl<const D: usize> ArgumentsField<$marker> for $ty<D> {
+            const KIND: ArgumentKind = <Image as ArgumentsField<$marker>>::KIND;
+            const SIZE: Option<NonZero<usize>> = <Image as ArgumentsField<$marker>>::SIZE;
+
+            fn as_binding_resource(&self) -> wgpu::BindingResource<'_> {
+                <Image as ArgumentsField<$marker>>::as_binding_resource(self.as_image())
+            }
+        }
+    };
+}
+
+forward_image_arguments_field!(ImageN, Automatic);
+forward_image_arguments_field!(ImageN, Sampled);
+forward_image_arguments_field!(ImageN, Storage);
+forward_image_arguments_field!(ImageArrayN, Automatic);
+forward_image_arguments_field!(ImageArrayN, Sampled);
+forward_image_arguments_field!(ImageArrayN, Storage);

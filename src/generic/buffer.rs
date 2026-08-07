@@ -5,7 +5,7 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::backend::Buffer;
+use crate::{Extent, HasW, HasX, HasY, HasZ, PixelFormat, Stride, backend::Buffer};
 
 bitflags::bitflags! {
     /// Buffer usage flags.
@@ -385,5 +385,111 @@ where
     #[inline(always)]
     fn as_buffer_slice(&self) -> BufferSlice<'_> {
         (*self).as_buffer_slice()
+    }
+}
+
+/// Describes how texels of a given `PixelFormat` are laid out in memory:
+/// per-axis byte stride and element extent, up to 4 dimensions.
+///
+/// `stride[i]` is the byte pitch spanning everything at rank `< i`
+/// (row-major), not merely that axis's own size - e.g. `stride[1]` (row) is
+/// the distance from the start of one row to the next, which is the byte
+/// span of a full row of elements; `stride[2]` (plane) is the distance
+/// between depth slices, the byte span of a full plane of rows; etc.
+///
+/// Each axis's stride may be left unset (`None`) - see
+/// [`TexelShape::byte_stride`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TexelShape<const N: usize> {
+    pub format: PixelFormat,
+    pub stride: [Option<usize>; N],
+    pub extent: Extent<N>,
+}
+
+impl HasX for TexelShape<1> {}
+impl HasX for TexelShape<2> {}
+impl HasY for TexelShape<2> {}
+impl HasX for TexelShape<3> {}
+impl HasY for TexelShape<3> {}
+impl HasZ for TexelShape<3> {}
+impl HasX for TexelShape<4> {}
+impl HasY for TexelShape<4> {}
+impl HasZ for TexelShape<4> {}
+impl HasW for TexelShape<4> {}
+
+impl<const N: usize> TexelShape<N> {
+    /// Creates a new `TexelShape` with the given pixel format and extent.
+    /// All strides are unset, use [`TexelShape::with_stride`] or named methods to set some of them.
+    pub fn new(format: PixelFormat, extent: Extent<N>) -> Self {
+        TexelShape {
+            format,
+            stride: [None; N],
+            extent,
+        }
+    }
+
+    /// Sets every dimension stride explicitly.
+    pub fn with_stride(mut self, stride: Stride<N>) -> Self {
+        self.stride = stride.0.map(Some);
+        self
+    }
+
+    /// Sets the stride for a specific dimension.
+    pub fn with_dimension_stride<const D: usize>(mut self, stride: usize) -> Self {
+        const {
+            assert!(D < N, "dimension index out of bounds");
+        }
+        self.stride[D] = Some(stride);
+        self
+    }
+
+    /// Sets the stride between texels.
+    pub fn with_texel_stride(mut self, stride: usize) -> Self
+    where
+        Self: HasX,
+    {
+        self.stride[0] = Some(stride);
+        self
+    }
+
+    /// Sets the stride between rows.
+    pub fn with_row_stride(mut self, stride: usize) -> Self
+    where
+        Self: HasY,
+    {
+        self.stride[1] = Some(stride);
+        self
+    }
+
+    /// Sets the stride between planes.
+    pub fn with_plane_stride(mut self, stride: usize) -> Self
+    where
+        Self: HasZ,
+    {
+        self.stride[2] = Some(stride);
+        self
+    }
+
+    /// Sets the stride between volumes.
+    pub fn with_volume_stride(mut self, stride: usize) -> Self
+    where
+        Self: HasW,
+    {
+        self.stride[3] = Some(stride);
+        self
+    }
+
+    /// Returns byte strides.
+    /// For dimensions with unset stride, computes the tightly-packed default.
+    pub fn byte_stride(&self) -> [usize; N] {
+        let mut out = [0usize; N];
+        for i in 0..N {
+            out[i] = match self.stride[i] {
+                Some(s) => s,
+                None if i == 0 => self.format.block_size(),
+                None => out[i - 1] * self.extent.0[i - 1] as usize,
+            };
+        }
+        out
     }
 }

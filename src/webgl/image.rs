@@ -10,7 +10,7 @@ use web_sys::{WebGl2RenderingContext as GL, WebGlTexture};
 use crate::{
     generic::{
         ArgumentKind, Automatic, BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferUsage,
-        DeviceError, Storage, Uniform,
+        DeviceError, ImageArrayN, ImageN, Storage, Uniform,
     },
     ImageExtent, ImageUsage, PixelFormat, RenderCommandEncoder,
 };
@@ -120,6 +120,29 @@ impl ArgumentsField<Automatic> for Image {
         encoder.bind_buffer_base(GL::UNIFORM_BUFFER, slot, Some(self.inner.buffer.clone()));
     }
 }
+
+// `Image` only implements `ArgumentsField<Automatic>` in this backend (there
+// is no `ArgumentsField<Sampled>`/`ArgumentsField<Storage>` for `Image`
+// here), so only the `Automatic` forwarding impls are added below.
+macro_rules! forward_image_arguments_field {
+    ($ty:ident, $marker:ident) => {
+        impl<const D: usize> ArgumentsField<$marker> for $ty<D> {
+            const KIND: ArgumentKind = <Image as ArgumentsField<$marker>>::KIND;
+            const SIZE: usize = <Image as ArgumentsField<$marker>>::SIZE;
+
+            fn bind_vertex(&self, slot: u32, encoder: &mut RenderCommandEncoder) {
+                <Image as ArgumentsField<$marker>>::bind_vertex(self.as_image(), slot, encoder)
+            }
+
+            fn bind_fragment(&self, slot: u32, encoder: &mut RenderCommandEncoder) {
+                <Image as ArgumentsField<$marker>>::bind_fragment(self.as_image(), slot, encoder)
+            }
+        }
+    };
+}
+
+forward_image_arguments_field!(ImageN, Automatic);
+forward_image_arguments_field!(ImageArrayN, Automatic);
 
 impl ArgumentsField<Uniform> for Buffer {
     const KIND: ArgumentKind = ArgumentKind::UniformBuffer;

@@ -1,22 +1,15 @@
-use std::{
-    fmt::Debug,
-    hash::Hash,
-    ops::{Deref, Range},
-};
+use std::{fmt::Debug, hash::Hash, ops::Deref, range::Range};
 
 use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use crate::{
-    PresentMode,
-    generic::{
-        Arguments, AsBufferSlice, AutoDeviceRepr, BlasBuildDesc, BlasDesc, BufferDesc,
-        BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, Capabilities, ColorSpace,
-        ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, ImageDesc,
-        ImageExtent, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError, PipelineStages,
-        PixelFormat, RenderPassDesc, RenderPipelineDesc, SamplerDesc, Shader, ShaderLibraryError,
-        SurfaceError, TlasBuildDesc, TlasDesc, ViewDesc,
-    },
+use crate::generic::{
+    Arguments, AsBufferSlice, AutoDeviceRepr, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
+    BufferMappedRange, BufferMappedRangeMut, Capabilities, ColorSpace, ComputePipelineDesc,
+    DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc, ImageDims,
+    ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError,
+    PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc, SamplerDesc,
+    Shader, ShaderLibraryError, SurfaceError, TexelShape, TlasBuildDesc, TlasDesc, ViewDesc,
 };
 
 // match_backend! {
@@ -43,7 +36,7 @@ with_webgpu! {
     pub trait Resource: Sized + 'static {}
 }
 
-pub trait Instance: Debug + Resource {
+pub(crate) trait Instance: Debug + Resource {
     fn capabilities(&self) -> &Capabilities;
 
     fn new_device(
@@ -95,7 +88,7 @@ pub trait Instance: Debug + Resource {
     }
 }
 
-pub trait Device: Clone + Debug + Eq + Resource {
+pub(crate) trait Device: Clone + Debug + Eq + Resource {
     /// Create a new shader library.
     fn new_shader_library(
         &self,
@@ -121,7 +114,7 @@ pub trait Device: Clone + Debug + Eq + Resource {
     fn new_buffer_init(&self, desc: BufferInitDesc) -> crate::backend::Buffer;
 
     /// Create a new image.
-    fn new_image(&self, desc: ImageDesc) -> crate::backend::Image;
+    fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image;
 
     /// Create a new sampler.
     fn new_sampler(&self, desc: SamplerDesc) -> crate::backend::Sampler;
@@ -146,7 +139,7 @@ pub trait Device: Clone + Debug + Eq + Resource {
     fn new_tlas(&self, desc: TlasDesc) -> crate::backend::Tlas;
 }
 
-pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
+pub(crate) trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     /// Get the device associated with this queue.
     fn device(&self) -> &crate::backend::Device;
 
@@ -195,7 +188,7 @@ pub trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     fn last_finished_epoch(&self) -> u64;
 }
 
-pub trait SyncCommandEncoder {
+pub(crate) trait SyncCommandEncoder {
     /// Synchronizes the access to the resources.
     /// Commands in `before` stages of subsequent commands will be
     /// executed only after commands in `after` stages of previous commands
@@ -211,11 +204,11 @@ pub trait SyncCommandEncoder {
         &mut self,
         after: PipelineStages,
         before: PipelineStages,
-        image: &crate::backend::Image,
+        image: impl AsRef<crate::backend::Image>,
     );
 }
 
-pub trait CommandEncoder: SyncCommandEncoder {
+pub(crate) trait CommandEncoder: SyncCommandEncoder {
     /// Presents the frame to the surface.
     fn present(&mut self, frame: crate::backend::Frame, after: PipelineStages);
 
@@ -234,7 +227,7 @@ pub trait CommandEncoder: SyncCommandEncoder {
     fn render(&mut self, desc: RenderPassDesc) -> crate::backend::RenderCommandEncoder<'_>;
 }
 
-pub trait ComputeCommandEncoder: SyncCommandEncoder {
+pub(crate) trait ComputeCommandEncoder: SyncCommandEncoder {
     /// Sets the current compute pipeline.
     fn with_pipeline(&mut self, pipeline: &crate::backend::ComputePipeline);
 
@@ -248,7 +241,7 @@ pub trait ComputeCommandEncoder: SyncCommandEncoder {
     fn dispatch(&mut self, groups: Extent3);
 }
 
-pub trait CopyCommandEncoder: SyncCommandEncoder {
+pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
     /// Fills the buffer slice with the given byte.
     fn fill_buffer(&mut self, slice: impl AsBufferSlice, byte: u8);
 
@@ -264,58 +257,56 @@ pub trait CopyCommandEncoder: SyncCommandEncoder {
     /// Copies bytes from src buffer to dst buffer.
     fn copy_buffer_to_buffer(
         &mut self,
-        src: &crate::backend::Buffer,
-        src_offset: usize,
-        dst: &crate::backend::Buffer,
-        dst_offset: usize,
-        size: usize,
+        src: &impl crate::AsBufferSlice,
+        dst: &impl crate::AsBufferSlice,
     );
 
-    /// Copies pixels from src buffer to dst image.
-    fn copy_buffer_to_image(
+    /// Copies pixels from `src` (a buffer region, described by `src_shape`)
+    /// into `dst`. `N` (1..=3) is how many axes `src_shape` actually
+    /// specifies: `N == 1` gives just an element stride/format (row and
+    /// plane pitch are both inferred tightly-packed from `src_shape.extent`
+    /// and `dst`'s pixel format), `N == 2` additionally gives a row stride
+    /// (plane pitch is inferred), and `N == 3` gives row and plane strides
+    /// explicitly. Within whatever `src_shape` does specify, any individual
+    /// axis's stride may still be left unset for a tightly-packed default.
+    ///
+    /// `src_shape`'s element (axis 0 / X) stride is NOT actually configurable
+    /// here: native buffer<->image copy commands (Vulkan/Metal/wgpu) always
+    /// read a row's elements tightly packed - if set, it must equal `dst`'s
+    /// pixel format's own tightly-packed element size (asserted; panics
+    /// otherwise, in all build profiles). For a transfer with padded/strided
+    /// elements, use `Cvt` instead - its software-addressed compute kernel
+    /// supports arbitrary per-axis byte strides.
+    fn copy_buffer_to_image<const N: usize>(
         &mut self,
-        src: &crate::backend::Buffer,
-        src_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
-        dst: &crate::backend::Image,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        src: &impl crate::AsBufferSlice,
+        shape: TexelShape<N>,
+        dst: &impl crate::AsImageSlice<N>,
     );
 
     /// Copies pixels from src image to dst image.
-    fn copy_image_region(
+    fn copy_image_region<const N: usize>(
         &mut self,
-        src: &crate::backend::Image,
-        src_level: u32,
-        src_base_layer: u32,
-        src_offset: Offset3<u32>,
-        dst: &crate::backend::Image,
-        dst_level: u32,
-        dst_base_layer: u32,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: u32,
+        src: &impl crate::AsImageSlice<N>,
+        dst: &impl crate::AsImageSlice<N>,
     );
 
-    /// Copies pixels from src image to dst buffer.
-    fn copy_image_to_buffer(
+    /// Copies pixels from `src` into `dst` (a buffer region, described by
+    /// `dst_shape`). Same `dst_shape` semantics as `copy_buffer_to_image`,
+    /// including `N` (1..=3) meaning how many axes `dst_shape` specifies
+    /// (row/plane stride may be left unset, or omitted entirely via a
+    /// smaller `N`, for tight packing; element stride, if set, must equal
+    /// `src`'s pixel format's tight element size, asserted in all build
+    /// profiles; use `Cvt` for padded/strided elements).
+    fn copy_image_to_buffer<const N: usize>(
         &mut self,
-        src: &crate::backend::Image,
-        src_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: Range<u32>,
-        level: u32,
-        dst: &crate::backend::Buffer,
-        dst_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
+        src: &impl crate::AsImageSlice<N>,
+        dst: &impl crate::AsBufferSlice,
+        shape: TexelShape<N>,
     );
 }
 
-pub trait RenderCommandEncoder {
+pub(crate) trait RenderCommandEncoder {
     /// Sets the current render pipeline.
     fn with_pipeline(&mut self, pipeline: &crate::backend::RenderPipeline);
 
@@ -336,13 +327,18 @@ pub trait RenderCommandEncoder {
     fn bind_index_buffer(&mut self, slice: impl AsBufferSlice);
 
     /// Draws primitives.
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>);
+    fn draw(&mut self, vertices: impl Into<Range<u32>>, instances: impl Into<Range<u32>>);
 
     /// Draws primitives with indices.
-    fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>);
+    fn draw_indexed(
+        &mut self,
+        vertex_offset: i32,
+        indices: impl Into<Range<u32>>,
+        instances: impl Into<Range<u32>>,
+    );
 }
 
-pub trait AccelerationStructureCommandEncoder {
+pub(crate) trait AccelerationStructureCommandEncoder {
     fn build_blas(
         &mut self,
         blas: &crate::backend::Blas,
@@ -358,7 +354,7 @@ pub trait AccelerationStructureCommandEncoder {
     );
 }
 
-pub trait Surface: Resource {
+pub(crate) trait Surface: Resource {
     /// List of available formats for the surface.
     /// It may change during the lifetime of the surface, so it is not recommended to cache the result.
     fn available_formats(&self) -> &[(PixelFormat, ColorSpace)];
@@ -385,11 +381,11 @@ pub trait Surface: Resource {
     fn next_frame(&mut self) -> Result<crate::backend::Frame, SurfaceError>;
 }
 
-pub trait Frame: Resource {
-    fn image(&self) -> &crate::backend::Image;
+pub(crate) trait Frame: Resource {
+    fn image(&self) -> &Image2D;
 }
 
-pub trait Image: Clone + Debug + Eq + Hash + Resource {
+pub(crate) trait Image: Clone + Debug + Eq + Hash + Resource {
     /// Returns the pixel format of the image.
     fn format(&self) -> PixelFormat;
 
@@ -406,7 +402,7 @@ pub trait Image: Clone + Debug + Eq + Hash + Resource {
     fn usage(&self) -> ImageUsage;
 
     /// Returns new image that is a view into this image.
-    fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> crate::backend::Image;
+    fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Self;
 
     /// Returns `true` if the image is not shared,
     /// meaning that there are no other references to the image
@@ -420,7 +416,7 @@ pub trait Image: Clone + Debug + Eq + Hash + Resource {
     fn detached(&self) -> bool;
 }
 
-pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
+pub(crate) trait Buffer: Clone + Debug + Eq + Hash + Resource {
     /// Returns the buffer size in bytes.
     fn size(&self) -> usize;
 
@@ -476,7 +472,7 @@ pub trait Buffer: Clone + Debug + Eq + Hash + Resource {
     fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError>;
 }
 
-pub trait Library: Clone + Debug + Resource {
+pub(crate) trait Library: Clone + Debug + Resource {
     /// Returns shader entry point.
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a>;
 }

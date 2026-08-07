@@ -1,15 +1,16 @@
-use std::ops::Range;
+use std::range::Range;
 
 use ash::vk;
 use ash::vk::Handle;
 use smallvec::SmallVec;
 
 use crate::{
-    AutoDeviceRepr,
+    AsImageSlice, AutoDeviceRepr,
+    backend::from::TryIntoAsh,
     generic::{
-        Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr,
-        Extent2, Extent3, LoadOp, Offset2, Offset3, PipelineStages, RenderPassDesc, StoreOp,
-        TlasBuildDesc,
+        Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent,
+        Extent2, Extent3, LoadOp, Offset2, Offset3, PipelineStages, PixelFormat, RenderPassDesc,
+        StoreOp, TexelShape, TlasBuildDesc,
     },
 };
 
@@ -18,6 +19,34 @@ use super::{
     access::access_for_stages, format_aspect, from::IntoAsh, handle_host_oom,
     layout::PipelineLayout, refs::Refs, unexpected_error,
 };
+
+/// Pads `shape`'s extent/resolved stride out to the 3 axes (element/row/
+/// plane) every native buffer<->image copy command needs, regardless of
+/// how many axes `shape` itself specifies (`N` is `1..=3` at these call
+/// sites). Any axis at or beyond `N` defaults to a tightly-packed value
+/// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives
+/// any unset axis).
+fn pad_shape_to_3<const N: usize>(shape: &TexelShape<N>) -> (Extent3<u32>, [usize; 3]) {
+    let resolved = shape.byte_stride();
+
+    let mut extent = [1u32; 3];
+    for i in 0..N {
+        extent[i] = shape.extent.0[i];
+    }
+
+    let mut out = [0usize; 3];
+    for i in 0..3 {
+        out[i] = if i < N {
+            resolved[i]
+        } else if i == 0 {
+            shape.format.block_size()
+        } else {
+            out[i - 1] * extent[i - 1] as usize
+        };
+    }
+
+    (Extent(extent), out)
+}
 
 pub struct CommandBuffer {
     pub(super) handle: vk::CommandBuffer,
@@ -66,10 +95,25 @@ impl CommandEncoder {
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[inline(always)]
     fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
+        if self.handle.is_null() {
+            return;
+        }
+
         barrier(&self.device, self.handle, after, before);
     }
+
     #[inline(always)]
-    fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
+    fn init_image(
+        &mut self,
+        after: PipelineStages,
+        before: PipelineStages,
+        image: impl AsRef<Image>,
+    ) {
+        let image = image.as_ref();
+        if self.handle.is_null() || image.handle().is_null() {
+            return;
+        }
+
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
@@ -94,7 +138,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
                         .dst_access_mask(ash::vk::AccessFlags::empty())
                         .old_layout(ash::vk::ImageLayout::GENERAL)
                         .new_layout(frame.present_layout())
-                        .image(frame.image().handle())
+                        .image(frame.image().as_image().handle())
                         .subresource_range(vk::ImageSubresourceRange {
                             aspect_mask: vk::ImageAspectFlags::COLOR,
                             base_mip_level: 0,
@@ -104,7 +148,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
                         })],
                 )
             }
-            self.refs.add_image(frame.image().clone());
+            self.refs.add_image(frame.image().as_image().clone());
         }
         self.present.push(frame);
     }
@@ -331,10 +375,18 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     }
 
     #[inline]
-    fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
-        if self.handle.is_null() {
+    fn init_image(
+        &mut self,
+        after: PipelineStages,
+        before: PipelineStages,
+        image: impl AsRef<Image>,
+    ) {
+        let image = image.as_ref();
+
+        if self.handle.is_null() || image.handle().is_null() {
             return;
         }
+
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
@@ -571,7 +623,10 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     #[inline]
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
+    fn draw(&mut self, vertices: impl Into<Range<u32>>, instances: impl Into<Range<u32>>) {
+        let vertices = vertices.into();
+        let instances = instances.into();
+
         if self.handle.is_null() {
             return;
         }
@@ -587,7 +642,15 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     #[inline]
-    fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
+    fn draw_indexed(
+        &mut self,
+        vertex_offset: i32,
+        indices: impl Into<Range<u32>>,
+        instances: impl Into<Range<u32>>,
+    ) {
+        let indices = indices.into();
+        let instances = instances.into();
+
         if self.handle.is_null() {
             return;
         }
@@ -621,10 +684,18 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline]
-    fn init_image(&mut self, after: PipelineStages, before: PipelineStages, image: &Image) {
+    fn init_image(
+        &mut self,
+        after: PipelineStages,
+        before: PipelineStages,
+        image: impl AsRef<Image>,
+    ) {
+        let image = image.as_ref();
+
         if self.handle.is_null() || image.handle().is_null() {
             return;
         }
+
         image_barrier(&self.device, self.handle, after, before, image);
         self.refs.add_image(image.clone());
     }
@@ -635,206 +706,238 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
     fn copy_buffer_to_buffer(
         &mut self,
-        src: &Buffer,
-        src_offset: usize,
-        dst: &Buffer,
-        dst_offset: usize,
-        size: usize,
+        src: &impl crate::AsBufferSlice,
+        dst: &impl crate::AsBufferSlice,
     ) {
-        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
+        let src = src.as_buffer_slice();
+        let dst = dst.as_buffer_slice();
+
+        assert_eq!(
+            src.size(),
+            dst.size(),
+            "copy_buffer_to_buffer requires src and dst to have the same size"
+        );
+
+        if self.handle.is_null()
+            || src.buffer().handle().is_null()
+            || dst.buffer().handle().is_null()
+        {
             return;
         }
 
-        self.refs.add_buffer(src.clone());
-        self.refs.add_buffer(dst.clone());
+        self.refs.add_buffer(src.buffer().clone());
+        self.refs.add_buffer(dst.buffer().clone());
 
         unsafe {
             self.device.ash().cmd_copy_buffer(
                 self.handle,
-                src.handle(),
-                dst.handle(),
+                src.buffer().handle(),
+                dst.buffer().handle(),
                 &[vk::BufferCopy {
-                    src_offset: src_offset as u64,
-                    dst_offset: dst_offset as u64,
-                    size: size as u64,
+                    src_offset: src.offset() as u64,
+                    dst_offset: dst.offset() as u64,
+                    size: src.size() as u64,
                 }],
             )
         }
     }
 
     #[inline]
-    fn copy_buffer_to_image(
+    fn copy_buffer_to_image<const N: usize>(
         &mut self,
-        src: &Buffer,
-        src_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
-        dst: &Image,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        src: &impl AsBufferSlice,
+        shape: TexelShape<N>,
+        dst: &impl AsImageSlice<N>,
     ) {
-        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
-            return;
-        }
+        const { assert!(N >= 1 && N <= 3, "copy_buffer_to_image: Rank must be 1..=3") };
 
-        let block_size = dst.format().block_size();
-        let block_extent = dst.format().block_extent();
+        let src = src.as_buffer_slice();
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
+
+        // The buffer's texel extent must match image slice extent.
+        assert_eq!(
+            shape.extent, dst.extent,
+            "copy_buffer_to_image: TexelShape extent must match the destination image slice extent"
+        );
+
+        let block_size = dst.image.format().block_size();
+        let block_extent = dst.image.format().block_extent();
+        let (extent, resolved) = pad_shape_to_3(&shape);
+        assert_eq!(
+            resolved[0], block_size,
+            "copy_buffer_to_image: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
+        );
+        let bytes_per_line = resolved[1];
+        let bytes_per_plane = resolved[2];
 
         debug_assert_eq!(bytes_per_line % block_size, 0);
         debug_assert_eq!(bytes_per_plane % block_size, 0);
         let buffer_row_length = (bytes_per_line / block_size) as u32 * block_extent.width();
         let buffer_image_height = (bytes_per_plane / bytes_per_line) as u32 * block_extent.height();
 
-        self.refs.add_buffer(src.clone());
-        self.refs.add_image(dst.clone());
+        if self.handle.is_null() || src.buffer().handle().is_null() || dst.image.handle().is_null()
+        {
+            return;
+        }
+
+        self.refs.add_buffer(src.buffer().clone());
+        self.refs.add_image(dst.image.clone().into_owned());
+
+        let dst_offset = dst.offset.to_3d();
 
         unsafe {
             self.device.ash().cmd_copy_buffer_to_image(
                 self.handle,
-                src.handle(),
-                dst.handle(),
+                src.buffer().handle(),
+                dst.image.handle(),
                 ash::vk::ImageLayout::GENERAL,
                 &[vk::BufferImageCopy {
-                    buffer_offset: src_offset as u64,
+                    buffer_offset: src.offset() as u64,
                     buffer_row_length,
                     buffer_image_height,
                     image_subresource: vk::ImageSubresourceLayers {
-                        aspect_mask: format_aspect(dst.format()),
-                        mip_level: dst.base_level() + level,
-                        base_array_layer: dst.base_layer() + layers.start,
-                        layer_count: layers.end - layers.start,
+                        aspect_mask: format_aspect(dst.image.format()),
+                        mip_level: dst.image.base_level() + dst.level,
+                        base_array_layer: dst.image.base_layer() + dst.layers.start,
+                        layer_count: dst.layers.end - dst.layers.start,
                     },
-                    image_offset: vk::Offset3D {
-                        x: dst_offset.x() as i32,
-                        y: dst_offset.y() as i32,
-                        z: dst_offset.z() as i32,
-                    },
-                    image_extent: vk::Extent3D {
-                        width: extent.width(),
-                        height: extent.height(),
-                        depth: extent.depth(),
-                    },
+                    image_offset: dst_offset
+                        .try_into_ash()
+                        .expect("copy_buffer_to_image: dst offset exceeds i32 range"),
+                    image_extent: extent.into_ash(),
                 }],
             )
         }
     }
 
     #[inline]
-    fn copy_image_region(
+    fn copy_image_region<const N: usize>(
         &mut self,
-        src: &Image,
-        src_level: u32,
-        src_base_layer: u32,
-        src_offset: Offset3<u32>,
-        dst: &Image,
-        dst_level: u32,
-        dst_base_layer: u32,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: u32,
+        src: &impl crate::AsImageSlice<N>,
+        dst: &impl crate::AsImageSlice<N>,
     ) {
-        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
+        let src = src.as_image_slice();
+        src.assert_fits_image();
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
+
+        assert_eq!(
+            src.extent, dst.extent,
+            "copy_image_region: source and destination image slices must have the same extent"
+        );
+
+        if self.handle.is_null() || src.image.handle().is_null() || dst.image.handle().is_null() {
             return;
         }
 
-        self.refs.add_image(src.clone());
-        self.refs.add_image(dst.clone());
+        self.refs.add_image(src.image.clone().into_owned());
+        self.refs.add_image(dst.image.clone().into_owned());
+
+        let src_offset = src.offset.to_3d();
+        let dst_offset = dst.offset.to_3d();
+        let extent = src.extent.to_3d();
+
         unsafe {
             self.device.ash().cmd_copy_image(
                 self.handle,
-                src.handle(),
+                src.image.handle(),
                 ash::vk::ImageLayout::GENERAL,
-                dst.handle(),
+                dst.image.handle(),
                 ash::vk::ImageLayout::GENERAL,
                 &[vk::ImageCopy {
                     src_subresource: vk::ImageSubresourceLayers {
-                        aspect_mask: format_aspect(src.format()),
-                        mip_level: src.base_level() + src_level,
-                        base_array_layer: src.base_layer() + src_base_layer,
-                        layer_count: layers,
+                        aspect_mask: format_aspect(src.image.format()),
+                        mip_level: src.image.base_level() + src.level,
+                        base_array_layer: src.image.base_layer() + src.layers.start,
+                        layer_count: src.layers.end - src.layers.start,
                     },
-                    src_offset: vk::Offset3D {
-                        x: src_offset.x() as i32,
-                        y: src_offset.y() as i32,
-                        z: src_offset.z() as i32,
-                    },
+                    src_offset: src_offset
+                        .try_into_ash()
+                        .expect("copy_image_region: src offset exceeds i32 range"),
                     dst_subresource: vk::ImageSubresourceLayers {
-                        aspect_mask: format_aspect(dst.format()),
-                        mip_level: dst.base_level() + dst_level,
-                        base_array_layer: dst.base_layer() + dst_base_layer,
-                        layer_count: layers,
+                        aspect_mask: format_aspect(dst.image.format()),
+                        mip_level: dst.image.base_level() + dst.level,
+                        base_array_layer: dst.image.base_layer() + dst.layers.start,
+                        layer_count: dst.layers.end - dst.layers.start,
                     },
-                    dst_offset: vk::Offset3D {
-                        x: dst_offset.x() as i32,
-                        y: dst_offset.y() as i32,
-                        z: dst_offset.z() as i32,
-                    },
-                    extent: vk::Extent3D {
-                        width: extent.width(),
-                        height: extent.height(),
-                        depth: extent.depth(),
-                    },
+                    dst_offset: dst_offset
+                        .try_into_ash()
+                        .expect("copy_image_region: dst offset exceeds i32 range"),
+                    extent: extent.into_ash(),
                 }],
             )
         }
     }
 
     #[inline]
-    fn copy_image_to_buffer(
+    fn copy_image_to_buffer<const N: usize>(
         &mut self,
-        src: &Image,
-        src_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: Range<u32>,
-        level: u32,
-        dst: &Buffer,
-        dst_offset: usize,
-        bytes_per_line: usize,
-        bytes_per_plane: usize,
+        src: &impl crate::AsImageSlice<N>,
+        dst: &impl crate::AsBufferSlice,
+        shape: TexelShape<N>,
     ) {
-        if self.handle.is_null() || src.handle().is_null() || dst.handle().is_null() {
-            return;
-        }
+        const {
+            assert!(
+                N >= 1 && N <= 3,
+                "copy_image_to_buffer: TexelShape rank must be 1..=3"
+            )
+        };
 
-        let block_size = src.format().block_size();
-        let block_extent = src.format().block_extent();
+        let src = src.as_image_slice();
+        src.assert_fits_image();
+        let dst = dst.as_buffer_slice();
+
+        assert_eq!(
+            shape.extent, src.extent,
+            "copy_image_to_buffer: TexelShape extent must match the source image slice extent"
+        );
+
+        let block_size = src.image.format().block_size();
+        let block_extent = src.image.format().block_extent();
+        let (extent, resolved) = pad_shape_to_3(&shape);
+        assert_eq!(
+            resolved[0], block_size,
+            "copy_image_to_buffer: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
+        );
+        let bytes_per_line = resolved[1];
+        let bytes_per_plane = resolved[2];
 
         debug_assert_eq!(bytes_per_line % block_size, 0);
         debug_assert_eq!(bytes_per_plane % block_size, 0);
         let buffer_row_length = (bytes_per_line / block_size) as u32 * block_extent.width();
         let buffer_image_height = (bytes_per_plane / bytes_per_line) as u32 * block_extent.height();
 
-        self.refs.add_image(src.clone());
-        self.refs.add_buffer(dst.clone());
+        if self.handle.is_null() || src.image.handle().is_null() || dst.buffer().handle().is_null()
+        {
+            return;
+        }
+
+        self.refs.add_image(src.image.clone().into_owned());
+        self.refs.add_buffer(dst.buffer().clone());
+
+        let src_offset = src.offset.to_3d();
 
         unsafe {
             self.device.ash().cmd_copy_image_to_buffer(
                 self.handle,
-                src.handle(),
+                src.image.handle(),
                 ash::vk::ImageLayout::GENERAL,
-                dst.handle(),
+                dst.buffer().handle(),
                 &[vk::BufferImageCopy {
-                    buffer_offset: dst_offset as u64,
+                    buffer_offset: dst.offset() as u64,
                     buffer_row_length,
                     buffer_image_height,
                     image_subresource: vk::ImageSubresourceLayers {
-                        aspect_mask: format_aspect(src.format()),
-                        mip_level: src.base_level() + level,
-                        base_array_layer: src.base_layer() + layers.start,
-                        layer_count: layers.end - layers.start,
+                        aspect_mask: format_aspect(src.image.format()),
+                        mip_level: src.image.base_level() + src.level,
+                        base_array_layer: src.image.base_layer() + src.layers.start,
+                        layer_count: src.layers.end - src.layers.start,
                     },
-                    image_offset: vk::Offset3D {
-                        x: src_offset.x() as i32,
-                        y: src_offset.y() as i32,
-                        z: src_offset.z() as i32,
-                    },
-                    image_extent: vk::Extent3D {
-                        width: extent.width(),
-                        height: extent.height(),
-                        depth: extent.depth(),
-                    },
+                    image_offset: src_offset
+                        .try_into_ash()
+                        .expect("copy_image_to_buffer: src offset exceeds i32 range"),
+                    image_extent: extent.into_ash(),
                 }],
             )
         }
@@ -995,9 +1098,9 @@ fn image_barrier(
                 .image(image.handle())
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask,
-                    base_mip_level: 0,
+                    base_mip_level: image.base_level(),
                     level_count: image.levels(),
-                    base_array_layer: 0,
+                    base_array_layer: image.base_layer(),
                     layer_count: image.layers(),
                 })],
         )

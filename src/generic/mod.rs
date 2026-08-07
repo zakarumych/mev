@@ -19,6 +19,8 @@ use std::{
     error::Error,
     fmt,
     mem::{ManuallyDrop, MaybeUninit},
+    ops::{Add, Sub},
+    process::Output,
 };
 
 pub use self::{
@@ -33,13 +35,17 @@ pub use self::{
     },
     buffer::{
         AsBufferSlice, BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut,
-        BufferRange, BufferSlice, BufferUsage,
+        BufferRange, BufferSlice, BufferUsage, TexelShape,
     },
     compute::ComputePipelineDesc,
     data::*,
     feature::Features,
     format::{ColorSpace, PixelFormat, VertexFormat},
-    image::{ComponentMap, ImageDesc, ImageExtent, ImageUsage, Swizzle, ViewDesc},
+    image::{
+        AsImageSlice, ComponentMap, Image1D, Image2D, Image3D, ImageArray1D, ImageArray2D,
+        ImageArray3D, ImageArrayN, ImageDesc, ImageDimensionMismatch, ImageDims, ImageExtent,
+        ImageN, ImageRegion, ImageSlice, ImageUsage, Swizzle, ViewDesc,
+    },
     instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
     queue::QueueFlags,
     render::{
@@ -114,8 +120,13 @@ impl fmt::Display for DeviceError {
 
 impl Error for DeviceError {}
 
+/// Trait for types that have an additive identity (zero).
 pub trait Zero {
     const ZERO: Self;
+}
+
+impl Zero for usize {
+    const ZERO: Self = 0;
 }
 
 impl Zero for u32 {
@@ -130,8 +141,13 @@ impl Zero for f32 {
     const ZERO: Self = 0.0;
 }
 
+/// Trait for types that have a multiplicative identity (one).
 pub trait One {
     const ONE: Self;
+}
+
+impl One for usize {
+    const ONE: Self = 1;
 }
 
 impl One for u32 {
@@ -146,215 +162,513 @@ impl One for f32 {
     const ONE: Self = 1.0;
 }
 
+/// Trait for multidimensional value that has at least dimension X.
+pub trait HasX {}
+
+/// Trait for multidimensional value that has at least dimension Y.
+pub trait HasY: HasX {}
+
+/// Trait for multidimensional value that has at least dimension Z.
+pub trait HasZ: HasY {}
+
+/// Trait for multidimensional value that has at least dimension W.
+pub trait HasW: HasZ {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Offset<T, const D: usize>(pub [T; D]);
+pub struct Offset<const D: usize, T = i32>(pub [T; D]);
 
-impl<T, const D: usize> Offset<T, D>
+impl<T> HasX for Offset<1, T> {}
+impl<T> HasX for Offset<2, T> {}
+impl<T> HasY for Offset<2, T> {}
+impl<T> HasX for Offset<3, T> {}
+impl<T> HasY for Offset<3, T> {}
+impl<T> HasZ for Offset<3, T> {}
+impl<T> HasX for Offset<4, T> {}
+impl<T> HasY for Offset<4, T> {}
+impl<T> HasZ for Offset<4, T> {}
+impl<T> HasW for Offset<4, T> {}
+
+impl<const D: usize, T> Offset<D, T>
 where
-    T: Zero,
+    T: Copy,
 {
-    pub const ZERO: Self = Self([T::ZERO; D]);
-}
-
-pub type Offset1<T = i32> = Offset<T, 1>;
-pub type Offset2<T = i32> = Offset<T, 2>;
-pub type Offset3<T = i32> = Offset<T, 3>;
-
-impl<T: Copy> Offset1<T> {
-    pub const fn new(x: T) -> Self {
-        Self([x])
-    }
-
-    pub const fn x(&self) -> T {
+    pub const fn x(&self) -> T
+    where
+        Self: HasX,
+    {
         self.0[0]
     }
 
-    pub const fn to_2d(&self) -> Offset2<T>
+    pub const fn y(&self) -> T
     where
-        T: Zero,
+        Self: HasY,
     {
-        let [x] = self.0;
-        Offset2::new(x, T::ZERO)
-    }
-
-    pub const fn to_3d(&self) -> Offset3<T>
-    where
-        T: Zero,
-    {
-        let [x] = self.0;
-        Offset3::new(x, T::ZERO, T::ZERO)
-    }
-}
-
-impl<T: Copy> Offset2<T> {
-    pub const fn new(x: T, y: T) -> Self {
-        Self([x, y])
-    }
-
-    pub const fn x(&self) -> T {
-        self.0[0]
-    }
-
-    pub const fn y(&self) -> T {
         self.0[1]
     }
 
-    pub const fn to_1d(&self) -> Offset1<T> {
-        let [x, _] = self.0;
-        Offset1::new(x)
-    }
-
-    pub const fn to_3d(&self) -> Offset3<T>
+    pub const fn z(&self) -> T
     where
-        T: Zero,
+        Self: HasZ,
     {
-        let [x, y] = self.0;
-        Offset3::new(x, y, T::ZERO)
-    }
-}
-
-impl<T: Copy> Offset3<T> {
-    pub const fn new(x: T, y: T, z: T) -> Self {
-        Self([x, y, z])
-    }
-
-    pub const fn x(&self) -> T {
-        self.0[0]
-    }
-
-    pub const fn y(&self) -> T {
-        self.0[1]
-    }
-
-    pub const fn z(&self) -> T {
         self.0[2]
     }
 
+    pub const fn w(&self) -> T
+    where
+        Self: HasW,
+    {
+        self.0[3]
+    }
+}
+
+impl<const D: usize, T> Offset<D, T>
+where
+    T: Copy + Zero,
+{
+    pub const ZERO: Self = Self([T::ZERO; D]);
+
     pub const fn to_1d(&self) -> Offset1<T> {
-        let [x, _, _] = self.0;
-        Offset1::new(x)
+        self.to_nd()
     }
 
     pub const fn to_2d(&self) -> Offset2<T> {
-        let [x, y, _] = self.0;
-        Offset2::new(x, y)
+        self.to_nd()
+    }
+
+    pub const fn to_3d(&self) -> Offset3<T> {
+        self.to_nd()
+    }
+
+    pub const fn to_4d(&self) -> Offset4<T> {
+        self.to_nd()
+    }
+
+    pub const fn to_nd<const N: usize>(&self) -> Offset<N, T> {
+        let mut array = [T::ZERO; N];
+        let mut i = 0;
+        while i < D && i < N {
+            array[i] = self.0[i];
+            i += 1;
+        }
+        Offset(array)
+    }
+
+    pub const fn from_1d(offset: Offset1<T>) -> Self {
+        offset.to_nd()
+    }
+
+    pub const fn from_2d(offset: Offset2<T>) -> Self {
+        offset.to_nd()
+    }
+
+    pub const fn from_3d(offset: Offset3<T>) -> Self {
+        offset.to_nd()
+    }
+
+    pub const fn from_4d(offset: Offset4<T>) -> Self {
+        offset.to_nd()
+    }
+
+    pub fn from_nd<const N: usize>(offset: Offset<N, T>) -> Self {
+        offset.to_nd()
+    }
+}
+
+impl<const D: usize, T> Offset<D, T>
+where
+    T: Zero + PartialOrd,
+{
+    /// Returns true if any of the offset components is negative.
+    #[inline(always)]
+    pub fn has_negative(&self) -> bool {
+        for i in 0..D {
+            if self.0[i] < T::ZERO {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Returns true if the offset fits in the given extent.
+    #[inline(always)]
+    pub fn fits_in(&self, other: &Extent<D, T>) -> bool {
+        for i in 0..D {
+            if self.0[i] > other.0[i] {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<const D: usize, T, U> Add<Offset<D, U>> for Offset<D, T>
+where
+    T: Add<U> + Copy,
+    U: Copy,
+{
+    type Output = Offset<D, <T as Add<U>>::Output>;
+
+    fn add(self, rhs: Offset<D, U>) -> Self::Output {
+        Offset(std::array::from_fn(|i| self.0[i] + rhs.0[i]))
+    }
+}
+
+impl<const D: usize, T, U> Sub<Offset<D, U>> for Offset<D, T>
+where
+    T: Sub<U> + Copy,
+    U: Copy,
+{
+    type Output = Offset<D, <T as Sub<U>>::Output>;
+
+    fn sub(self, rhs: Offset<D, U>) -> Self::Output {
+        Offset(std::array::from_fn(|i| self.0[i] - rhs.0[i]))
+    }
+}
+
+pub type Offset1<T = i32> = Offset<1, T>;
+pub type Offset2<T = i32> = Offset<2, T>;
+pub type Offset3<T = i32> = Offset<3, T>;
+pub type Offset4<T = i32> = Offset<4, T>;
+
+impl<T> Offset1<T> {
+    pub const fn new(x: T) -> Self {
+        Self([x])
+    }
+}
+
+impl<T> Offset2<T> {
+    pub const fn new(x: T, y: T) -> Self {
+        Self([x, y])
+    }
+}
+
+impl<T> Offset3<T> {
+    pub const fn new(x: T, y: T, z: T) -> Self {
+        Self([x, y, z])
+    }
+}
+
+impl<T> Offset4<T> {
+    pub const fn new(x: T, y: T, z: T, w: T) -> Self {
+        Self([x, y, z, w])
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Extent<T, const D: usize>(pub [T; D]);
+pub struct Extent<const D: usize, T = u32>(pub [T; D]);
 
-impl<T, const D: usize> Extent<T, D>
+impl<T> HasX for Extent<1, T> {}
+impl<T> HasX for Extent<2, T> {}
+impl<T> HasY for Extent<2, T> {}
+impl<T> HasX for Extent<3, T> {}
+impl<T> HasY for Extent<3, T> {}
+impl<T> HasZ for Extent<3, T> {}
+impl<T> HasX for Extent<4, T> {}
+impl<T> HasY for Extent<4, T> {}
+impl<T> HasZ for Extent<4, T> {}
+impl<T> HasW for Extent<4, T> {}
+
+impl<const D: usize, T> Extent<D, T>
 where
-    T: Zero,
+    T: Copy,
+{
+    pub const fn width(&self) -> T
+    where
+        Self: HasX,
+    {
+        self.0[0]
+    }
+
+    pub const fn height(&self) -> T
+    where
+        Self: HasY,
+    {
+        self.0[1]
+    }
+
+    pub const fn depth(&self) -> T
+    where
+        Self: HasZ,
+    {
+        self.0[2]
+    }
+
+    pub const fn hyper(&self) -> T
+    where
+        Self: HasW,
+    {
+        self.0[3]
+    }
+}
+
+impl<const D: usize, T> Extent<D, T>
+where
+    T: Copy + Zero,
 {
     pub const ZERO: Self = Self([T::ZERO; D]);
 }
 
-impl<T, const D: usize> Extent<T, D>
+impl<const D: usize, T> Extent<D, T>
 where
-    T: One,
+    T: Copy + One,
 {
     pub const ONE: Self = Self([T::ONE; D]);
-}
-
-pub type Extent1<T = u32> = Extent<T, 1>;
-pub type Extent2<T = u32> = Extent<T, 2>;
-pub type Extent3<T = u32> = Extent<T, 3>;
-
-impl<T: Copy> Extent1<T> {
-    pub const fn new(width: T) -> Self {
-        Self([width])
-    }
-
-    pub const fn width(&self) -> T {
-        self.0[0]
-    }
-
-    pub const fn to_2d(&self) -> Extent2<T>
-    where
-        T: One,
-    {
-        let [width] = self.0;
-        Extent2::new(width, T::ONE)
-    }
-
-    pub const fn to_3d(&self) -> Extent3<T>
-    where
-        T: One,
-    {
-        let [width] = self.0;
-        Extent3::new(width, T::ONE, T::ONE)
-    }
-}
-
-impl<T: Copy> Extent2<T> {
-    pub const fn new(width: T, height: T) -> Self {
-        Self([width, height])
-    }
-
-    pub const fn width(&self) -> T {
-        self.0[0]
-    }
-
-    pub const fn height(&self) -> T {
-        self.0[1]
-    }
 
     pub const fn to_1d(&self) -> Extent1<T> {
-        let [width, _] = self.0;
-        Extent1::new(width)
-    }
-
-    pub const fn to_3d(&self) -> Extent3<T>
-    where
-        T: One,
-    {
-        let [width, height] = self.0;
-        Extent3::new(width, height, T::ONE)
-    }
-}
-
-impl<T: Copy> Extent3<T> {
-    pub const fn new(width: T, height: T, depth: T) -> Self {
-        Self([width, height, depth])
-    }
-
-    pub const fn width(&self) -> T {
-        self.0[0]
-    }
-
-    pub const fn height(&self) -> T {
-        self.0[1]
-    }
-
-    pub const fn depth(&self) -> T {
-        self.0[2]
-    }
-
-    pub const fn to_1d(&self) -> Extent1<T> {
-        let [width, _, _] = self.0;
-        Extent1::new(width)
+        self.to_nd()
     }
 
     pub const fn to_2d(&self) -> Extent2<T> {
-        let [width, height, _] = self.0;
-        Extent2::new(width, height)
+        self.to_nd()
+    }
+
+    pub const fn to_3d(&self) -> Extent3<T> {
+        self.to_nd()
+    }
+
+    pub const fn to_4d(&self) -> Extent4<T> {
+        self.to_nd()
+    }
+
+    pub const fn to_nd<const N: usize>(&self) -> Extent<N, T> {
+        let mut array = [T::ONE; N];
+        let mut i = 0;
+        while i < D && i < N {
+            array[i] = self.0[i];
+            i += 1;
+        }
+        Extent(array)
+    }
+
+    pub const fn from_1d(extent: Extent1<T>) -> Self {
+        extent.to_nd()
+    }
+
+    pub const fn from_2d(extent: Extent2<T>) -> Self {
+        extent.to_nd()
+    }
+
+    pub const fn from_3d(extent: Extent3<T>) -> Self {
+        extent.to_nd()
+    }
+
+    pub const fn from_4d(extent: Extent4<T>) -> Self {
+        extent.to_nd()
+    }
+
+    pub fn from_nd<const N: usize>(extent: Extent<N, T>) -> Self {
+        extent.to_nd()
     }
 }
 
-impl<T, const D: usize> Offset<T, D> {
+impl<const D: usize, T> Extent<D, T>
+where
+    T: PartialOrd,
+{
+    #[inline(always)]
+    pub fn fits_in(&self, other: &Self) -> bool {
+        for i in 0..D {
+            if self.0[i] > other.0[i] {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+impl<const D: usize, T, U> Add<Extent<D, U>> for Extent<D, T>
+where
+    T: Add<U> + Copy,
+    U: Copy,
+{
+    type Output = Extent<D, <T as Add<U>>::Output>;
+
+    fn add(self, rhs: Extent<D, U>) -> Self::Output {
+        Extent(std::array::from_fn(|i| self.0[i] + rhs.0[i]))
+    }
+}
+
+impl<const D: usize, T, U> Sub<Extent<D, U>> for Extent<D, T>
+where
+    T: Sub<U> + Copy,
+    U: Copy,
+{
+    type Output = Extent<D, <T as Sub<U>>::Output>;
+
+    fn sub(self, rhs: Extent<D, U>) -> Self::Output {
+        Extent(std::array::from_fn(|i| self.0[i] - rhs.0[i]))
+    }
+}
+
+pub type Extent1<T = u32> = Extent<1, T>;
+pub type Extent2<T = u32> = Extent<2, T>;
+pub type Extent3<T = u32> = Extent<3, T>;
+pub type Extent4<T = u32> = Extent<4, T>;
+
+impl<T> Extent1<T> {
+    pub const fn new(width: T) -> Self {
+        Self([width])
+    }
+}
+
+impl<T> Extent2<T> {
+    pub const fn new(width: T, height: T) -> Self {
+        Self([width, height])
+    }
+}
+
+impl<T> Extent3<T> {
+    pub const fn new(width: T, height: T, depth: T) -> Self {
+        Self([width, height, depth])
+    }
+}
+
+impl<T> Extent4<T> {
+    pub const fn new(width: T, height: T, depth: T, hyper: T) -> Self {
+        Self([width, height, depth, hyper])
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Stride<const D: usize>(pub [usize; D]);
+
+impl HasX for Stride<1> {}
+impl HasX for Stride<2> {}
+impl HasY for Stride<2> {}
+impl HasX for Stride<3> {}
+impl HasY for Stride<3> {}
+impl HasZ for Stride<3> {}
+impl HasX for Stride<4> {}
+impl HasY for Stride<4> {}
+impl HasZ for Stride<4> {}
+impl HasW for Stride<4> {}
+
+impl<const D: usize> Stride<D> {
+    pub const fn element(&self) -> usize
+    where
+        Self: HasX,
+    {
+        self.0[0]
+    }
+
+    pub const fn row(&self) -> usize
+    where
+        Self: HasY,
+    {
+        self.0[1]
+    }
+
+    pub const fn plane(&self) -> usize
+    where
+        Self: HasZ,
+    {
+        self.0[2]
+    }
+
+    pub const fn volume(&self) -> usize
+    where
+        Self: HasW,
+    {
+        self.0[3]
+    }
+}
+
+impl<const D: usize> Stride<D> {
+    pub const ZERO: Self = Self([0; D]);
+
+    pub const fn to_1d(&self) -> Stride1 {
+        let mut array = [0; 1];
+        if D >= 1 {
+            array[0] = self.0[0];
+        }
+        Stride(array)
+    }
+
+    pub const fn to_2d(&self) -> Stride2 {
+        let mut array = [0; 2];
+        if D >= 1 {
+            array[0] = self.0[0];
+        }
+        if D >= 2 {
+            array[1] = self.0[1];
+        }
+        Stride(array)
+    }
+
+    pub const fn to_3d(&self) -> Stride3 {
+        let mut array = [0; 3];
+        if D >= 1 {
+            array[0] = self.0[0];
+        }
+        if D >= 2 {
+            array[1] = self.0[1];
+        }
+        if D >= 3 {
+            array[2] = self.0[2];
+        }
+        Stride(array)
+    }
+
+    pub const fn to_4d(&self) -> Stride4 {
+        let mut array = [0; 4];
+        if D >= 1 {
+            array[0] = self.0[0];
+        }
+        if D >= 2 {
+            array[1] = self.0[1];
+        }
+        if D >= 3 {
+            array[2] = self.0[2];
+        }
+        if D >= 4 {
+            array[3] = self.0[3];
+        }
+        Stride(array)
+    }
+}
+
+pub type Stride1 = Stride<1>;
+pub type Stride2 = Stride<2>;
+pub type Stride3 = Stride<3>;
+pub type Stride4 = Stride<4>;
+
+impl Stride1 {
+    pub const fn new(x: usize) -> Self {
+        Self([x])
+    }
+}
+
+impl Stride2 {
+    pub const fn new(x: usize, y: usize) -> Self {
+        Self([x, y])
+    }
+}
+
+impl Stride3 {
+    pub const fn new(x: usize, y: usize, z: usize) -> Self {
+        Self([x, y, z])
+    }
+}
+
+impl Stride4 {
+    pub const fn new(x: usize, y: usize, z: usize, w: usize) -> Self {
+        Self([x, y, z, w])
+    }
+}
+
+impl<const D: usize, T> Offset<D, T> {
     #[inline]
-    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Offset<U, D> {
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Offset<D, U> {
         Offset(self.0.map(f))
     }
 }
 
-impl<T, const D: usize> Offset<T, D> {
+impl<const D: usize, T> Offset<D, T> {
     #[inline]
-    pub fn cast<U>(extent: Offset<U, D>) -> Self
+    pub fn cast<U>(extent: Offset<D, U>) -> Self
     where
         U: Into<T>,
     {
@@ -362,9 +676,9 @@ impl<T, const D: usize> Offset<T, D> {
     }
 }
 
-impl<T, const D: usize> Offset<T, D> {
+impl<const D: usize, T> Offset<D, T> {
     #[inline]
-    pub fn try_cast<U>(extent: Offset<U, D>) -> Result<Self, U::Error>
+    pub fn try_cast<U>(extent: Offset<D, U>) -> Result<Self, U::Error>
     where
         U: TryInto<T>,
     {
@@ -373,16 +687,16 @@ impl<T, const D: usize> Offset<T, D> {
     }
 }
 
-impl<T, const D: usize> Extent<T, D> {
+impl<const D: usize, T> Extent<D, T> {
     #[inline]
-    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Extent<U, D> {
+    pub fn map<U>(self, f: impl FnMut(T) -> U) -> Extent<D, U> {
         Extent(self.0.map(f))
     }
 }
 
-impl<T, const D: usize> Extent<T, D> {
+impl<const D: usize, T> Extent<D, T> {
     #[inline]
-    pub fn cast<U>(extent: Extent<U, D>) -> Self
+    pub fn cast<U>(extent: Extent<D, U>) -> Self
     where
         U: Into<T>,
     {
@@ -390,14 +704,21 @@ impl<T, const D: usize> Extent<T, D> {
     }
 }
 
-impl<T, const D: usize> Extent<T, D> {
+impl<const D: usize, T> Extent<D, T> {
     #[inline]
-    pub fn try_cast<U>(extent: Extent<U, D>) -> Result<Self, U::Error>
+    pub fn try_cast<U>(extent: Extent<D, U>) -> Result<Self, U::Error>
     where
         U: TryInto<T>,
     {
         let array = array_try_map(extent.0, <U as TryInto<T>>::try_into)?;
         Ok(Extent(array))
+    }
+}
+
+impl<const D: usize> Stride<D> {
+    #[inline]
+    pub fn map(self, f: impl FnMut(usize) -> usize) -> Stride<D> {
+        Stride(self.0.map(f))
     }
 }
 
@@ -463,14 +784,16 @@ fn array_try_map<T, U, E, const N: usize>(
 macro_rules! impl_cast_as {
     (.EACH $($t:ty),+ as $cast_as_u:ident $u:ty) => {
         $(
-            impl<const D: usize> Offset< $t, D > {
-                pub fn $cast_as_u(self) -> Offset< $u, D > {
+                impl<const D: usize> Offset< D, $t > {
+                #[inline]
+                pub fn $cast_as_u(self) -> Offset< D, $u > {
                     Offset(self.0.map(|x| x as $u))
                 }
             }
 
-            impl<const D: usize> Extent< $t, D > {
-                pub fn $cast_as_u(self) -> Extent< $u, D > {
+            impl<const D: usize> Extent< D, $t > {
+                #[inline]
+                pub fn $cast_as_u(self) -> Extent< D, $u > {
                     Extent(self.0.map(|x| x as $u))
                 }
             }

@@ -9,7 +9,7 @@ use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 use crate::{
     ColorSpace, Extent2, PixelFormat, PresentMode,
     backend::from::{IntoMetal, TryIntoMetal, TryMetalInto},
-    generic::{PipelineStages, SurfaceError},
+    generic::{Image2D, ImageN, PipelineStages, SurfaceError},
 };
 
 use super::{Image, Queue};
@@ -155,7 +155,7 @@ impl crate::traits::Surface for Surface {
         let (layer, view) = match &self.backing {
             Backing::Fake { image, .. } => {
                 return Ok(Frame {
-                    image: image.clone(),
+                    image: ImageN::new_unchecked(image.clone()),
                     drawable: None,
                 });
             }
@@ -198,13 +198,13 @@ impl crate::traits::Surface for Surface {
         let image = Image::new(drawable.texture());
         Ok(Frame {
             drawable: Some(drawable),
-            image,
+            image: ImageN::new_unchecked(image),
         })
     }
 }
 
 pub struct Frame {
-    image: Image,
+    image: Image2D,
     drawable: Option<Retained<ProtocolObject<dyn CAMetalDrawable>>>,
 }
 
@@ -223,7 +223,7 @@ impl Frame {
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {
     #[inline]
-    fn image(&self) -> &Image {
+    fn image(&self) -> &Image2D {
         &self.image
     }
 }
