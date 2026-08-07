@@ -17,7 +17,7 @@ use objc2_metal::{
 use crate::{
     ImageUsage,
     generic::{
-        ArgumentKind, Automatic, ComponentSwizzle, Extent1, Extent2, Extent3, ImageArrayN,
+        ArgumentKind, Automatic, ComponentMap, Extent1, Extent2, Extent3, ImageArrayN,
         ImageExtent, ImageN, OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
     },
 };
@@ -115,30 +115,33 @@ impl crate::traits::Image for Image {
             .parentTexture()
             .unwrap_or_else(|| self.texture.clone());
 
+        let level_count = (desc.levels.end - desc.levels.start) as NSUInteger;
+        let layer_count = (desc.layers.end - desc.layers.start) as NSUInteger;
+
         if desc.swizzle == Swizzle::IDENTITY {
-            if desc.base_layer == 0 && desc.base_level == 0 {
+            if desc.layers.start == 0 && desc.levels.start == 0 {
                 let texture = root_texture
                     .newTextureViewWithPixelFormat(desc.format.expect_into_metal())
                     .expect("Failed to create texture view");
                 Image { texture }
             } else {
-                let base_layer = self.texture.parentRelativeSlice() as u32 + desc.base_layer;
-                let base_level = self.texture.mipmapLevelCount() as u32 + desc.base_level;
+                let base_layer = self.texture.parentRelativeSlice() as u32 + desc.layers.start;
+                let base_level = self.texture.parentRelativeLevel() as u32 + desc.levels.start;
 
                 let texture = unsafe {
                     root_texture.newTextureViewWithPixelFormat_textureType_levels_slices(
                         pixel_format,
                         self.texture.textureType(),
-                        NSRange::new(base_level as NSUInteger, desc.levels as NSUInteger),
-                        NSRange::new(base_layer as NSUInteger, desc.layers as NSUInteger),
+                        NSRange::new(base_level as NSUInteger, level_count),
+                        NSRange::new(base_layer as NSUInteger, layer_count),
                     )
                 }
                 .expect("Failed to create texture view");
                 Image { texture }
             }
         } else {
-            let base_layer = self.texture.parentRelativeSlice() as u32 + desc.base_layer;
-            let base_level = self.texture.parentRelativeLevel() as u32 + desc.base_level;
+            let base_layer = self.texture.parentRelativeSlice() as u32 + desc.layers.start;
+            let base_level = self.texture.parentRelativeLevel() as u32 + desc.levels.start;
             let swizzle = self.texture.swizzle();
 
             let new_swizzle = swizzle_mul(swizzle, desc.swizzle);
@@ -147,8 +150,8 @@ impl crate::traits::Image for Image {
                 root_texture.newTextureViewWithPixelFormat_textureType_levels_slices_swizzle(
                     pixel_format,
                     self.texture.textureType(),
-                    NSRange::new(base_level as NSUInteger, desc.levels as NSUInteger),
-                    NSRange::new(base_layer as NSUInteger, desc.layers as NSUInteger),
+                    NSRange::new(base_level as NSUInteger, level_count),
+                    NSRange::new(base_layer as NSUInteger, layer_count),
                     new_swizzle,
                 )
             }
@@ -165,11 +168,10 @@ impl crate::traits::Image for Image {
 }
 
 fn swizzle_mul(channels: MTLTextureSwizzleChannels, rhs: Swizzle) -> MTLTextureSwizzleChannels {
-    use ComponentSwizzle::*;
+    use ComponentMap::*;
 
-    let mul = |rhs: ComponentSwizzle, i: MTLTextureSwizzle| -> MTLTextureSwizzle {
+    let mul = |rhs: ComponentMap| -> MTLTextureSwizzle {
         match rhs {
-            Identity => i,
             Zero => MTLTextureSwizzle::Zero,
             One => MTLTextureSwizzle::One,
             R => channels.red,
@@ -180,10 +182,10 @@ fn swizzle_mul(channels: MTLTextureSwizzleChannels, rhs: Swizzle) -> MTLTextureS
     };
 
     MTLTextureSwizzleChannels {
-        red: mul(rhs.r, channels.red),
-        green: mul(rhs.g, channels.green),
-        blue: mul(rhs.b, channels.blue),
-        alpha: mul(rhs.a, channels.alpha),
+        red: mul(rhs.r),
+        green: mul(rhs.g),
+        blue: mul(rhs.b),
+        alpha: mul(rhs.a),
     }
 }
 

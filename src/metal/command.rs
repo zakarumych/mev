@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, ops::Range, ptr::NonNull, sync::Arc};
+use std::{marker::PhantomData, ptr::NonNull, range::Range, sync::Arc};
 
 use objc2::{Message, msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSArray, NSInteger, NSRange, NSUInteger};
@@ -14,7 +14,7 @@ use objc2_metal::{
 use smallvec::SmallVec;
 
 use crate::{
-    AutoDeviceRepr,
+    AsImageSlice, AutoDeviceRepr,
     generic::{
         AccelerationStructureBuildFlags, AccelerationStructurePerformance, Arguments,
         AsBufferSlice, BlasBuildDesc, BlasGeometryDesc, ClearColor, ClearDepthStencil, DeviceRepr,
@@ -35,7 +35,7 @@ use super::{
 /// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives
 /// any unset axis).
 fn pad_shape_to_3<const N: usize>(shape: &TexelShape<N>) -> (Extent3<u32>, [usize; 3]) {
-    let resolved = shape.resolve();
+    let resolved = shape.byte_stride();
 
     let mut extent = [1u32; 3];
     for i in 0..N {
@@ -87,7 +87,13 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -258,7 +264,13 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -267,11 +279,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     fn copy_buffer_to_image<const N: usize>(
         &mut self,
         src: &impl AsBufferSlice,
-        src_shape: TexelShape<N>,
-        dst: &Image,
-        dst_offset: Offset3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        shape: TexelShape<N>,
+        dst: &impl AsImageSlice<N>,
     ) {
         const {
             assert!(
@@ -280,19 +289,30 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             )
         };
 
-        debug_assert!(layers.end > layers.start);
-        debug_assert!(layers.end == layers.start + 1);
-
         let src = src.as_buffer_slice();
-        let (extent, resolved) = pad_shape_to_3(&src_shape);
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
 
-        let block_size = dst.format().block_size();
+        assert_eq!(
+            shape.extent, dst.extent,
+            "copy_buffer_to_image: TexelShape extent must match the destination image slice extent"
+        );
+
+        let (extent, resolved) = pad_shape_to_3(&shape);
+
+        let block_size = dst.image.format().block_size();
         assert_eq!(
             resolved[0], block_size,
             "copy_buffer_to_image: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
         );
         let bytes_per_line = resolved[1];
         let bytes_per_plane = resolved[2];
+
+        let layers = dst.layers;
+        debug_assert!(layers.end > layers.start);
+        debug_assert!(layers.end == layers.start + 1);
+
+        let dst_offset = dst.offset.to_3d();
 
         unsafe {
             self.encoder.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
@@ -305,9 +325,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                     height: extent.height() as NSUInteger,
                     depth: extent.depth() as NSUInteger,
                 },
-                dst.metal(),
+                dst.image.metal(),
                 layers.start as NSUInteger,
-                level as NSUInteger,
+                dst.level as NSUInteger,
                 MTLOrigin {
                     x: dst_offset.x() as NSUInteger,
                     y: dst_offset.y() as NSUInteger,
@@ -318,35 +338,48 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline]
-    fn copy_image_region(
+    fn copy_image_region<const N: usize>(
         &mut self,
-        src: &Image,
-        src_level: u32,
-        src_base_layer: u32,
-        src_offset: Offset3<u32>,
-        dst: &Image,
-        dst_level: u32,
-        dst_base_layer: u32,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: u32,
+        src: &impl AsImageSlice<N>,
+        dst: &impl AsImageSlice<N>,
     ) {
-        use objc2::sel;
+        let src = src.as_image_slice();
+        src.assert_fits_image();
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
+
+        assert_eq!(
+            src.extent, dst.extent,
+            "copy_image_region: source and destination image slices must have the same extent"
+        );
+
+        let src_layers = src.layers;
+        let dst_layers = dst.layers;
+        assert_eq!(
+            src_layers.end - src_layers.start,
+            dst_layers.end - dst_layers.start,
+            "copy_image_region: source and destination image slices must have the same layer count"
+        );
+        let layers = src_layers.end - src_layers.start;
+
+        let src_offset = src.offset.to_3d();
+        let dst_offset = dst.offset.to_3d();
+        let extent = src.extent.to_3d();
 
         // If copying entire slices, use optimized method
         if src_offset == Offset3::ZERO
             && dst_offset == Offset3::ZERO
-            && src.extent().into_3d() == extent
-            && dst.extent().into_3d() == extent
+            && src.image.extent().into_3d() == extent
+            && dst.image.extent().into_3d() == extent
         {
             unsafe {
                 self.encoder.copyFromTexture_sourceSlice_sourceLevel_toTexture_destinationSlice_destinationLevel_sliceCount_levelCount(
-                    src.metal(),
-                    src_base_layer as NSUInteger,
-                    src_level as NSUInteger,
-                    dst.metal(),
-                    dst_base_layer as NSUInteger,
-                    dst_level as NSUInteger,
+                    src.image.metal(),
+                    src_layers.start as NSUInteger,
+                    src.level as NSUInteger,
+                    dst.image.metal(),
+                    dst_layers.start as NSUInteger,
+                    dst.level as NSUInteger,
                     layers as NSUInteger,
                     1,
                 );
@@ -359,9 +392,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         for layer in 0..layers {
             unsafe {
                 self.encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
-                    src.metal(),
-                    (src_base_layer + layer) as NSUInteger,
-                    src_level as NSUInteger,
+                    src.image.metal(),
+                    (src_layers.start + layer) as NSUInteger,
+                    src.level as NSUInteger,
                     MTLOrigin {
                         x: src_offset.x() as NSUInteger,
                         y: src_offset.y() as NSUInteger,
@@ -372,9 +405,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                         height: extent.height() as NSUInteger,
                         depth: extent.depth() as NSUInteger,
                     },
-                    dst.metal(),
-                    (dst_base_layer + layer) as NSUInteger,
-                    dst_level as NSUInteger,
+                    dst.image.metal(),
+                    (dst_layers.start + layer) as NSUInteger,
+                    dst.level as NSUInteger,
                     MTLOrigin {
                         x: dst_offset.x() as NSUInteger,
                         y: dst_offset.y() as NSUInteger,
@@ -388,12 +421,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
     fn copy_image_to_buffer<const N: usize>(
         &mut self,
-        src: &Image,
-        src_offset: Offset3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        src: &impl AsImageSlice<N>,
         dst: &impl AsBufferSlice,
-        dst_shape: TexelShape<N>,
+        shape: TexelShape<N>,
     ) {
         const {
             assert!(
@@ -402,13 +432,18 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             )
         };
 
-        debug_assert!(layers.end > layers.start);
-        debug_assert!(layers.end == layers.start + 1);
-
+        let src = src.as_image_slice();
+        src.assert_fits_image();
         let dst = dst.as_buffer_slice();
-        let (extent, resolved) = pad_shape_to_3(&dst_shape);
 
-        let block_size = src.format().block_size();
+        assert_eq!(
+            shape.extent, src.extent,
+            "copy_image_to_buffer: TexelShape extent must match the source image slice extent"
+        );
+
+        let (extent, resolved) = pad_shape_to_3(&shape);
+
+        let block_size = src.image.format().block_size();
         assert_eq!(
             resolved[0], block_size,
             "copy_image_to_buffer: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
@@ -416,11 +451,17 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         let bytes_per_line = resolved[1];
         let bytes_per_plane = resolved[2];
 
+        let layers = src.layers;
+        debug_assert!(layers.end > layers.start);
+        debug_assert!(layers.end == layers.start + 1);
+
+        let src_offset = src.offset.to_3d();
+
         unsafe {
             self.encoder.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(
-                src.metal(),
+                src.image.metal(),
                 layers.start as NSUInteger,
-                level as NSUInteger,
+                src.level as NSUInteger,
                 MTLOrigin {
                     x: src_offset.x() as NSUInteger,
                     y: src_offset.y() as NSUInteger,
@@ -557,7 +598,13 @@ impl traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
     #[inline(always)]
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -764,7 +811,10 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     #[inline]
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
+    fn draw(&mut self, vertices: impl Into<Range<u32>>, instances: impl Into<Range<u32>>) {
+        let vertices = vertices.into();
+        let instances = instances.into();
+
         if vertices.end <= vertices.start {
             // Rendering no vertices is a no-op
             return;
@@ -820,7 +870,15 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     }
 
     #[inline]
-    fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
+    fn draw_indexed(
+        &mut self,
+        vertex_offset: i32,
+        indices: impl Into<Range<u32>>,
+        instances: impl Into<Range<u32>>,
+    ) {
+        let indices = indices.into();
+        let instances = instances.into();
+
         debug_assert!(vertex_offset >= 0);
 
         let index_buffer = self.index_buffer.as_deref().unwrap();

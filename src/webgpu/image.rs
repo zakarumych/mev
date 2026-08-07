@@ -102,26 +102,31 @@ impl crate::traits::Image for Image {
     }
 
     fn view(&self, device: &Device, desc: ViewDesc) -> Image {
+        let base_level = desc.levels.start + self.base_level;
+        let level_count = desc.levels.end - desc.levels.start;
+        let base_layer = desc.layers.start + self.base_layer;
+        let layer_count = desc.layers.end - desc.layers.start;
+
         let view_desc = wgpu::TextureViewDescriptor {
             label: None,
             format: Some(desc.format.expect_into_wgpu()),
             dimension: None,
             usage: None,
             aspect: wgpu::TextureAspect::All,
-            base_mip_level: desc.base_level + self.base_level,
-            mip_level_count: Some(desc.levels),
-            base_array_layer: desc.base_layer + self.base_layer,
-            array_layer_count: Some(desc.layers),
+            base_mip_level: base_level,
+            mip_level_count: Some(level_count),
+            base_array_layer: base_layer,
+            array_layer_count: Some(layer_count),
         };
 
         let view = self.view.texture().create_view(&view_desc);
 
         Image {
             view,
-            base_layer: desc.base_layer + self.base_layer,
-            layers: desc.layers,
-            base_level: desc.base_level + self.base_level,
-            levels: desc.levels,
+            base_layer,
+            layers: layer_count,
+            base_level,
+            levels: level_count,
         }
     }
 

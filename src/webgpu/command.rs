@@ -1,10 +1,10 @@
-use std::{marker::PhantomData, ops::Range, rc::Rc};
+use std::{marker::PhantomData, range::Range, rc::Rc};
 
 use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    AutoDeviceRepr,
+    AsImageSlice, AutoDeviceRepr,
     backend::from::IntoWgpu,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent,
@@ -30,7 +30,7 @@ use super::{
 /// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives
 /// any unset axis).
 fn pad_shape_to_3<const N: usize>(shape: &TexelShape<N>) -> (Extent3<u32>, [usize; 3]) {
-    let resolved = shape.resolve();
+    let resolved = shape.byte_stride();
 
     let mut extent = [1u32; 3];
     for i in 0..N {
@@ -78,7 +78,13 @@ impl CommandEncoder {
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -204,7 +210,13 @@ pub struct CopyCommandEncoder<'enc> {
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -295,11 +307,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     fn copy_buffer_to_image<const N: usize>(
         &mut self,
         src: &impl AsBufferSlice,
-        src_shape: TexelShape<N>,
-        dst: &Image,
-        dst_offset: Offset3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        shape: TexelShape<N>,
+        dst: &impl AsImageSlice<N>,
     ) {
         const {
             assert!(
@@ -309,15 +318,25 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         };
 
         let src = src.as_buffer_slice();
-        let (extent, resolved) = pad_shape_to_3(&src_shape);
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
 
-        let block_size = dst.format().block_size();
+        assert_eq!(
+            shape.extent, dst.extent(),
+            "copy_buffer_to_image: TexelShape extent must match the destination image slice extent"
+        );
+
+        let block_size = dst.image().format().block_size();
+        let (extent, resolved) = pad_shape_to_3(&shape);
         assert_eq!(
             resolved[0], block_size,
             "copy_buffer_to_image: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
         );
         let bytes_per_line = resolved[1];
         let bytes_per_plane = resolved[2];
+
+        let dst_offset = dst.offset().to_3d().map(|v| v as u32);
+        let dst_layers = dst.layers();
 
         self.encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
@@ -329,61 +348,70 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
                 },
             },
             wgpu::TexelCopyTextureInfo {
-                texture: dst.wgpu_view().texture(),
-                mip_level: level + dst.base_level(),
+                texture: dst.image().wgpu_view().texture(),
+                mip_level: dst.level() + dst.image().base_level(),
                 origin: wgpu::Origin3d {
                     x: dst_offset.x(),
                     y: dst_offset.y(),
-                    z: layers.start + dst.base_layer(),
+                    z: dst_layers.start + dst.image().base_layer(),
                 },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
                 width: extent.width(),
                 height: extent.height(),
-                depth_or_array_layers: extent.depth() * (layers.end - layers.start),
+                depth_or_array_layers: extent.depth() * (dst_layers.end - dst_layers.start),
             },
         );
     }
 
-    fn copy_image_region(
+    fn copy_image_region<const N: usize>(
         &mut self,
-        src: &Image,
-        src_level: u32,
-        src_base_layer: u32,
-        src_offset: Offset3<u32>,
-        dst: &Image,
-        dst_level: u32,
-        dst_base_layer: u32,
-        dst_offset: Offset3<u32>,
-        extent: Extent3<u32>,
-        layers: u32,
+        src: &impl AsImageSlice<N>,
+        dst: &impl AsImageSlice<N>,
     ) {
+        let src = src.as_image_slice();
+        src.assert_fits_image();
+        let dst = dst.as_image_slice();
+        dst.assert_fits_image();
+
+        assert_eq!(
+            src.extent(),
+            dst.extent(),
+            "copy_image_region: source and destination image slices must have the same extent"
+        );
+
+        let src_offset = src.offset().to_3d().map(|v| v as u32);
+        let dst_offset = dst.offset().to_3d().map(|v| v as u32);
+        let extent = src.extent().to_3d();
+        let src_layers = src.layers();
+        let dst_layers = dst.layers();
+
         self.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: src.wgpu_view().texture(),
-                mip_level: src_level + src.base_level(),
+                texture: src.image().wgpu_view().texture(),
+                mip_level: src.level() + src.image().base_level(),
                 origin: wgpu::Origin3d {
                     x: src_offset.x(),
                     y: src_offset.y(),
-                    z: src_base_layer + src.base_layer(),
+                    z: src_layers.start + src.image().base_layer(),
                 },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
-                texture: dst.wgpu_view().texture(),
-                mip_level: dst_level + dst.base_level(),
+                texture: dst.image().wgpu_view().texture(),
+                mip_level: dst.level() + dst.image().base_level(),
                 origin: wgpu::Origin3d {
                     x: dst_offset.x(),
                     y: dst_offset.y(),
-                    z: dst_base_layer + dst.base_layer(),
+                    z: dst_layers.start + dst.image().base_layer(),
                 },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
                 width: extent.width(),
                 height: extent.height(),
-                depth_or_array_layers: layers,
+                depth_or_array_layers: extent.depth() * (src_layers.end - src_layers.start),
             },
         );
     }
@@ -391,12 +419,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
     fn copy_image_to_buffer<const N: usize>(
         &mut self,
-        src: &Image,
-        src_offset: Offset3<u32>,
-        layers: Range<u32>,
-        level: u32,
+        src: &impl AsImageSlice<N>,
         dst: &impl AsBufferSlice,
-        dst_shape: TexelShape<N>,
+        shape: TexelShape<N>,
     ) {
         const {
             assert!(
@@ -405,10 +430,18 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             )
         };
 
+        let src = src.as_image_slice();
+        src.assert_fits_image();
         let dst = dst.as_buffer_slice();
-        let (extent, resolved) = pad_shape_to_3(&dst_shape);
 
-        let block_size = src.format().block_size();
+        assert_eq!(
+            shape.extent,
+            src.extent(),
+            "copy_image_to_buffer: TexelShape extent must match the source image slice extent"
+        );
+
+        let block_size = src.image().format().block_size();
+        let (extent, resolved) = pad_shape_to_3(&shape);
         assert_eq!(
             resolved[0], block_size,
             "copy_image_to_buffer: element stride must equal the format's tightly-packed size ({block_size}) - native copy commands can't vary it; use Cvt for padded/strided element transfers"
@@ -416,14 +449,17 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         let bytes_per_line = resolved[1];
         let bytes_per_plane = resolved[2];
 
+        let src_offset = src.offset().to_3d().map(|v| v as u32);
+        let src_layers = src.layers();
+
         self.encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: src.wgpu_view().texture(),
-                mip_level: level + src.base_level(),
+                texture: src.image().wgpu_view().texture(),
+                mip_level: src.level() + src.image().base_level(),
                 origin: wgpu::Origin3d {
                     x: src_offset.x(),
                     y: src_offset.y(),
-                    z: layers.start + src.base_layer(),
+                    z: src_layers.start + src.image().base_layer(),
                 },
                 aspect: wgpu::TextureAspect::All,
             },
@@ -438,7 +474,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             wgpu::Extent3d {
                 width: extent.width(),
                 height: extent.height(),
-                depth_or_array_layers: extent.depth() * (layers.end - layers.start),
+                depth_or_array_layers: extent.depth() * (src_layers.end - src_layers.start),
             },
         );
     }
@@ -474,7 +510,13 @@ impl ComputeCommandEncoder<'_> {
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
 
-    fn init_image(&mut self, _after: PipelineStages, _before: PipelineStages, _image: &Image) {}
+    fn init_image(
+        &mut self,
+        _after: PipelineStages,
+        _before: PipelineStages,
+        _image: impl AsRef<Image>,
+    ) {
+    }
 }
 
 #[hidden_trait::expose]
@@ -588,12 +630,26 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
         );
     }
 
-    fn draw(&mut self, vertices: Range<u32>, instances: Range<u32>) {
-        self.pass.draw(vertices, instances);
+    fn draw(&mut self, vertices: impl Into<Range<u32>>, instances: impl Into<Range<u32>>) {
+        let vertices = vertices.into();
+        let instances = instances.into();
+        self.pass
+            .draw(vertices.start..vertices.end, instances.start..instances.end);
     }
 
-    fn draw_indexed(&mut self, vertex_offset: i32, indices: Range<u32>, instances: Range<u32>) {
-        self.pass.draw_indexed(indices, vertex_offset, instances);
+    fn draw_indexed(
+        &mut self,
+        vertex_offset: i32,
+        indices: impl Into<Range<u32>>,
+        instances: impl Into<Range<u32>>,
+    ) {
+        let indices = indices.into();
+        let instances = instances.into();
+        self.pass.draw_indexed(
+            indices.start..indices.end,
+            vertex_offset,
+            instances.start..instances.end,
+        );
     }
 }
 
