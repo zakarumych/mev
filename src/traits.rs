@@ -4,12 +4,13 @@ use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::generic::{
-    Arguments, AsBufferSlice, AutoDeviceRepr, BlasBuildDesc, BlasDesc, BufferDesc, BufferInitDesc,
-    BufferMappedRange, BufferMappedRangeMut, Capabilities, ColorSpace, ComputePipelineDesc,
-    DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc, ImageDims,
-    ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3, PipelineError,
-    PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc, SamplerDesc,
-    Shader, ShaderLibraryError, SurfaceError, TexelShape, TlasBuildDesc, TlasDesc, ViewDesc,
+    Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInit,
+    BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, BufferUsage, Capabilities, ColorSpace,
+    ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc,
+    ImageDims, ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3,
+    PipelineError, PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc,
+    SamplerDesc, Shader, ShaderLibraryError, SurfaceError, TexelShape, TlasBuildDesc, TlasDesc,
+    ViewDesc,
 };
 
 // match_backend! {
@@ -111,7 +112,29 @@ pub(crate) trait Device: Clone + Debug + Eq + Resource {
     fn new_buffer(&self, desc: BufferDesc) -> crate::backend::Buffer;
 
     /// Create a new buffer and initialize it with the given data.
-    fn new_buffer_init(&self, desc: BufferInitDesc) -> crate::backend::Buffer;
+    fn new_buffer_init<D: BufferInit>(
+        &self,
+        desc: BufferInitDesc<'_, D>,
+    ) -> crate::backend::Buffer {
+        let size = desc.data.size();
+
+        let mut buffer = self.new_buffer(BufferDesc {
+            size,
+            usage: desc.usage | BufferUsage::HOST_WRITE,
+            name: desc.name,
+        });
+
+        if size > 0 {
+            if buffer.map(..).is_ok() {
+                if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                    desc.data.write(mapped.as_mut());
+                }
+                buffer.unmap();
+            }
+        }
+
+        buffer
+    }
 
     /// Create a new image.
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image;
@@ -252,7 +275,7 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr);
 
     /// Writes data to the buffer.
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]);
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]);
 
     /// Copies bytes from src buffer to dst buffer.
     fn copy_buffer_to_buffer(

@@ -21,11 +21,11 @@ use smallvec::SmallVec;
 use crate::{
     BufferUsage,
     generic::{
-        BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, DeviceError, Features,
-        ImageDesc, ImageDims, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
-        PixelFormat, PrimitiveTopology, RenderPipelineDesc, SamplerDesc, ShaderLanguage,
-        ShaderLibraryError, SurfaceError, Swizzle, TlasDesc, VertexStepMode, ViewDesc, WriteMask,
-        parse_shader,
+        BlasDesc, BufferDesc, BufferInit, BufferInitDesc, ComputePipelineDesc, DeviceError,
+        Features, ImageDesc, ImageDims, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory,
+        PipelineError, PixelFormat, PrimitiveTopology, RenderPipelineDesc, SamplerDesc,
+        ShaderLanguage, ShaderLibraryError, SurfaceError, Swizzle, TlasDesc, VertexStepMode,
+        ViewDesc, WriteMask, parse_shader,
     },
 };
 
@@ -1593,18 +1593,23 @@ impl crate::traits::Device for Device {
         }
     }
 
-    fn new_buffer_init(&self, desc: BufferInitDesc<'_>) -> Buffer {
-        if self.inner.error_state.is_some() {
-            return Buffer::null(desc.data.len(), desc.usage);
-        }
+    fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
+        let size = desc.data.size();
 
         let mut buffer = self.new_buffer(BufferDesc {
-            size: desc.data.len(),
+            size,
             usage: desc.usage | BufferUsage::HOST_WRITE,
             name: desc.name,
         });
 
-        let _ = buffer.write(0, desc.data);
+        if size > 0 {
+            if buffer.map(..).is_ok() {
+                if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                    desc.data.write(mapped.as_mut());
+                }
+                buffer.unmap();
+            }
+        }
 
         buffer
     }
@@ -1615,7 +1620,13 @@ impl crate::traits::Device for Device {
         let layers = desc.dims.layers();
 
         if self.inner.error_state.is_some() {
-            return T::wrap(Image::null(extent, desc.format, desc.usage, layers, desc.levels));
+            return T::wrap(Image::null(
+                extent,
+                desc.format,
+                desc.usage,
+                layers,
+                desc.levels,
+            ));
         }
 
         let result = unsafe {
@@ -1640,7 +1651,13 @@ impl crate::traits::Device for Device {
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
                     self.set_oom();
-                    return T::wrap(Image::null(extent, desc.format, desc.usage, layers, desc.levels));
+                    return T::wrap(Image::null(
+                        extent,
+                        desc.format,
+                        desc.usage,
+                        layers,
+                        desc.levels,
+                    ));
                 }
                 _ => unexpected_error(err),
             },

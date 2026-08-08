@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    AsImageSlice, AutoDeviceRepr,
+    AsImageSlice,
     backend::from::IntoWgpu,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent,
@@ -281,7 +281,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         self.write_buffer_raw(slice, bytemuck::bytes_of(&data.as_repr()));
     }
 
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data));
     }
 

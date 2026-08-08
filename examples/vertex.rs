@@ -284,10 +284,8 @@ impl VertexApp {
         {
             let mut render = encoder.render(mev::RenderPassDesc {
                 name: "main",
-                color_attachments: &[
-                    mev::AttachmentDesc::new(frame.image().as_image())
-                        .clear(mev::ClearColor::DARK_GRAY)
-                ],
+                color_attachments: &[mev::AttachmentDesc::new(frame.image().as_image())
+                    .clear(mev::ClearColor::DARK_GRAY)],
                 depth_stencil_attachment: None,
             });
 
@@ -477,13 +475,13 @@ fn main() {
     let (vertices, indices) = cube_geometry();
 
     let vertex_buffer = queue.new_buffer_init(mev::BufferInitDesc {
-        data: bytemuck::cast_slice(&vertices),
+        data: bytemuck::cast_slice::<_, u8>(&vertices),
         name: "vertices",
         usage: mev::BufferUsage::VERTEX,
     });
 
     let index_buffer = queue.new_buffer_init(mev::BufferInitDesc {
-        data: bytemuck::cast_slice(&indices),
+        data: bytemuck::cast_slice::<_, u8>(&indices),
         name: "indices",
         usage: mev::BufferUsage::INDEX,
     });
@@ -542,13 +540,13 @@ fn main() {
         let (vertices, indices) = cube_geometry();
 
         let vertex_buffer = queue.new_buffer_init(mev::BufferInitDesc {
-            data: bytemuck::cast_slice(&vertices),
+            data: bytemuck::cast_slice::<_, u8>(&vertices),
             name: "vertices",
             usage: mev::BufferUsage::VERTEX,
         });
 
         let index_buffer = queue.new_buffer_init(mev::BufferInitDesc {
-            data: bytemuck::cast_slice(&indices),
+            data: bytemuck::cast_slice::<_, u8>(&indices),
             name: "indices",
             usage: mev::BufferUsage::INDEX,
         });

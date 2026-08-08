@@ -34,8 +34,8 @@ pub use self::{
         /*Constant,*/ Sampled, Storage, Uniform,
     },
     buffer::{
-        AsBufferSlice, BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut,
-        BufferRange, BufferSlice, BufferUsage, TexelShape,
+        AsBufferSlice, BufferDesc, BufferInit, BufferInitDesc, BufferMappedRange,
+        BufferMappedRangeMut, BufferRange, BufferSlice, BufferUsage, InitMapped, TexelShape,
     },
     compute::ComputePipelineDesc,
     data::*,

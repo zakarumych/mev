@@ -5,7 +5,7 @@ use ash::vk::Handle;
 use smallvec::SmallVec;
 
 use crate::{
-    AsImageSlice, AutoDeviceRepr,
+    AsImageSlice,
     backend::from::TryIntoAsh,
     generic::{
         Arguments, AsBufferSlice, BlasBuildDesc, ClearColor, ClearDepthStencil, DeviceRepr, Extent,
@@ -1017,7 +1017,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
 
     /// Writes data to the buffer.
     #[inline]
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
 }

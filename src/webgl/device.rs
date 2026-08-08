@@ -29,7 +29,10 @@ impl crate::traits::Device for Device {
         todo!()
     }
 
-    fn new_buffer_init(&self, desc: crate::BufferInitDesc) -> crate::backend::Buffer {
+    fn new_buffer_init<D: crate::BufferInit>(
+        &self,
+        desc: crate::BufferInitDesc<'_, D>,
+    ) -> crate::backend::Buffer {
         todo!()
     }
 

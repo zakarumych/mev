@@ -8,9 +8,10 @@ use crate::{
     ArgumentGroupLayout, PixelFormat,
     backend::from::{IntoWgpu, TryIntoWgpu, TryWgpuFrom, WgpuFrom},
     generic::{
-        BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageDims,
-        ImageExtent, ImageUsage, LibraryDesc, LibraryInput, PipelineError, RenderPipelineDesc,
-        SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc,
+        BlasDesc, BufferDesc, BufferInit, BufferInitDesc, ComputePipelineDesc, ImageDesc,
+        ImageDims, ImageExtent, ImageUsage, LibraryDesc, LibraryInput, PipelineError,
+        RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError,
+        TlasDesc,
     },
 };
 
@@ -335,16 +336,40 @@ impl crate::traits::Device for Device {
         Buffer::new(buffer)
     }
 
-    fn new_buffer_init(&self, desc: BufferInitDesc) -> Buffer {
-        let buffer = self
-            .inner
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(desc.name),
-                contents: desc.data,
-                usage: wgpu::BufferUsages::wgpu_from(desc.usage),
-            });
-        Buffer::new(buffer)
+    fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
+        match desc.data.as_bytes() {
+            Some(bytes) => {
+                let buffer =
+                    self.inner
+                        .device
+                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some(desc.name),
+                            contents: bytes,
+                            usage: wgpu::BufferUsages::wgpu_from(desc.usage),
+                        });
+                Buffer::new(buffer)
+            }
+            None => {
+                let size = desc.data.size();
+
+                let mut buffer = self.new_buffer(BufferDesc {
+                    size,
+                    usage: desc.usage | crate::generic::BufferUsage::HOST_WRITE,
+                    name: desc.name,
+                });
+
+                if size > 0 {
+                    if buffer.map(..).is_ok() {
+                        if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                            desc.data.write(mapped.as_mut());
+                        }
+                        buffer.unmap();
+                    }
+                }
+
+                buffer
+            }
+        }
     }
 
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {

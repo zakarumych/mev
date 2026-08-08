@@ -180,10 +180,8 @@ impl TriangleApp {
         {
             let mut render = encoder.render(mev::RenderPassDesc {
                 name: "main",
-                color_attachments: &[
-                    mev::AttachmentDesc::new(frame.image().as_image())
-                        .clear(mev::ClearColor::DARK_GRAY)
-                ],
+                color_attachments: &[mev::AttachmentDesc::new(frame.image().as_image())
+                    .clear(mev::ClearColor::DARK_GRAY)],
                 depth_stencil_attachment: None,
             });
 

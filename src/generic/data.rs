@@ -26,36 +26,18 @@ pub trait DeviceRepr: Sized + 'static {
     /// Construct a `Self::Repr` from `&self`.
     fn as_repr(&self) -> Self::Repr;
 
-    // /// Copy data from `Self::Repr` to `&mut self`.
-    // fn copy_from_repr(&mut self, repr: &Self::Repr);
-
     /// Construct a `Self::ArrayRepr` from `&self`.
     #[inline(always)]
     fn as_array_repr(&self) -> Self::ArrayRepr {
-        if const { size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() } {
-            // Safety: transmuting between POD types with same size is safe.
-            unsafe { bytemuck::cast(self.as_repr()) }
-        } else {
-            unimplemented!(
-                "<{} as DeviceRepr>::as_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`",
-                type_name::<Self>()
+        const {
+            assert!(
+                size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>(),
+                "DeviceRepr::as_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`"
             );
         }
-    }
 
-    // /// Copy data from `Self::ArrayRepr` to `&mut self`.
-    // fn copy_from_array_repr(&mut self, repr: &Self::ArrayRepr) {
-    //     if const { size_of::<Self::Repr>() == size_of::<Self::ArrayRepr>() } {
-    //         // Safety: transmuting between POD types with same size is safe.
-    //         let repr: &Self::Repr = unsafe { bytemuck::cast_ref(repr) };
-    //         self.copy_from_repr(repr);
-    //     } else {
-    //         unimplemented!(
-    //             "<{} as DeviceRepr>::copy_from_array_repr must be implemented if size of `ArrayRepr` is not equal to size of `Repr`",
-    //             type_name::<Self>()
-    //         );
-    //     }
-    // }
+        unsafe { bytemuck::cast(self.as_repr()) }
+    }
 
     /// Return byte representation of `Repr`.
     #[inline(always)]
@@ -86,7 +68,13 @@ pub trait DeviceRepr: Sized + 'static {
 /// Deriving `AutoDeviceRepr` generates `DeviceRepr` implementation that checks for padding
 /// and panics at compile time if the type is not compatible with GPU layout.
 /// It also requires that all fields implement `AutoDeviceRepr`.
-pub trait AutoDeviceRepr: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {}
+pub trait AutoDeviceRepr: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {
+    /// Return byte representation of `Self`.
+    #[inline(always)]
+    fn as_bytes(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
 
 impl<T> AutoDeviceRepr for T where T: bytemuck::Pod + DeviceRepr<Repr = Self, ArrayRepr = Self> {}
 
@@ -116,6 +104,7 @@ where
             // Self is `ArrayRepr` so it is POD and can be copied.
             return unsafe { transmute_copy(self) };
         }
+
         if TypeId::of::<Self>() == TypeId::of::<T::Repr>()
             && size_of::<T::Repr>() == size_of::<T::ArrayRepr>()
         {
@@ -190,19 +179,38 @@ pub trait Scalar: crate::private::Sealed + bytemuck::NoUninit + Sized + Debug + 
     /// Convert to scalar representation.
     #[inline(always)]
     fn as_scalar_repr(&self) -> Self::ScalarRepr {
-        assert_eq!(align_of::<Self>(), align_of::<Self::ScalarRepr>());
-        assert_eq!(size_of::<Self>(), size_of::<Self::ScalarRepr>());
+        const {
+            assert!(align_of::<Self>() == align_of::<Self::ScalarRepr>());
+            assert!(size_of::<Self>() == size_of::<Self::ScalarRepr>());
+        }
         bytemuck::cast(*self)
     }
 }
+
+/// Scalar types usable as content of uniform/storage buffers.
+///
+/// Excludes 8-bit integers: WGSL/SPIR-V have no buffer-visible 8-bit scalar
+/// type. 16-bit integers are kept even though they require a shader
+/// extension on some backends - narrowing that further needs backend
+/// feature-gating, not a type-level restriction.
+pub trait DeviceScalar: Scalar {}
 
 /// Narrow traits for scalar types that can be used as vertex attributes.
 pub trait VertexScalar: Scalar {}
 
 const fn vertex_format<T: VertexScalar>(size: VectorSize) -> VertexFormat {
+    const {
+        match T::TYPE {
+            ScalarType::Sint64 | ScalarType::Uint64 | ScalarType::Float64 => {
+                panic!("64-bit scalars do not implement VertexScalar")
+            }
+            _ => {}
+        }
+    }
+
     match (T::TYPE, size) {
         (ScalarType::Sint64 | ScalarType::Uint64 | ScalarType::Float64, _) => {
-            panic!("64-bit scalars do not implement VertexScalar")
+            unreachable!()
         }
         (ScalarType::Bool, VectorSize::One) => VertexFormat::Uint8,
         (ScalarType::Sint8, VectorSize::One) => VertexFormat::Sint32,
@@ -245,7 +253,7 @@ const fn vertex_format<T: VertexScalar>(size: VectorSize) -> VertexFormat {
 
 impl<T> DeviceRepr for T
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = T::ScalarRepr;
     type ArrayRepr = T::ScalarRepr;
@@ -269,6 +277,8 @@ impl Scalar for bool {
     const TYPE: ScalarType = ScalarType::Bool;
     type ScalarRepr = u8;
 }
+
+impl DeviceScalar for bool {}
 
 impl crate::private::Sealed for i8 {}
 
@@ -311,6 +321,7 @@ impl Scalar for i16 {
 }
 
 impl VertexScalar for i16 {}
+impl DeviceScalar for i16 {}
 
 impl crate::private::Sealed for u16 {}
 
@@ -325,6 +336,7 @@ impl Scalar for u16 {
 }
 
 impl VertexScalar for u16 {}
+impl DeviceScalar for u16 {}
 
 impl crate::private::Sealed for i32 {}
 
@@ -339,6 +351,7 @@ impl Scalar for i32 {
 }
 
 impl VertexScalar for i32 {}
+impl DeviceScalar for i32 {}
 
 impl crate::private::Sealed for u32 {}
 
@@ -353,6 +366,7 @@ impl Scalar for u32 {
 }
 
 impl VertexScalar for u32 {}
+impl DeviceScalar for u32 {}
 
 impl crate::private::Sealed for i64 {}
 
@@ -366,6 +380,8 @@ impl Scalar for i64 {
     }
 }
 
+impl DeviceScalar for i64 {}
+
 impl crate::private::Sealed for u64 {}
 
 impl Scalar for u64 {
@@ -377,6 +393,8 @@ impl Scalar for u64 {
         *self
     }
 }
+
+impl DeviceScalar for u64 {}
 
 impl crate::private::Sealed for f32 {}
 
@@ -391,6 +409,7 @@ impl Scalar for f32 {
 }
 
 impl VertexScalar for f32 {}
+impl DeviceScalar for f32 {}
 
 impl crate::private::Sealed for f64 {}
 
@@ -403,6 +422,8 @@ impl Scalar for f64 {
         *self
     }
 }
+
+impl DeviceScalar for f64 {}
 
 /// Supported sizes of vectors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -748,7 +769,7 @@ where
 
 impl<T> DeviceRepr for vec2<T>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = vec2<T::ScalarRepr>;
     type ArrayRepr = vec2<T::ScalarRepr>;
@@ -763,7 +784,7 @@ where
 
 impl<T> DeviceRepr for vec3<T>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = vec3<T::ScalarRepr>;
     type ArrayRepr = vec4<T::ScalarRepr>;
@@ -784,7 +805,7 @@ where
 
 impl<T> DeviceRepr for vec4<T>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = vec4<T::ScalarRepr>;
     type ArrayRepr = vec4<T::ScalarRepr>;
@@ -799,7 +820,7 @@ where
 
 impl<T, const N: usize> DeviceRepr for mat<T, N, 2>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = mat<T::ScalarRepr, N, 2>;
     type ArrayRepr = mat<T::ScalarRepr, N, 2>;
@@ -814,7 +835,7 @@ where
 
 impl<T, const N: usize> DeviceRepr for mat<T, N, 3>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = mat<T::ScalarRepr, N, 4>;
     type ArrayRepr = mat<T::ScalarRepr, N, 4>;
@@ -829,7 +850,7 @@ where
 
 impl<T, const N: usize> DeviceRepr for mat<T, N, 4>
 where
-    T: Scalar,
+    T: DeviceScalar,
 {
     type Repr = mat<T::ScalarRepr, N, 4>;
     type ArrayRepr = mat<T::ScalarRepr, N, 4>;

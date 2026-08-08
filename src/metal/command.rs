@@ -14,7 +14,7 @@ use objc2_metal::{
 use smallvec::SmallVec;
 
 use crate::{
-    AsImageSlice, AutoDeviceRepr,
+    AsImageSlice,
     generic::{
         AccelerationStructureBuildFlags, AccelerationStructurePerformance, Arguments,
         AsBufferSlice, BlasBuildDesc, BlasGeometryDesc, ClearColor, ClearDepthStencil, DeviceRepr,
@@ -535,7 +535,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
 
     /// Writes data to the buffer.
     #[inline(always)]
-    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl AutoDeviceRepr]) {
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
 

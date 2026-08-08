@@ -62,11 +62,98 @@ pub struct BufferDesc<'a> {
     pub name: &'a str,
 }
 
+/// Something that can initialize a freshly-allocated buffer's contents.
+///
+/// Implemented for byte slices/arrays, slices/arrays of
+/// [`bytemuck::NoUninit`] types (this covers plain `&[u8]` too, and any
+/// vertex/texel/index element type, not just
+/// [`AutoDeviceRepr`](crate::generic::AutoDeviceRepr) uniform/storage
+/// structs - `NoUninit` carries no std140/430 layout semantics, it only
+/// means "safe to view as bytes"), and closures wrapped in [`InitMapped`]
+/// that write directly into freshly mapped buffer memory.
+pub trait BufferInit {
+    /// Size in bytes of the buffer required to hold the initialized data.
+    fn size(&self) -> usize;
+
+    /// Returns the data as a byte slice, if available without mapping buffer
+    /// memory. Lets backends with a direct upload-on-creation path skip an
+    /// explicit map/copy/unmap round trip.
+    fn as_bytes(&self) -> Option<&[u8]> {
+        None
+    }
+
+    /// Writes initial contents into freshly mapped buffer memory.
+    /// `mem.len() == self.size()`.
+    fn write(self, mem: &mut [u8]);
+}
+
+impl<'a, T> BufferInit for &'a [T]
+where
+    T: bytemuck::NoUninit,
+{
+    #[inline(always)]
+    fn size(&self) -> usize {
+        std::mem::size_of_val(*self)
+    }
+
+    #[inline(always)]
+    fn as_bytes(&self) -> Option<&[u8]> {
+        Some(bytemuck::cast_slice(*self))
+    }
+
+    #[inline(always)]
+    fn write(self, mem: &mut [u8]) {
+        mem.copy_from_slice(bytemuck::cast_slice(self));
+    }
+}
+
+impl<'a, T, const N: usize> BufferInit for &'a [T; N]
+where
+    T: bytemuck::NoUninit,
+{
+    #[inline(always)]
+    fn size(&self) -> usize {
+        std::mem::size_of_val(*self)
+    }
+
+    #[inline(always)]
+    fn as_bytes(&self) -> Option<&[u8]> {
+        Some(bytemuck::cast_slice(self.as_slice()))
+    }
+
+    #[inline(always)]
+    fn write(self, mem: &mut [u8]) {
+        mem.copy_from_slice(bytemuck::cast_slice(self.as_slice()));
+    }
+}
+
+/// Initializes a freshly-allocated buffer by calling `write` with its
+/// freshly mapped memory. `size` must equal the number of bytes `write`
+/// will fill.
+pub struct InitMapped<F> {
+    pub size: usize,
+    pub write: F,
+}
+
+impl<F> BufferInit for InitMapped<F>
+where
+    F: FnOnce(&mut [u8]),
+{
+    #[inline(always)]
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    #[inline(always)]
+    fn write(self, mem: &mut [u8]) {
+        (self.write)(mem)
+    }
+}
+
 /// Description used for buffer creation with initial contents.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct BufferInitDesc<'a> {
+pub struct BufferInitDesc<'a, D: BufferInit> {
     /// Buffer initial contents.
-    pub data: &'a [u8],
+    pub data: D,
 
     /// Buffer usage flags.
     pub usage: BufferUsage,

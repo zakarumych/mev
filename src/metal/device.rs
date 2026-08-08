@@ -20,10 +20,10 @@ use objc2_quartz_core::CAMetalLayer;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::generic::{
-    ArgumentKind, BlasDesc, BufferDesc, BufferInitDesc, ComputePipelineDesc, ImageDesc, ImageDims,
-    ImageExtent, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory, PipelineError, PixelFormat,
-    RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError, TlasDesc,
-    VertexStepMode, parse_shader,
+    ArgumentKind, BlasDesc, BufferDesc, BufferInit, BufferInitDesc, ComputePipelineDesc, ImageDesc,
+    ImageDims, ImageExtent, ImageUsage, LibraryDesc, LibraryInput, OutOfMemory, PipelineError,
+    PixelFormat, RenderPipelineDesc, SamplerDesc, ShaderLanguage, ShaderLibraryError, SurfaceError,
+    TlasDesc, VertexStepMode, parse_shader,
 };
 
 use super::{
@@ -334,35 +334,59 @@ impl crate::traits::Device for Device {
         Buffer::new(buffer, desc.usage)
     }
 
-    fn new_buffer_init(&self, desc: BufferInitDesc) -> Buffer {
-        let Ok(len) = u64::try_from(desc.data.len()) else {
-            size_exceeds_u64();
-        };
+    fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
+        match desc.data.as_bytes() {
+            Some(bytes) => {
+                let Ok(len) = u64::try_from(bytes.len()) else {
+                    size_exceeds_u64();
+                };
 
-        let mut options = MTLResourceOptions::empty();
+                let mut options = MTLResourceOptions::empty();
 
-        if desc
-            .usage
-            .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
-        {
-            if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
-                options |= MTLResourceOptions::CPUCacheModeWriteCombined;
+                if desc
+                    .usage
+                    .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
+                {
+                    if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
+                        options |= MTLResourceOptions::CPUCacheModeWriteCombined;
+                    }
+                    options |= MTLResourceOptions::StorageModeShared;
+                } else {
+                    options |= MTLResourceOptions::StorageModePrivate;
+                }
+
+                let buffer = unsafe {
+                    self.device.newBufferWithBytes_length_options(
+                        std::ptr::NonNull::from(bytes).cast(),
+                        len as NSUInteger,
+                        options,
+                    )
+                }
+                .expect("Failed to create buffer");
+                buffer.setLabel(Some(&NSString::from_str(desc.name)));
+                Buffer::new(buffer, desc.usage)
             }
-            options |= MTLResourceOptions::StorageModeShared;
-        } else {
-            options |= MTLResourceOptions::StorageModePrivate;
-        }
+            None => {
+                let size = desc.data.size();
 
-        let buffer = unsafe {
-            self.device.newBufferWithBytes_length_options(
-                std::ptr::NonNull::from(desc.data).cast(),
-                len as NSUInteger,
-                options,
-            )
+                let mut buffer = self.new_buffer(BufferDesc {
+                    size,
+                    usage: desc.usage | crate::BufferUsage::HOST_WRITE,
+                    name: desc.name,
+                });
+
+                if size > 0 {
+                    if buffer.map(..).is_ok() {
+                        if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                            desc.data.write(mapped.as_mut());
+                        }
+                        buffer.unmap();
+                    }
+                }
+
+                buffer
+            }
         }
-        .expect("Failed to create buffer");
-        buffer.setLabel(Some(&NSString::from_str(desc.name)));
-        Buffer::new(buffer, desc.usage)
     }
 
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {
