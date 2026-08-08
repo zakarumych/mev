@@ -4,8 +4,8 @@ use mev_proc::match_backend;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::generic::{
-    Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInit,
-    BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, BufferUsage, Capabilities, ColorSpace,
+    Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInit, BufferInitDesc,
+    BufferMappedRange, BufferMappedRangeMut, BufferUsage, Capabilities, ColorSpace,
     ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc,
     ImageDims, ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3,
     PipelineError, PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc,
@@ -272,7 +272,7 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]);
 
     /// Writes data to the buffer.
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr);
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit);
 
     /// Writes data to the buffer.
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]);

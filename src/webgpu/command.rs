@@ -264,6 +264,7 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             slice.size(),
             "data length does not match buffer slice size"
         );
+
         let (buffer, offset) = self.device.allocate_scratch(data.len() as u64);
 
         self.queue.write_buffer(&buffer, offset, data);
@@ -277,8 +278,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         );
     }
 
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr) {
-        self.write_buffer_raw(slice, bytemuck::bytes_of(&data.as_repr()));
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit) {
+        self.write_buffer_raw(slice, bytemuck::bytes_of(data));
     }
 
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
@@ -322,7 +323,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         dst.assert_fits_image();
 
         assert_eq!(
-            shape.extent, dst.extent(),
+            shape.extent,
+            dst.extent(),
             "copy_buffer_to_image: TexelShape extent must match the destination image slice extent"
         );
 

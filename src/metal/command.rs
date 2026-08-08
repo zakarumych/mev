@@ -529,8 +529,8 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 
     #[inline(always)]
-    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl DeviceRepr) {
-        self.write_buffer_raw(slice, bytemuck::bytes_of(&data.as_repr()))
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit) {
+        self.write_buffer_raw(slice, bytemuck::bytes_of(data))
     }
 
     /// Writes data to the buffer.
