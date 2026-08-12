@@ -197,7 +197,22 @@ pub(crate) trait Queue: Deref<Target = crate::backend::Device> + Debug + Resourc
         I: IntoIterator<Item = crate::backend::CommandBuffer>;
 
     /// Synchronize the access to the frame resources.
-    fn sync_frame(&mut self, frame: &mut crate::backend::Frame, before: PipelineStages);
+    fn sync_frame(&mut self, frame: &mut crate::backend::Frame, next_use: PipelineStages);
+
+    /// Helper for the start-of-frame path: syncs the frame, creates a new
+    /// command encoder and initializes the frame image for use in it.
+    /// `next_use` = stages that will first use the frame image (typically
+    /// `PipelineStages::COLOR_OUTPUT`).
+    fn begin_frame(
+        &mut self,
+        frame: &mut crate::backend::Frame,
+        next_use: PipelineStages,
+    ) -> crate::backend::CommandEncoder {
+        self.sync_frame(frame, next_use);
+        let mut encoder = self.new_command_encoder();
+        encoder.init_image(PipelineStages::empty(), next_use, frame.image().as_image());
+        encoder
+    }
 
     /// Wait for all operations on the queue to complete.
     fn wait_idle(&self) -> Result<(), DeviceError>;
@@ -213,27 +228,27 @@ pub(crate) trait Queue: Deref<Target = crate::backend::Device> + Debug + Resourc
 
 pub(crate) trait SyncCommandEncoder {
     /// Synchronizes the access to the resources.
-    /// Commands in `before` stages of subsequent commands will be
-    /// executed only after commands in `after` stages of previous commands
-    /// are finished.
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages);
+    /// Commands in `next_stages` of subsequently recorded commands execute
+    /// only after commands in `prev_stages` of previously recorded commands
+    /// finish.
+    fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages);
 
     /// Synchronizes the access to the image.
-    /// Commands in `before` stages of subsequent commands will be
-    /// executed only after commands in `after` stages of previous commands
-    /// are finished.
+    /// Commands in `next_stages` of subsequently recorded commands execute
+    /// only after commands in `prev_stages` of previously recorded commands
+    /// finish.
     /// Image content is discarded.
     fn init_image(
         &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
         image: impl AsRef<crate::backend::Image>,
     );
 }
 
 pub(crate) trait CommandEncoder: SyncCommandEncoder {
     /// Presents the frame to the surface.
-    fn present(&mut self, frame: crate::backend::Frame, after: PipelineStages);
+    fn present(&mut self, frame: crate::backend::Frame, prev_use: PipelineStages);
 
     /// Finishes encoding and returns the command buffer.
     fn finish(self) -> crate::backend::CommandBuffer;
@@ -272,10 +287,29 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
     fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]);
 
     /// Writes data to the buffer.
+    ///
+    /// Caller is responsible for synchronization; use `write_buffer_sync` to
+    /// have the barriers emitted.
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit);
 
     /// Writes data to the buffer.
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]);
+
+    /// Writes data and emits the surrounding barriers. `prev_use` = stages
+    /// that previously used the buffer, `next_use` = stages that will use it
+    /// next. Both are mandatory since the caller must know the buffer's
+    /// usage on both sides of the write.
+    fn write_buffer_sync(
+        &mut self,
+        slice: impl AsBufferSlice,
+        data: &impl bytemuck::NoUninit,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
+    ) {
+        self.barrier(prev_use, PipelineStages::TRANSFER);
+        self.write_buffer(slice, data);
+        self.barrier(PipelineStages::TRANSFER, next_use);
+    }
 
     /// Copies bytes from src buffer to dst buffer.
     fn copy_buffer_to_buffer(

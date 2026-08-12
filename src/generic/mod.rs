@@ -44,7 +44,8 @@ pub use self::{
     image::{
         AsImageSlice, ComponentMap, Image1D, Image2D, Image3D, ImageArray1D, ImageArray2D,
         ImageArray3D, ImageArrayN, ImageDesc, ImageDimensionMismatch, ImageDims, ImageExtent,
-        ImageN, ImageRegion, ImageSlice, ImageUsage, Swizzle, ViewDesc,
+        ImageN, ImageRegion, ImageSlice, ImageSlice1D, ImageSlice2D, ImageSlice3D, ImageUsage,
+        Swizzle, ViewDesc,
     },
     instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
     queue::QueueFlags,

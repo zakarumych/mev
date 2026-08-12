@@ -5,11 +5,11 @@
 //! isolation, then each `Cvt` op family, asserting results on the CPU
 //! after reading buffers back.
 
-use mev::kernels::{Axis, AxisMap, AxisSwizzle, Cvt};
+use mev::kernels::{Axis, AxisMap, AxisSwizzle, Cvt, CvtOptions};
 use mev::{
     AddressMode, Arguments, Buffer, BufferInitDesc, BufferUsage, ComputePipelineDesc, DeviceDesc,
-    Extent1, Extent2, Extent3, Features, Filter, LibraryDesc, LibraryInput, PipelineStages,
-    PixelFormat, Swizzle, TexelShape, VertexFormat,
+    Extent1, Extent2, Extent3, Features, Filter, LibraryDesc, LibraryInput, Offset2,
+    PipelineStages, PixelFormat, Swizzle, TexelShape, VertexFormat,
 };
 
 #[derive(Arguments)]
@@ -100,14 +100,12 @@ fn test_cross_kind_unorm8_to_uint8(device: &mev::Device, queue: &mut mev::Queue,
     let dst = make_readback_buffer(device, &[0u8], "dst_u8");
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<1, 1>(
+    cvt.buffer_to_buffer::<1>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Unorm8.into(), Extent1::new(1)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1)),
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -139,14 +137,13 @@ fn test_transpose_mirror_2d(device: &mev::Device, queue: &mut mev::Queue, cvt: &
     };
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<2, 2>(
+    cvt.buffer_to_buffer_with::<2, 2>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(2, 2)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(2, 2)),
         axes,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -172,14 +169,13 @@ fn test_diagonal_read(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
     };
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<2, 1>(
+    cvt.buffer_to_buffer_with::<2, 1>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 3)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(3)),
         axes,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -205,14 +201,13 @@ fn test_splat(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
     };
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<1, 2>(
+    cvt.buffer_to_buffer_with::<1, 2>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(3)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
         axes,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -311,13 +306,7 @@ fn test_image_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) 
         a: mev::ComponentMap::A,
     };
 
-    cvt.image_to_image::<2, 2>(
-        &mut encoder,
-        &src_image,
-        &dst_image,
-        AxisSwizzle::IDENTITY,
-        swizzle,
-    );
+    cvt.image_to_image_with::<2, 2>(&mut encoder, &src_image, &dst_image, swizzle);
 
     {
         let mut copy = encoder.copy();
@@ -423,13 +412,7 @@ fn test_image_to_image_srgb_dst(device: &mev::Device, queue: &mut mev::Queue, cv
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COLOR_OUTPUT);
     }
 
-    cvt.image_to_image::<2, 2>(
-        &mut encoder,
-        &src_image,
-        &dst_image,
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
-    );
+    cvt.image_to_image::<2>(&mut encoder, &src_image, &dst_image);
 
     {
         let mut copy = encoder.copy();
@@ -541,15 +524,7 @@ fn test_image_to_image_srgb_dst_resample(device: &mev::Device, queue: &mut mev::
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COLOR_OUTPUT);
     }
 
-    cvt.image_to_image_resample::<2, 2>(
-        &mut encoder,
-        &src_image,
-        &dst_image,
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
-        Filter::Nearest,
-        [AddressMode::ClampToEdge; 2],
-    );
+    cvt.image_to_image_with::<2, 2>(&mut encoder, &src_image, &dst_image, Filter::Nearest);
 
     {
         let mut copy = encoder.copy();
@@ -634,13 +609,23 @@ fn test_buffer_to_image(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt)
         &dst_image,
     );
 
-    cvt.buffer_to_image::<3, 2>(
+    // `src`'s rank-3 shape's z axis is a degenerate extent-1 axis (purely so
+    // `TexelShape` carries a plane stride); it maps to `Zero` since `dst` (a
+    // 2D image) has no third axis to receive it - unlike x/y, it must not be
+    // `Direct` (there is no destination axis index 2 to write into).
+    let axes = AxisSwizzle {
+        x: AxisMap::Direct(Axis::X),
+        y: AxisMap::Direct(Axis::Y),
+        z: AxisMap::Zero,
+        w: AxisMap::Zero,
+    };
+
+    cvt.buffer_to_image_with::<3, 2>(
         &mut encoder,
         &src,
         TexelShape::new(PixelFormat::Rgba8Unorm, extent.to_3d()),
         &dst_image,
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
+        axes,
     );
 
     {
@@ -701,13 +686,12 @@ fn test_image_to_buffer(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt)
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
     }
 
-    cvt.image_to_buffer::<2, 3>(
+    cvt.image_to_buffer_with::<2, 3>(
         &mut encoder,
         &src_image,
         &dst,
         TexelShape::new(PixelFormat::Rgba8Unorm, extent.to_3d()),
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
+        CvtOptions::default(),
     );
 
     submit_and_wait(queue, encoder.finish());
@@ -742,13 +726,7 @@ fn test_extent_mismatch_panics(device: &mev::Device, queue: &mut mev::Queue, cvt
 
     let mut encoder = queue.new_command_encoder();
     let result = catch_unwind(AssertUnwindSafe(|| {
-        cvt.image_to_image::<2, 2>(
-            &mut encoder,
-            &src_image,
-            &dst_image,
-            AxisSwizzle::IDENTITY,
-            Swizzle::IDENTITY,
-        );
+        cvt.image_to_image::<2>(&mut encoder, &src_image, &dst_image);
     }));
     assert!(
         result.is_err(),
@@ -828,15 +806,7 @@ fn test_image_to_image_resample(device: &mev::Device, queue: &mut mev::Queue, cv
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
     }
 
-    cvt.image_to_image_resample::<2, 2>(
-        &mut encoder,
-        &src_image,
-        &dst_image,
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
-        Filter::Nearest,
-        [AddressMode::ClampToEdge; 2],
-    );
+    cvt.image_to_image_with::<2, 2>(&mut encoder, &src_image, &dst_image, Filter::Nearest);
 
     {
         let mut copy = encoder.copy();
@@ -890,15 +860,15 @@ fn test_buffer_to_buffer_resample(device: &mev::Device, queue: &mut mev::Queue, 
     let dst = make_readback_buffer(device, &[0u8; 4], "dst_bb_resample");
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer_resample::<1, 1>(
+    cvt.buffer_to_buffer_with::<1, 1>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(2)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(4)),
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
-        [AddressMode::ClampToEdge; 1],
+        CvtOptions::default()
+            .filter(Filter::Nearest)
+            .address_mode([AddressMode::ClampToEdge; 1]),
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -914,10 +884,11 @@ fn test_buffer_to_buffer_resample(device: &mev::Device, queue: &mut mev::Queue, 
     println!("[PASS] Buffer->Buffer resample (1D length-2 -> length-4 nearest upscale)");
 }
 
-/// `cvt_buffer_to_image_resample`'s `src` is always a `Buffer` (no hardware
-/// sampler), so it must panic when asked for `Filter::Linear` rather than
-/// silently falling back to nearest.
-fn test_buffer_to_image_resample_linear_panics(
+/// A `Buffer` src has no hardware sampler (see `CvtOptions::resize`'s doc):
+/// `buffer_to_buffer_with` and `buffer_to_image_with` must panic (before
+/// recording any GPU work) when given a non-`Nearest` filter in either
+/// `resize` slot, rather than silently falling back to nearest.
+fn test_buffer_resample_non_nearest_filter_panics(
     device: &mev::Device,
     queue: &mut mev::Queue,
     cvt: &Cvt,
@@ -925,36 +896,56 @@ fn test_buffer_to_image_resample_linear_panics(
     use mev::{ImageDesc, ImageExtent, ImageUsage};
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    let src = make_readback_buffer(device, &[0u8; 16], "b2i_resample_linear_src");
-    let dst_image = device.new_image(ImageDesc::new(
-        ImageExtent::D2(mev::Extent2::new(2, 2)),
-        PixelFormat::Rgba8Unorm,
-        ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
-    ));
-
-    let mut encoder = queue.new_command_encoder();
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        cvt.buffer_to_image_resample::<3, 2>(
-            &mut encoder,
-            &src,
-            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2).to_3d()),
-            &dst_image,
-            AxisSwizzle::IDENTITY,
-            Swizzle::IDENTITY,
-            Filter::Linear,
-            [AddressMode::ClampToEdge; 3],
+    {
+        let src = make_readback_buffer(device, &[10u8, 20], "b2b_resample_linear_src");
+        let dst = make_readback_buffer(device, &[0u8; 4], "b2b_resample_linear_dst");
+        let mut encoder = queue.new_command_encoder();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cvt.buffer_to_buffer_with::<1, 1>(
+                &mut encoder,
+                &src,
+                TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(2)),
+                &dst,
+                TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(4)),
+                CvtOptions::default().filter(Filter::Linear),
+            );
+        }));
+        assert!(
+            result.is_err(),
+            "cvt_buffer_to_buffer_with must panic when a non-Nearest filter is requested for a Buffer src"
         );
-    }));
-    assert!(
-        result.is_err(),
-        "cvt_buffer_to_image_resample must panic when Filter::Linear is requested for a Buffer src"
-    );
-    // See `test_extent_mismatch_panics`: finish/submit the still-valid
-    // (empty) recording instead of dropping it, to avoid leaking its
-    // command buffer/pool.
-    submit_and_wait(queue, encoder.finish());
+        // See `test_extent_mismatch_panics`: finish/submit the still-valid
+        // (empty) recording instead of dropping it, to avoid leaking its
+        // command buffer/pool.
+        submit_and_wait(queue, encoder.finish());
+    }
+
+    {
+        let src = make_readback_buffer(device, &[0u8; 16], "b2i_resample_linear_src");
+        let dst_image = device.new_image(ImageDesc::new(
+            ImageExtent::D2(mev::Extent2::new(2, 2)),
+            PixelFormat::Rgba8Unorm,
+            ImageUsage::STORAGE | ImageUsage::TRANSFER_SRC,
+        ));
+        let mut encoder = queue.new_command_encoder();
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            cvt.buffer_to_image_with::<2, 2>(
+                &mut encoder,
+                &src,
+                TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2)),
+                &dst_image,
+                CvtOptions::default().filter(Filter::Linear),
+            );
+        }));
+        assert!(
+            result.is_err(),
+            "cvt_buffer_to_image_with must panic when a non-Nearest filter is requested for a Buffer src"
+        );
+        submit_and_wait(queue, encoder.finish());
+    }
+
     println!(
-        "[PASS] cvt_buffer_to_image_resample panics on Filter::Linear (buffer src has no sampler)"
+        "[PASS] buffer_to_buffer_with/buffer_to_image_with panic on non-Nearest filter (buffer src has no sampler)"
     );
 }
 
@@ -969,14 +960,12 @@ fn test_tail_block_non_multiple_of_4(device: &mev::Device, queue: &mut mev::Queu
     let dst = make_readback_buffer(device, &[0u8; 5], "tail_dst");
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<1, 1>(
+    cvt.buffer_to_buffer::<1>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(5)),
         &dst,
         TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(5)),
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -1005,7 +994,7 @@ fn test_padded_dst_stride_sentinel(device: &mev::Device, queue: &mut mev::Queue,
     let dst = make_readback_buffer(device, &[0xAAu8; 8], "padded_dst");
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<2, 2>(
+    cvt.buffer_to_buffer::<2>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
@@ -1014,8 +1003,6 @@ fn test_padded_dst_stride_sentinel(device: &mev::Device, queue: &mut mev::Queue,
             stride: [Some(1), Some(4)],
             ..TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2))
         },
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -1050,7 +1037,7 @@ fn test_new_dst_stride_preconditions_panic(
         let dst = make_readback_buffer(device, &[0u8], "bad_stride_zero_dst");
         let mut encoder = queue.new_command_encoder();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            cvt.buffer_to_buffer::<1, 1>(
+            cvt.buffer_to_buffer::<1>(
                 &mut encoder,
                 &src,
                 TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1)),
@@ -1059,8 +1046,6 @@ fn test_new_dst_stride_preconditions_panic(
                     stride: [Some(0)],
                     ..TexelShape::new(VertexFormat::Uint8.into(), Extent1::new(1))
                 },
-                AxisSwizzle::IDENTITY,
-                Swizzle::IDENTITY,
             );
         }));
         assert!(
@@ -1075,7 +1060,7 @@ fn test_new_dst_stride_preconditions_panic(
         let dst = make_readback_buffer(device, &[0u8; 10], "bad_stride_axis1_dst");
         let mut encoder = queue.new_command_encoder();
         let result = catch_unwind(AssertUnwindSafe(|| {
-            cvt.buffer_to_buffer::<2, 2>(
+            cvt.buffer_to_buffer::<2>(
                 &mut encoder,
                 &src,
                 TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2)),
@@ -1084,8 +1069,6 @@ fn test_new_dst_stride_preconditions_panic(
                     stride: [Some(1), Some(5)],
                     ..TexelShape::new(VertexFormat::Uint8.into(), Extent2::new(3, 2))
                 },
-                AxisSwizzle::IDENTITY,
-                Swizzle::IDENTITY,
             );
         }));
         assert!(
@@ -1116,14 +1099,12 @@ fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, c
     let extent = mev::Extent([2, 2, 2, 2]);
 
     let mut encoder = queue.new_command_encoder();
-    cvt.buffer_to_buffer::<4, 4>(
+    cvt.buffer_to_buffer::<4>(
         &mut encoder,
         &src,
         TexelShape::new(VertexFormat::Uint32.into(), extent),
         &dst,
         TexelShape::new(VertexFormat::Uint32.into(), extent),
-        AxisSwizzle::IDENTITY,
-        Swizzle::IDENTITY,
     );
     submit_and_wait(queue, encoder.finish());
 
@@ -1135,6 +1116,136 @@ fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, c
         "rank-4 all-aligned (T=0) z-folded dispatch mismatch"
     );
     println!("[PASS] Buffer->Buffer rank-4 all-aligned (T=0), z-folded dispatch shape");
+}
+
+/// Exact-index (non-resize) `Image`->`Buffer` copy at a source offset that
+/// reads past the source image's real physical bounds: with
+/// `CvtOptions::default()` (`address_mode: None`, out-of-bounds
+/// source reads denied), this must panic before any GPU work is recorded -
+/// `image_to_buffer_with` asserts the source region fits the real image
+/// (`ImageSlice::assert_fits_image`) up front rather than letting the
+/// exact-index kernel read past the texture.
+fn test_image_to_buffer_oob_denied_panics(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
+    use mev::{ImageDesc, ImageExtent, ImageUsage};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    let src_image = device.new_image(ImageDesc::new(
+        ImageExtent::D2(mev::Extent2::new(2, 2)),
+        PixelFormat::Rgba8Unorm,
+        ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
+    ));
+    let dst = make_readback_buffer(device, &[0u8; 16], "i2b_oob_denied_dst");
+
+    // offset=(1,0), extent=(2,2) read against a 2x2 physical image: the x
+    // axis runs 1..3, past the image's real width of 2.
+    let src_slice = src_image.slice((Offset2::new(1, 0), mev::Extent2::new(2, 2)));
+
+    let mut encoder = queue.new_command_encoder();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        cvt.image_to_buffer::<2>(
+            &mut encoder,
+            &src_slice,
+            &dst,
+            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2)),
+        );
+    }));
+    assert!(
+        result.is_err(),
+        "image_to_buffer must panic (before GPU work) when the source region overruns the image and address_mode is unset"
+    );
+    // See `test_extent_mismatch_panics`: finish/submit the still-valid
+    // (empty) recording instead of dropping it, to avoid leaking its
+    // command buffer/pool.
+    submit_and_wait(queue, encoder.finish());
+    println!(
+        "[PASS] Image->Buffer exact-index panics on out-of-bounds source region (address_mode: None)"
+    );
+}
+
+/// Same overrunning source region as `test_image_to_buffer_oob_denied_panics`,
+/// but with `address_mode: Some([AddressMode::ClampToEdge; 2])`: must not
+/// panic, must execute, and the out-of-range x=2 column (past the image's
+/// real width of 2) must clamp to the image's real edge column (x=1) rather
+/// than being denied. Verified against a hand-computed expected array, not
+/// just "it didn't panic".
+fn test_image_to_buffer_oob_clamp_wraps(device: &mev::Device, queue: &mut mev::Queue, cvt: &Cvt) {
+    use mev::{ImageDesc, ImageExtent, ImageUsage};
+
+    let src_image = device.new_image(ImageDesc::new(
+        ImageExtent::D2(mev::Extent2::new(2, 2)),
+        PixelFormat::Rgba8Unorm,
+        ImageUsage::SAMPLED | ImageUsage::TRANSFER_DST,
+    ));
+
+    // Physical 2x2 grid, row-major: p00=(0,0), p10=(1,0), p01=(0,1), p11=(1,1).
+    let p00 = [1u8, 2, 3, 255];
+    let p10 = [4u8, 5, 6, 255];
+    let p01 = [7u8, 8, 9, 255];
+    let p11 = [10u8, 11, 12, 255];
+    let src_pixels: [u8; 16] = std::array::from_fn(|i| {
+        let px = i / 4;
+        let ch = i % 4;
+        [p00, p10, p01, p11][px][ch]
+    });
+
+    let staging = device.new_buffer_init(BufferInitDesc {
+        data: &src_pixels,
+        usage: BufferUsage::TRANSFER_SRC | BufferUsage::HOST_WRITE,
+        name: "i2b_oob_clamp_stage",
+    });
+    let dst = make_readback_buffer(device, &[0u8; 16], "i2b_oob_clamp_dst");
+
+    let mut encoder = queue.new_command_encoder();
+    encoder.init_image(
+        PipelineStages::empty(),
+        PipelineStages::TRANSFER,
+        &src_image,
+    );
+    {
+        let mut copy = encoder.copy();
+        copy.copy_buffer_to_image(
+            &staging,
+            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2)).with_row_stride(2 * 4),
+            &src_image,
+        );
+        copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);
+    }
+
+    // Same overrunning offset=(1,0), extent=(2,2) as the panic test above.
+    let src_slice = src_image.slice((Offset2::new(1, 0), mev::Extent2::new(2, 2)));
+
+    cvt.image_to_buffer_with::<2, 2>(
+        &mut encoder,
+        &src_slice,
+        &dst,
+        TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2)),
+        CvtOptions::default().address_mode([AddressMode::ClampToEdge; 2]),
+    );
+
+    submit_and_wait(queue, encoder.finish());
+
+    let mut out = [0u8; 16];
+    let mut dst = dst;
+    dst.read(0, &mut out).unwrap();
+
+    // Logical (lx, ly) reads physical (1+lx, ly): lx=0 -> physical x=1
+    // (real column), lx=1 -> physical x=2, clamped to the real edge x=1.
+    // So both dst columns read the image's real x=1 column: row ly=0 reads
+    // p10 twice, row ly=1 reads p11 twice.
+    let expected_src = [p10, p10, p11, p11];
+    let expected: [u8; 16] = std::array::from_fn(|i| {
+        let px = i / 4;
+        let ch = i % 4;
+        expected_src[px][ch]
+    });
+    assert_eq!(
+        out, expected,
+        "Image->Buffer exact-index out-of-bounds clamp mismatch: {:?} != {:?}",
+        out, expected
+    );
+    println!(
+        "[PASS] Image->Buffer exact-index out-of-bounds source clamps to real image edge (address_mode: Some(ClampToEdge))"
+    );
 }
 
 fn main() {
@@ -1173,11 +1284,13 @@ fn main() {
     test_extent_mismatch_panics(&device, &mut queue, &cvt);
     test_image_to_image_resample(&device, &mut queue, &cvt);
     test_buffer_to_buffer_resample(&device, &mut queue, &cvt);
-    test_buffer_to_image_resample_linear_panics(&device, &mut queue, &cvt);
+    test_buffer_resample_non_nearest_filter_panics(&device, &mut queue, &cvt);
     test_tail_block_non_multiple_of_4(&device, &mut queue, &cvt);
     test_padded_dst_stride_sentinel(&device, &mut queue, &cvt);
     test_new_dst_stride_preconditions_panic(&device, &mut queue, &cvt);
     test_rank4_all_aligned_z_fold(&device, &mut queue, &cvt);
+    test_image_to_buffer_oob_denied_panics(&device, &mut queue, &cvt);
+    test_image_to_buffer_oob_clamp_wraps(&device, &mut queue, &cvt);
 
     println!("All cvt_smoke checks passed.");
 }

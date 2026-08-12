@@ -148,32 +148,21 @@ impl TriangleApp {
 
         let pipeline = self.pipeline.as_ref().unwrap();
 
-        self.queue
-            .sync_frame(&mut frame, mev::PipelineStages::COLOR_OUTPUT);
-        let mut encoder = self.queue.new_command_encoder();
-        encoder.init_image(
-            mev::PipelineStages::empty(),
-            mev::PipelineStages::COLOR_OUTPUT,
-            frame.image().as_image(),
-        );
+        let mut encoder = self
+            .queue
+            .begin_frame(&mut frame, mev::PipelineStages::COLOR_OUTPUT);
 
         {
             let mut copy = encoder.copy();
 
-            copy.barrier(
-                mev::PipelineStages::VERTEX_SHADER,
-                mev::PipelineStages::TRANSFER,
-            );
-            copy.write_buffer(
+            copy.write_buffer_sync(
                 &self.pc,
                 &TriangleConstants {
                     angle,
                     width: target_extent.width(),
                     height: target_extent.height(),
                 },
-            );
-            copy.barrier(
-                mev::PipelineStages::TRANSFER,
+                mev::PipelineStages::VERTEX_SHADER,
                 mev::PipelineStages::VERTEX_SHADER,
             );
         }
@@ -185,8 +174,6 @@ impl TriangleApp {
                 depth_stencil_attachment: None,
             });
 
-            render.with_viewport(mev::Offset3::ZERO, target_extent.to_3d().cast_as_f32());
-            render.with_scissor(mev::Offset2::ZERO, target_extent.to_2d());
             render.with_pipeline(pipeline);
             render.with_arguments(
                 0,

@@ -341,10 +341,10 @@ impl Queue {
         }
     }
 
-    pub(super) fn add_wait(&mut self, semaphores: vk::Semaphore, before: PipelineStages) {
+    pub(super) fn add_wait(&mut self, semaphores: vk::Semaphore, next_use: PipelineStages) {
         self.wait_semaphores.push(semaphores);
         self.wait_stages
-            .push(ash::vk::PipelineStageFlags::TOP_OF_PIPE | before.into_ash());
+            .push(ash::vk::PipelineStageFlags::TOP_OF_PIPE | next_use.into_ash());
     }
 
     fn refresh_pools(pools: &mut VecDeque<Pool>, device: &ash::Device) -> Result<(), OutOfMemory> {
@@ -709,14 +709,21 @@ impl crate::traits::Queue for Queue {
     }
 
     /// Synchronize the access to the frame resources.
-    fn sync_frame(&mut self, frame: &mut Frame, before: PipelineStages) {
+    fn sync_frame(&mut self, frame: &mut Frame, next_use: PipelineStages) {
         assert!(!frame.synced, "Frame must be synced exactly once");
 
         if frame.acquire != vk::Semaphore::null() {
-            self.add_wait(frame.acquire, before);
+            self.add_wait(frame.acquire, next_use);
         }
 
         frame.synced = true;
+    }
+
+    fn begin_frame(&mut self, frame: &mut Frame, next_use: PipelineStages) -> CommandEncoder {
+        self.sync_frame(frame, next_use);
+        let mut encoder = self.new_command_encoder();
+        encoder.init_image(PipelineStages::empty(), next_use, frame.image().as_image());
+        encoder
     }
 
     fn wait_idle(&self) -> Result<(), DeviceError> {

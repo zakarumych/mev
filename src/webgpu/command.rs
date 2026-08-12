@@ -76,12 +76,12 @@ impl CommandEncoder {
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
-    fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
 
     fn init_image(
         &mut self,
-        _after: PipelineStages,
-        _before: PipelineStages,
+        _prev_use: PipelineStages,
+        _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
     }
@@ -173,11 +173,29 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             multiview_mask: None,
         });
 
-        RenderCommandEncoder {
+        let mut render = RenderCommandEncoder {
             pass: encoder,
             current_pipeline: None,
             device: self.device.clone(),
+        };
+
+        // Default the viewport and scissor to the full extent of the first
+        // attachment (first color attachment, else depth-stencil), matching
+        // an explicit `with_viewport`/`with_scissor` call to the same effect.
+        // wgpu already defaults to the full target, but this keeps all
+        // backends' behavior identical.
+        let first_attachment = desc
+            .color_attachments
+            .first()
+            .map(|color| color.image)
+            .or_else(|| desc.depth_stencil_attachment.as_ref().map(|depth| depth.image));
+        if let Some(image) = first_attachment {
+            let extent = image.extent().expect_2d();
+            render.with_viewport(Offset3::ZERO, extent.to_3d().cast_as_f32());
+            render.with_scissor(Offset2::ZERO, extent);
         }
+
+        render
     }
 
     fn acceleration_structure(&mut self) -> AccelerationStructureCommandEncoder<'_> {
@@ -186,7 +204,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         }
     }
 
-    fn present(&mut self, frame: Frame, _after: PipelineStages) {
+    fn present(&mut self, frame: Frame, _prev_use: PipelineStages) {
         self.pending_presents.push(frame.texture);
     }
 
@@ -208,12 +226,12 @@ pub struct CopyCommandEncoder<'enc> {
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
-    fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
 
     fn init_image(
         &mut self,
-        _after: PipelineStages,
-        _before: PipelineStages,
+        _prev_use: PipelineStages,
+        _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
     }
@@ -284,6 +302,21 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
 
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data));
+    }
+
+    /// Writes data and emits the surrounding barriers. `prev_use` = stages
+    /// that previously used the buffer, `next_use` = stages that will use it
+    /// next.
+    fn write_buffer_sync(
+        &mut self,
+        slice: impl AsBufferSlice,
+        data: &impl bytemuck::NoUninit,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
+    ) {
+        self.barrier(prev_use, PipelineStages::TRANSFER);
+        self.write_buffer(slice, data);
+        self.barrier(PipelineStages::TRANSFER, next_use);
     }
 
     fn copy_buffer_to_buffer(&mut self, src: &impl AsBufferSlice, dst: &impl AsBufferSlice) {
@@ -510,12 +543,12 @@ impl ComputeCommandEncoder<'_> {
 
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
-    fn barrier(&mut self, _after: PipelineStages, _before: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
 
     fn init_image(
         &mut self,
-        _after: PipelineStages,
-        _before: PipelineStages,
+        _prev_use: PipelineStages,
+        _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
     }

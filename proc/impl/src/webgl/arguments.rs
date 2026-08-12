@@ -31,6 +31,8 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_m
         .map(|field| FieldAttributes::parse(&field.attrs, field.span()))
         .collect::<Result<Vec<_>, _>>()?;
 
+    check_field_shaders(&data.fields, &field_attrs)?;
+
     let field_argument_impls = data
         .fields
         .iter()
@@ -59,42 +61,38 @@ pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<proc_m
         .fields
         .iter()
         .zip(&field_attrs)
-        .map(|(field, attrs)| {
-            if attrs.shaders.flags.is_empty() {
-                quote_spanned!(field.span() => #mev::ShaderStage::empty())
-            } else {
-                let mut tokens = quote!(0);
+        .map(|(_field, attrs)| {
+            let mut tokens = quote!(0);
 
-                for stage in attrs.shaders.flags.iter() {
-                    match stage {
-                        Shader::Vertex(vertex) => {
-                            if !tokens.is_empty() {
-                                tokens.extend(quote_spanned!(vertex.span() => | ));
-                            }
-                            tokens
-                                .extend(quote_spanned!(vertex.span() => #mev::ShaderStages::VERTEX.bits()))
+            for stage in attrs.shaders.flags.iter() {
+                match stage {
+                    Shader::Vertex(vertex) => {
+                        if !tokens.is_empty() {
+                            tokens.extend(quote_spanned!(vertex.span() => | ));
                         }
-                        Shader::Fragment(fragment) => {
-                            if !tokens.is_empty() {
-                                tokens.extend(quote_spanned!(fragment.span() => | ));
-                            }
-                            tokens.extend(
-                                quote_spanned!(fragment.span() => #mev::ShaderStages::FRAGMENT.bits()),
-                            )
+                        tokens
+                            .extend(quote_spanned!(vertex.span() => #mev::ShaderStages::VERTEX.bits()))
+                    }
+                    Shader::Fragment(fragment) => {
+                        if !tokens.is_empty() {
+                            tokens.extend(quote_spanned!(fragment.span() => | ));
                         }
-                        Shader::Compute(compute) => {
-                            if !tokens.is_empty() {
-                                tokens.extend(quote_spanned!(compute.span() => | ));
-                            }
-                            tokens.extend(
-                                quote_spanned!(compute.span() => #mev::ShaderStages::COMPUTE.bits()),
-                            )
+                        tokens.extend(
+                            quote_spanned!(fragment.span() => #mev::ShaderStages::FRAGMENT.bits()),
+                        )
+                    }
+                    Shader::Compute(compute) => {
+                        if !tokens.is_empty() {
+                            tokens.extend(quote_spanned!(compute.span() => | ));
                         }
+                        tokens.extend(
+                            quote_spanned!(compute.span() => #mev::ShaderStages::COMPUTE.bits()),
+                        )
                     }
                 }
-
-                quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
             }
+
+            quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
         })
         .collect::<Vec<_>>();
 

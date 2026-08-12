@@ -1,7 +1,7 @@
 use std::range::Range;
 
-use ash::vk;
 use ash::vk::Handle;
+use ash::vk::{self, Rect2D};
 use smallvec::SmallVec;
 
 use crate::{
@@ -94,19 +94,19 @@ impl CommandEncoder {
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[inline(always)]
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
+    fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
         if self.handle.is_null() {
             return;
         }
 
-        barrier(&self.device, self.handle, after, before);
+        barrier(&self.device, self.handle, prev_stages, next_stages);
     }
 
     #[inline(always)]
     fn init_image(
         &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
         image: impl AsRef<Image>,
     ) {
         let image = image.as_ref();
@@ -114,7 +114,7 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
             return;
         }
 
-        image_barrier(&self.device, self.handle, after, before, image);
+        image_barrier(&self.device, self.handle, prev_use, next_use, image);
         self.refs.add_image(image.clone());
     }
 }
@@ -122,19 +122,19 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
 #[hidden_trait::expose]
 impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline]
-    fn present(&mut self, frame: Frame, after: PipelineStages) {
+    fn present(&mut self, frame: Frame, prev_use: PipelineStages) {
         // Always collect present frames even in OOM state so swapchain images are released.
         if !self.handle.is_null() {
             unsafe {
                 self.device.ash().cmd_pipeline_barrier(
                     self.handle,
-                    ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | after.into_ash(),
+                    ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | prev_use.into_ash(),
                     ash::vk::PipelineStageFlags::TOP_OF_PIPE,
                     vk::DependencyFlags::empty(),
                     &[],
                     &[],
                     &[ash::vk::ImageMemoryBarrier::default()
-                        .src_access_mask(access_for_stages(after))
+                        .src_access_mask(access_for_stages(prev_use))
                         .dst_access_mask(ash::vk::AccessFlags::empty())
                         .old_layout(ash::vk::ImageLayout::GENERAL)
                         .new_layout(frame.present_layout())
@@ -213,25 +213,56 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             };
         }
 
-        let mut extent = vk::Extent2D {
-            width: u32::MAX,
-            height: u32::MAX,
-        };
+        assert!(
+            !desc.color_attachments.is_empty() || desc.depth_stencil_attachment.is_some(),
+            "Render pass must have at least one color attachment or a depth-stencil attachment"
+        );
+
+        let mut render_area = None::<ash::vk::Rect2D>;
 
         let mut color_attachments = Vec::with_capacity(desc.color_attachments.len());
         for color in desc.color_attachments.iter() {
-            let format = color.image.format();
+            color.image.assert_fits_image();
+
+            assert_eq!(
+                color.image.layers.start, 0,
+                "Temporary restriction: color attachment layers must start at 0"
+            );
+            assert_eq!(
+                color.image.layers.end, 1,
+                "Temporary restriction: color attachment layers must end at 1"
+            );
+
+            let format = color.image.image().format();
             debug_assert!(format.is_color());
 
-            let color_extent: ash::vk::Extent2D = color.image.extent().expect_2d().into_ash();
-            extent.width = extent.width.min(color_extent.width);
-            extent.height = extent.height.min(color_extent.height);
+            let color_offset = color.image.offset().into_ash();
+            let color_extent = color.image.extent().into_ash();
+
+            match render_area {
+                Some(area) => {
+                    assert_eq!(
+                        area.offset, color_offset,
+                        "All attachments in a render pass must have the same offset"
+                    );
+                    assert_eq!(
+                        area.extent, color_extent,
+                        "All attachments in a render pass must have the same extent"
+                    );
+                }
+                None => {
+                    render_area = Some(vk::Rect2D {
+                        offset: color_offset,
+                        extent: color_extent,
+                    });
+                }
+            }
 
             let mut attachment = vk::RenderingAttachmentInfo::default();
 
-            self.refs.add_image(color.image.clone());
+            self.refs.add_image(color.image.image().clone());
 
-            attachment.image_view = color.image.view_handle();
+            attachment.image_view = color.image.image().view_handle();
             attachment.image_layout = vk::ImageLayout::GENERAL;
             attachment.load_op = match color.load {
                 LoadOp::Load => vk::AttachmentLoadOp::LOAD,
@@ -257,20 +288,49 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         let depth_attachment;
         let stencil_attachment;
 
-        if let Some(depth) = desc.depth_stencil_attachment {
-            let format = depth.image.format();
+        if let Some(depth) = &desc.depth_stencil_attachment {
+            depth.image.assert_fits_image();
+
+            assert_eq!(
+                depth.image.layers.start, 0,
+                "Temporary restriction: depth attachment layers must start at 0"
+            );
+            assert_eq!(
+                depth.image.layers.end, 1,
+                "Temporary restriction: depth attachment layers must end at 1"
+            );
+
+            let format = depth.image.image().format();
             debug_assert!(format.is_depth() || format.is_stencil());
 
-            let depth_extent: ash::vk::Extent2D = depth.image.extent().expect_2d().into_ash();
-            extent.width = extent.width.min(depth_extent.width);
-            extent.height = extent.height.min(depth_extent.height);
+            let depth_offset = depth.image.offset().into_ash();
+            let depth_extent = depth.image.extent().into_ash();
+
+            match render_area {
+                Some(area) => {
+                    assert_eq!(
+                        area.offset, depth_offset,
+                        "All attachments in a render pass must have the same offset"
+                    );
+                    assert_eq!(
+                        area.extent, depth_extent,
+                        "All attachments in a render pass must have the same extent"
+                    );
+                }
+                None => {
+                    render_area = Some(vk::Rect2D {
+                        offset: depth_offset,
+                        extent: depth_extent,
+                    });
+                }
+            }
 
             if format.is_depth() {
                 let mut attachment = vk::RenderingAttachmentInfo::default();
 
-                self.refs.add_image(depth.image.clone());
+                self.refs.add_image(depth.image.image().clone());
 
-                attachment.image_view = depth.image.view_handle();
+                attachment.image_view = depth.image.image().view_handle();
                 attachment.image_layout = vk::ImageLayout::GENERAL;
                 attachment.load_op = match depth.load {
                     LoadOp::Load => vk::AttachmentLoadOp::LOAD,
@@ -292,9 +352,9 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             if format.is_stencil() {
                 let mut attachment = vk::RenderingAttachmentInfo::default();
 
-                self.refs.add_image(depth.image.clone());
+                self.refs.add_image(depth.image.image().clone());
 
-                attachment.image_view = depth.image.view_handle();
+                attachment.image_view = depth.image.image().view_handle();
                 attachment.load_op = match depth.load {
                     LoadOp::Load => vk::AttachmentLoadOp::LOAD,
                     LoadOp::Clear(ClearDepthStencil { depth, stencil }) => {
@@ -318,20 +378,37 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             self.device.ash().cmd_begin_rendering(
                 self.handle,
                 &info
-                    .render_area(vk::Rect2D {
-                        offset: vk::Offset2D { x: 0, y: 0 },
-                        extent,
-                    })
+                    .render_area(render_area.expect("Render area must be specified"))
                     .layer_count(1),
             )
         }
 
-        RenderCommandEncoder {
+        let mut render = RenderCommandEncoder {
             device: self.device.clone(),
             handle: self.handle,
             current_layout: None,
             refs: &mut self.refs,
+        };
+
+        // Default the viewport and scissor to the full extent of the first
+        // attachment (first color attachment, else depth-stencil), matching
+        // an explicit `with_viewport`/`with_scissor` call to the same effect.
+        let first_attachment = desc
+            .color_attachments
+            .first()
+            .map(|color| &color.image)
+            .or_else(|| {
+                desc.depth_stencil_attachment
+                    .as_ref()
+                    .map(|depth| &depth.image)
+            });
+        if let Some(image) = first_attachment {
+            let extent = image.extent();
+            render.with_viewport(Offset3::ZERO, extent.to_3d().cast_as_f32());
+            render.with_scissor(Offset2::ZERO, extent);
         }
+
+        render
     }
 }
 
@@ -367,18 +444,18 @@ impl ComputeCommandEncoder<'_> {
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline]
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
+    fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
         if self.handle.is_null() {
             return;
         }
-        barrier(&self.device, self.handle, after, before);
+        barrier(&self.device, self.handle, prev_stages, next_stages);
     }
 
     #[inline]
     fn init_image(
         &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
         image: impl AsRef<Image>,
     ) {
         let image = image.as_ref();
@@ -387,7 +464,7 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
             return;
         }
 
-        image_barrier(&self.device, self.handle, after, before, image);
+        image_barrier(&self.device, self.handle, prev_use, next_use, image);
         self.refs.add_image(image.clone());
     }
 }
@@ -676,18 +753,18 @@ pub struct CopyCommandEncoder<'a> {
 #[hidden_trait::expose]
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
-    fn barrier(&mut self, after: PipelineStages, before: PipelineStages) {
+    fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
         if self.handle.is_null() {
             return;
         }
-        barrier(&self.device, self.handle, after, before);
+        barrier(&self.device, self.handle, prev_stages, next_stages);
     }
 
     #[inline]
     fn init_image(
         &mut self,
-        after: PipelineStages,
-        before: PipelineStages,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
         image: impl AsRef<Image>,
     ) {
         let image = image.as_ref();
@@ -696,7 +773,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
             return;
         }
 
-        image_barrier(&self.device, self.handle, after, before, image);
+        image_barrier(&self.device, self.handle, prev_use, next_use, image);
         self.refs.add_image(image.clone());
     }
 }
@@ -1020,6 +1097,22 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
         self.write_buffer_raw(slice, bytemuck::cast_slice(data))
     }
+
+    /// Writes data and emits the surrounding barriers. `prev_use` = stages
+    /// that previously used the buffer, `next_use` = stages that will use it
+    /// next.
+    #[inline]
+    fn write_buffer_sync(
+        &mut self,
+        slice: impl AsBufferSlice,
+        data: &impl bytemuck::NoUninit,
+        prev_use: PipelineStages,
+        next_use: PipelineStages,
+    ) {
+        self.barrier(prev_use, PipelineStages::TRANSFER);
+        self.write_buffer(slice, data);
+        self.barrier(PipelineStages::TRANSFER, next_use);
+    }
 }
 
 pub struct AccelerationStructureCommandEncoder<'a> {
@@ -1045,18 +1138,18 @@ impl crate::traits::AccelerationStructureCommandEncoder
 fn barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,
-    after: PipelineStages,
-    before: PipelineStages,
+    prev_stages: PipelineStages,
+    next_stages: PipelineStages,
 ) {
     unsafe {
         device.ash().cmd_pipeline_barrier(
             handle,
-            ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | after.into_ash(),
-            ash::vk::PipelineStageFlags::TOP_OF_PIPE | before.into_ash(),
+            ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | prev_stages.into_ash(),
+            ash::vk::PipelineStageFlags::TOP_OF_PIPE | next_stages.into_ash(),
             vk::DependencyFlags::empty(),
             &[vk::MemoryBarrier::default()
-                .src_access_mask(access_for_stages(after))
-                .dst_access_mask(access_for_stages(before))],
+                .src_access_mask(access_for_stages(prev_stages))
+                .dst_access_mask(access_for_stages(next_stages))],
             &[],
             &[],
         )
@@ -1067,8 +1160,8 @@ fn barrier(
 fn image_barrier(
     device: &Device,
     handle: ash::vk::CommandBuffer,
-    after: PipelineStages,
-    before: PipelineStages,
+    prev_use: PipelineStages,
+    next_use: PipelineStages,
     image: &Image,
 ) {
     let mut aspect_mask = ash::vk::ImageAspectFlags::empty();
@@ -1085,14 +1178,14 @@ fn image_barrier(
     unsafe {
         device.ash().cmd_pipeline_barrier(
             handle,
-            ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | after.into_ash(),
-            ash::vk::PipelineStageFlags::TOP_OF_PIPE | before.into_ash(),
+            ash::vk::PipelineStageFlags::BOTTOM_OF_PIPE | prev_use.into_ash(),
+            ash::vk::PipelineStageFlags::TOP_OF_PIPE | next_use.into_ash(),
             vk::DependencyFlags::empty(),
             &[],
             &[],
             &[ash::vk::ImageMemoryBarrier::default()
-                .src_access_mask(access_for_stages(after))
-                .dst_access_mask(access_for_stages(before))
+                .src_access_mask(access_for_stages(prev_use))
+                .dst_access_mask(access_for_stages(next_use))
                 .old_layout(ash::vk::ImageLayout::UNDEFINED)
                 .new_layout(ash::vk::ImageLayout::GENERAL)
                 .image(image.handle())

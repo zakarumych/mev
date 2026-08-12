@@ -107,7 +107,47 @@ where
     }
 }
 
+impl<T, const N: usize> BufferInit for [T; N]
+where
+    T: bytemuck::NoUninit,
+{
+    #[inline(always)]
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+
+    #[inline(always)]
+    fn as_bytes(&self) -> Option<&[u8]> {
+        Some(bytemuck::cast_slice(self.as_slice()))
+    }
+
+    #[inline(always)]
+    fn write(self, mem: &mut [u8]) {
+        mem.copy_from_slice(bytemuck::cast_slice(self.as_slice()));
+    }
+}
+
 impl<'a, T, const N: usize> BufferInit for &'a [T; N]
+where
+    T: bytemuck::NoUninit,
+{
+    #[inline(always)]
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self.as_slice())
+    }
+
+    #[inline(always)]
+    fn as_bytes(&self) -> Option<&[u8]> {
+        Some(bytemuck::cast_slice(self.as_slice()))
+    }
+
+    #[inline(always)]
+    fn write(self, mem: &mut [u8]) {
+        mem.copy_from_slice(bytemuck::cast_slice(self.as_slice()));
+    }
+}
+
+impl<'a, T> BufferInit for &'a std::vec::Vec<T>
 where
     T: bytemuck::NoUninit,
 {

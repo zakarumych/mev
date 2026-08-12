@@ -84,7 +84,11 @@ impl crate::traits::Queue for Queue {
         self.submit(command_buffers)
     }
 
-    fn sync_frame(&mut self, _frame: &mut Frame, _before: PipelineStages) {}
+    fn sync_frame(&mut self, _frame: &mut Frame, _next_use: PipelineStages) {}
+
+    fn begin_frame(&mut self, frame: &mut Frame, next_use: PipelineStages) -> CommandEncoder {
+        self.new_command_encoder()
+    }
 
     fn wait_idle(&self) -> Result<(), DeviceError> {
         let result = self.device.wgpu().poll(wgpu::PollType::Wait {

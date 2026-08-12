@@ -815,6 +815,7 @@ impl<const D: usize> ImageRegion<D> for (Offset<D>, Extent<D>, Range<u32>) {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageSlice<'a, const D: usize> {
     pub(crate) image: Cow<'a, Image>,
     pub(crate) offset: Offset<D>,
@@ -885,6 +886,10 @@ impl<const D: usize> ImageSlice<'_, D> {
         self
     }
 }
+
+pub type ImageSlice1D<'a> = ImageSlice<'a, 1>;
+pub type ImageSlice2D<'a> = ImageSlice<'a, 2>;
+pub type ImageSlice3D<'a> = ImageSlice<'a, 3>;
 
 impl Image {
     pub fn slice<const D: usize>(&self, region: impl ImageRegion<D>) -> ImageSlice<'_, D> {
@@ -972,10 +977,6 @@ impl<'a, const D: usize> AsImageSlice<D> for ImageSlice<'a, D> {
     }
 }
 
-pub trait AsImage {
-    fn as_image(&self) -> &Image;
-}
-
 impl AsRef<Image> for Image {
     #[inline(always)]
     fn as_ref(&self) -> &Image {
@@ -983,87 +984,16 @@ impl AsRef<Image> for Image {
     }
 }
 
-/// N-dimensional image with exactly 1 layer.
-pub struct ImageN<const D: usize>(Image);
-
-impl<const D: usize> AsRef<Image> for ImageN<D> {
-    #[inline(always)]
-    fn as_ref(&self) -> &Image {
-        &self.0
-    }
-}
-
-impl<const D: usize> ImageN<D> {
-    /// Constructs an `ImageN` from an image that the caller guarantees is
-    /// `D`-dimensional with exactly 1 layer.
-    ///
-    /// This is the only way to construct an `ImageN` without going through
-    /// the fallible `TryFrom<Image>` impl.
-    #[inline(always)]
-    pub(crate) fn new_unchecked(image: Image) -> Self {
-        ImageN(image)
-    }
-
-    #[inline(always)]
-    pub fn as_image(&self) -> &Image {
-        &self.0
-    }
-
-    #[inline(always)]
-    pub fn into_image(self) -> Image {
-        self.0
-    }
-
-    /// Extent, typed. Infallible - `D` is guaranteed correct by construction.
-    #[inline(always)]
-    pub fn extent(&self) -> Extent<D> {
-        self.0.extent().expect_nd::<D>()
-    }
-
-    #[inline(always)]
-    pub fn format(&self) -> PixelFormat {
-        self.0.format()
-    }
-
-    #[inline(always)]
-    pub fn levels(&self) -> u32 {
-        self.0.levels()
-    }
-
-    #[inline(always)]
-    pub fn usage(&self) -> ImageUsage {
-        self.0.usage()
-    }
-
-    #[inline(always)]
-    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Image {
-        self.0.view(device, desc)
-    }
-
-    #[inline(always)]
-    pub fn detached(&self) -> bool {
-        self.0.detached()
-    }
-
-    #[inline(always)]
-    pub fn slice(&self, region: impl ImageRegion<D>) -> ImageSlice<'_, D> {
-        self.0.slice(region)
-    }
-}
-
-impl<const D: usize> AsImage for ImageN<D> {
-    #[inline(always)]
-    fn as_image(&self) -> &Image {
-        &self.0
-    }
-}
-
-pub type Image1D = ImageN<1>;
-pub type Image2D = ImageN<2>;
-pub type Image3D = ImageN<3>;
-
 /// N-dimensional array image with more than 1 layer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ImageArrayN<const D: usize>(Image);
+
+impl<const D: usize> AsRef<ImageArrayN<D>> for ImageArrayN<D> {
+    #[inline(always)]
+    fn as_ref(&self) -> &ImageArrayN<D> {
+        self
+    }
+}
 
 impl<const D: usize> AsRef<Image> for ImageArrayN<D> {
     #[inline(always)]
@@ -1144,6 +1074,93 @@ pub type ImageArray1D = ImageArrayN<1>;
 pub type ImageArray2D = ImageArrayN<2>;
 pub type ImageArray3D = ImageArrayN<3>;
 
+/// N-dimensional image with exactly 1 layer.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ImageN<const D: usize>(ImageArrayN<D>);
+
+impl<const D: usize> AsRef<ImageN<D>> for ImageN<D> {
+    #[inline(always)]
+    fn as_ref(&self) -> &ImageN<D> {
+        self
+    }
+}
+
+impl<const D: usize> AsRef<ImageArrayN<D>> for ImageN<D> {
+    #[inline(always)]
+    fn as_ref(&self) -> &ImageArrayN<D> {
+        &self.0
+    }
+}
+
+impl<const D: usize> AsRef<Image> for ImageN<D> {
+    #[inline(always)]
+    fn as_ref(&self) -> &Image {
+        self.0.as_image()
+    }
+}
+
+impl<const D: usize> ImageN<D> {
+    /// Constructs an `ImageN` from an image that the caller guarantees is
+    /// `D`-dimensional with exactly 1 layer.
+    ///
+    /// This is the only way to construct an `ImageN` without going through
+    /// the fallible `TryFrom<Image>` impl.
+    #[inline(always)]
+    pub(crate) fn new_unchecked(image: Image) -> Self {
+        ImageN(ImageArrayN::new_unchecked(image))
+    }
+
+    #[inline(always)]
+    pub fn as_image(&self) -> &Image {
+        self.0.as_ref()
+    }
+
+    #[inline(always)]
+    pub fn into_image(self) -> Image {
+        self.0.into_image()
+    }
+
+    /// Extent, typed. Infallible - `D` is guaranteed correct by construction.
+    #[inline(always)]
+    pub fn extent(&self) -> Extent<D> {
+        self.0.extent()
+    }
+
+    #[inline(always)]
+    pub fn format(&self) -> PixelFormat {
+        self.0.format()
+    }
+
+    #[inline(always)]
+    pub fn levels(&self) -> u32 {
+        self.0.levels()
+    }
+
+    #[inline(always)]
+    pub fn usage(&self) -> ImageUsage {
+        self.0.usage()
+    }
+
+    #[inline(always)]
+    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Image {
+        self.0.view(device, desc)
+    }
+
+    #[inline(always)]
+    pub fn detached(&self) -> bool {
+        self.0.detached()
+    }
+
+    #[inline(always)]
+    pub fn slice(&self, region: impl ImageRegion<D>) -> ImageSlice<'_, D> {
+        self.0.slice(region)
+    }
+}
+
+pub type Image1D = ImageN<1>;
+pub type Image2D = ImageN<2>;
+pub type Image3D = ImageN<3>;
+
 /// Error returned when converting a dimension-erased `Image` into a
 /// dimension-typed `ImageN`/`ImageArrayN` whose actual dimensionality (or,
 /// for `ImageArrayN`, layer count) doesn't match what was requested.
@@ -1164,9 +1181,10 @@ impl Error for ImageDimensionMismatch {}
 impl<const D: usize> TryFrom<Image> for ImageN<D> {
     type Error = ImageDimensionMismatch;
 
+    #[inline(always)]
     fn try_from(image: Image) -> Result<Self, Self::Error> {
         if image.extent().dimensions() == D && image.layers() == 1 {
-            Ok(ImageN(image))
+            Ok(ImageN(ImageArrayN(image)))
         } else {
             Err(ImageDimensionMismatch)
         }
@@ -1176,6 +1194,7 @@ impl<const D: usize> TryFrom<Image> for ImageN<D> {
 impl<const D: usize> TryFrom<Image> for ImageArrayN<D> {
     type Error = ImageDimensionMismatch;
 
+    #[inline(always)]
     fn try_from(image: Image) -> Result<Self, Self::Error> {
         if image.extent().dimensions() == D && image.layers() > 1 {
             Ok(ImageArrayN(image))
@@ -1186,9 +1205,10 @@ impl<const D: usize> TryFrom<Image> for ImageArrayN<D> {
 }
 
 impl<const D: usize> AsImageSlice<D> for ImageN<D> {
+    #[inline(always)]
     fn as_image_slice(&self) -> ImageSlice<'_, D> {
         ImageSlice {
-            image: Cow::Borrowed(&self.0),
+            image: Cow::Borrowed(self.as_image()),
             offset: Offset::ZERO,
             extent: self.extent(),
             layers: (0..1).into(),
@@ -1198,9 +1218,10 @@ impl<const D: usize> AsImageSlice<D> for ImageN<D> {
 }
 
 impl<const D: usize> AsImageSlice<D> for ImageArrayN<D> {
+    #[inline(always)]
     fn as_image_slice(&self) -> ImageSlice<'_, D> {
         ImageSlice {
-            image: Cow::Borrowed(&self.0),
+            image: Cow::Borrowed(self.as_image()),
             offset: Offset::ZERO,
             extent: self.extent(),
             layers: (0..self.0.layers()).into(),

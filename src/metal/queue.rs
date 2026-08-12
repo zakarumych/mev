@@ -42,7 +42,10 @@ impl fmt::Debug for Queue {
 }
 
 impl Queue {
-    pub(super) fn new(device: Device, queue: Retained<ProtocolObject<dyn MTLCommandQueue>>) -> Self {
+    pub(super) fn new(
+        device: Device,
+        queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    ) -> Self {
         Queue {
             device,
             queue,
@@ -140,7 +143,11 @@ impl crate::traits::Queue for Queue {
         self.submit_impl(command_buffers, true)
     }
 
-    fn sync_frame(&mut self, _frame: &mut Frame, _before: PipelineStages) {}
+    fn sync_frame(&mut self, _frame: &mut Frame, _next_use: PipelineStages) {}
+
+    fn begin_frame(&mut self, frame: &mut Frame, next_use: PipelineStages) -> CommandEncoder {
+        self.new_command_encoder()
+    }
 
     fn wait_idle(&self) -> Result<(), DeviceError> {
         for epoch in &self.pending_epochs {

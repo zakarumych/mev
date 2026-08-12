@@ -1,7 +1,10 @@
 use core::fmt;
 use std::error::Error;
 
-use crate::{DataType, ScalarType, VectorSize, VertexAttributes, backend::Image};
+use crate::{
+    AsImageSlice, DataType, ImageArray2D, ImageSlice, ImageSlice2D, ScalarType, VectorSize,
+    VertexAttributes, backend::Image,
+};
 
 use super::{PixelFormat, Shader, VertexFormat, arguments::ArgumentGroupLayout};
 
@@ -70,10 +73,10 @@ pub struct ClearDepthStencil {
 }
 
 /// Description of an attachment in a render pass.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct AttachmentDesc<'a, T> {
     /// Image to use as attachment.
-    pub image: &'a Image,
+    pub image: ImageSlice2D<'a>,
 
     /// Load operation for the attachment.
     pub load: LoadOp<T>,
@@ -84,9 +87,9 @@ pub struct AttachmentDesc<'a, T> {
 
 impl<'a, T> AttachmentDesc<'a, T> {
     /// Create a new attachment description from image reference.
-    pub fn new(image: &'a Image) -> Self {
+    pub fn new(image: &'a impl AsImageSlice<2>) -> Self {
         AttachmentDesc {
-            image,
+            image: image.as_image_slice(),
             load: LoadOp::Load,
             store: StoreOp::Store,
         }
@@ -123,14 +126,14 @@ impl<'a, T> AttachmentDesc<'a, T> {
     }
 }
 
-impl<'a, T> From<&'a Image> for AttachmentDesc<'a, T> {
-    fn from(image: &'a Image) -> Self {
+impl<'a, T, I: AsImageSlice<2>> From<&'a I> for AttachmentDesc<'a, T> {
+    fn from(image: &'a I) -> Self {
         AttachmentDesc::new(image)
     }
 }
 
 /// Description of a render pass.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct RenderPassDesc<'a> {
     /// Name of the render pass.
     pub name: &'a str,
@@ -253,6 +256,18 @@ impl ColorTargetDesc {
             mask: WriteMask::all(),
             blend: None,
         }
+    }
+
+    /// Set blending options.
+    pub fn blend(mut self, blend: BlendDesc) -> Self {
+        self.blend = Some(blend);
+        self
+    }
+
+    /// Enable standard alpha blending.
+    pub fn alpha_blend(mut self) -> Self {
+        self.blend = Some(BlendDesc::default());
+        self
     }
 }
 
@@ -472,6 +487,58 @@ pub struct RenderPipelineDesc<'a> {
     pub arguments: &'a [ArgumentGroupLayout<'a>],
 }
 
+impl<'a> RenderPipelineDesc<'a> {
+    /// Create a new render pipeline description.
+    pub fn new(name: &'a str, vertex_shader: Shader<'a>) -> Self {
+        RenderPipelineDesc {
+            name,
+            vertex_shader,
+            vertex_layouts: Vec::new(),
+            vertex_attributes: Vec::new(),
+            primitive_topology: PrimitiveTopology::default(),
+            raster: None,
+            constants: 0,
+            arguments: &[],
+        }
+    }
+
+    /// Set vertex buffer layouts.
+    pub fn vertex_layouts(mut self, vertex_layouts: Vec<VertexLayoutDesc>) -> Self {
+        self.vertex_layouts = vertex_layouts;
+        self
+    }
+
+    /// Set vertex attributes.
+    pub fn vertex_attributes(mut self, vertex_attributes: Vec<VertexAttributeDesc>) -> Self {
+        self.vertex_attributes = vertex_attributes;
+        self
+    }
+
+    /// Set primitive topology.
+    pub fn primitive_topology(mut self, primitive_topology: PrimitiveTopology) -> Self {
+        self.primitive_topology = primitive_topology;
+        self
+    }
+
+    /// Set rasterization options.
+    pub fn raster(mut self, raster: RasterDesc<'a>) -> Self {
+        self.raster = Some(raster);
+        self
+    }
+
+    /// Set size of the shader constants in bytes.
+    pub fn constants(mut self, constants: usize) -> Self {
+        self.constants = constants;
+        self
+    }
+
+    /// Set arguments used by shaders.
+    pub fn arguments(mut self, arguments: &'a [ArgumentGroupLayout<'a>]) -> Self {
+        self.arguments = arguments;
+        self
+    }
+}
+
 /// Describes rasterization options.
 pub struct RasterDesc<'a> {
     /// Fragment shader.
@@ -488,6 +555,50 @@ pub struct RasterDesc<'a> {
 
     /// Face culling mode.
     pub culling: Culling,
+}
+
+impl Default for RasterDesc<'_> {
+    fn default() -> Self {
+        RasterDesc {
+            fragment_shader: None,
+            color_targets: Vec::new(),
+            depth_stencil: None,
+            front_face: FrontFace::default(),
+            culling: Culling::default(),
+        }
+    }
+}
+
+impl<'a> RasterDesc<'a> {
+    /// Set fragment shader.
+    pub fn fragment_shader(mut self, fragment_shader: Shader<'a>) -> Self {
+        self.fragment_shader = Some(fragment_shader);
+        self
+    }
+
+    /// Set color render targets.
+    pub fn color_targets(mut self, color_targets: Vec<ColorTargetDesc>) -> Self {
+        self.color_targets = color_targets;
+        self
+    }
+
+    /// Set depth-stencil target.
+    pub fn depth_stencil(mut self, depth_stencil: DepthStencilDesc) -> Self {
+        self.depth_stencil = Some(depth_stencil);
+        self
+    }
+
+    /// Set front face winding order.
+    pub fn front_face(mut self, front_face: FrontFace) -> Self {
+        self.front_face = front_face;
+        self
+    }
+
+    /// Set face culling mode.
+    pub fn culling(mut self, culling: Culling) -> Self {
+        self.culling = culling;
+        self
+    }
 }
 
 /// Error during render pipeline creation.

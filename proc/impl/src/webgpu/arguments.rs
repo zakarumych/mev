@@ -34,6 +34,8 @@ pub fn derive(
         .map(|field| FieldAttributes::parse(&field.attrs, field.span()))
         .collect::<Result<Vec<_>, _>>()?;
 
+    check_field_shaders(&data.fields, &field_attrs)?;
+
     let field_argument_impls = data
         .fields
         .iter()
@@ -59,26 +61,22 @@ pub fn derive(
         .fields
         .iter()
         .zip(&field_attrs)
-        .map(|(field, attrs)| {
-            if attrs.shaders.flags.is_empty() {
-                quote_spanned!(field.span() => #mev::ShaderStages::empty())
-            } else {
-                let mut tokens = quote::quote!(0);
-                for stage in attrs.shaders.flags.iter() {
-                    match stage {
-                        Shader::Vertex(v) => tokens.extend(
-                            quote_spanned!(v.span() => | #mev::ShaderStages::VERTEX.bits()),
-                        ),
-                        Shader::Fragment(f) => tokens.extend(
-                            quote_spanned!(f.span() => | #mev::ShaderStages::FRAGMENT.bits()),
-                        ),
-                        Shader::Compute(c) => tokens.extend(
-                            quote_spanned!(c.span() => | #mev::ShaderStages::COMPUTE.bits()),
-                        ),
-                    }
+        .map(|(_field, attrs)| {
+            let mut tokens = quote::quote!(0);
+            for stage in attrs.shaders.flags.iter() {
+                match stage {
+                    Shader::Vertex(v) => tokens.extend(
+                        quote_spanned!(v.span() => | #mev::ShaderStages::VERTEX.bits()),
+                    ),
+                    Shader::Fragment(f) => tokens.extend(
+                        quote_spanned!(f.span() => | #mev::ShaderStages::FRAGMENT.bits()),
+                    ),
+                    Shader::Compute(c) => tokens.extend(
+                        quote_spanned!(c.span() => | #mev::ShaderStages::COMPUTE.bits()),
+                    ),
                 }
-                quote::quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
             }
+            quote::quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
         })
         .collect::<Vec<_>>();
 
