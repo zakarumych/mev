@@ -448,12 +448,6 @@ impl Surface {
             return Err(SurfaceError::SurfaceLost);
         }
 
-        tracing::debug!(
-            "Surface '{:?}' capabilities: '{:?}'",
-            self.surface,
-            self.caps
-        );
-
         let use_extent = pick_extent(&self.caps, self.preferred_extent);
         let use_mode = pick_mode(&self.ash_modes, self.preferred_mode);
         let use_format = pick_format(
@@ -835,6 +829,7 @@ impl crate::traits::Surface for Surface {
                             tracing::debug!("Surface '{:?}' is out of date", self.surface);
                             self.status.insert(SurfaceStatus::OUT_OF_DATE);
                             self.cooldown = 0;
+                            self.update_surface_parameters()?;
                             self.configure()?;
                             continue;
                         }
@@ -861,6 +856,7 @@ impl crate::traits::Surface for Surface {
                             } else {
                                 let fence = self.device.new_fence()?;
                                 fences.array.insert(fences.next, fence);
+                                fences.next = (fences.next + 1) % fences.array.len();
                                 fence
                             }
                         }
@@ -877,7 +873,7 @@ impl crate::traits::Surface for Surface {
                     });
                 }
                 MaybeFakeSwapchain::Fake(fake) => {
-                    if self.surface.is_null() {
+                    if !self.surface.is_null() {
                         // Reconfigure each frame the fake swapchain in real surface.
                         // Fake is only used here when maxExtent is {0,0}
                         // As soon as it is not, we will reconfigure to real swapchain.
@@ -935,7 +931,7 @@ impl crate::traits::Resource for Frame {}
 
 #[hidden_trait::expose]
 impl crate::traits::Frame for Frame {
-    #[inline]
+    #[inline(always)]
     fn image(&self) -> &Image2D {
         &self.image
     }

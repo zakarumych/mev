@@ -2568,9 +2568,9 @@ impl Cvt {
     pub fn buffer_to_buffer<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsBufferSlice,
+        src: impl AsBufferSlice,
         src_shape: TexelShape<N>,
-        dst: &impl AsBufferSlice,
+        dst: impl AsBufferSlice,
         dst_shape: TexelShape<N>,
     ) {
         self.buffer_to_buffer_with::<N, N>(
@@ -2616,9 +2616,9 @@ impl Cvt {
     pub fn buffer_to_buffer_with<const SRC: usize, const DST: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsBufferSlice,
+        src: impl AsBufferSlice,
         src_shape: TexelShape<SRC>,
-        dst: &impl AsBufferSlice,
+        dst: impl AsBufferSlice,
         dst_shape: TexelShape<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
@@ -2888,8 +2888,8 @@ impl Cvt {
     pub fn image_to_image<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsImageSlice<N>,
-        dst: &impl AsImageSlice<N>,
+        src: impl AsImageSlice<N>,
+        dst: impl AsImageSlice<N>,
     ) {
         self.image_to_image_with::<N, N>(encoder, src, dst, CvtOptions::default());
     }
@@ -2934,8 +2934,8 @@ impl Cvt {
     pub fn image_to_image_with<const SRC: usize, const DST: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsImageSlice<SRC>,
-        dst: &impl AsImageSlice<DST>,
+        src: impl AsImageSlice<SRC>,
+        dst: impl AsImageSlice<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
         let CvtOptions {
@@ -2962,7 +2962,6 @@ impl Cvt {
         let (src_view, src_offset, src_extent) = resolve_image_slice(&self.device, &src);
 
         let dst = dst.as_image_slice();
-        dst.assert_fits_image();
         let (dst_view, dst_offset, dst_extent) = resolve_image_slice(&self.device, &dst);
 
         let src_format = src_view.format();
@@ -3190,8 +3189,8 @@ impl Cvt {
     pub fn image_to_buffer<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsImageSlice<N>,
-        dst: &impl AsBufferSlice,
+        src: impl AsImageSlice<N>,
+        dst: impl AsBufferSlice,
         dst_shape: TexelShape<N>,
     ) {
         self.image_to_buffer_with::<N, N>(encoder, src, dst, dst_shape, CvtOptions::default());
@@ -3219,8 +3218,8 @@ impl Cvt {
     pub fn image_to_buffer_with<const SRC: usize, const DST: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsImageSlice<SRC>,
-        dst: &impl AsBufferSlice,
+        src: impl AsImageSlice<SRC>,
+        dst: impl AsBufferSlice,
         dst_shape: TexelShape<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
@@ -3414,9 +3413,9 @@ impl Cvt {
     pub fn buffer_to_image<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsBufferSlice,
+        src: impl AsBufferSlice,
         src_shape: TexelShape<N>,
-        dst: &impl AsImageSlice<N>,
+        dst: impl AsImageSlice<N>,
     ) {
         self.buffer_to_image_with::<N, N>(encoder, src, src_shape, dst, CvtOptions::default());
     }
@@ -3439,9 +3438,9 @@ impl Cvt {
     pub fn buffer_to_image_with<const SRC: usize, const DST: usize>(
         &self,
         encoder: &mut CommandEncoder,
-        src: &impl AsBufferSlice,
+        src: impl AsBufferSlice,
         src_shape: TexelShape<SRC>,
-        dst: &impl AsImageSlice<DST>,
+        dst: impl AsImageSlice<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
         let CvtOptions {
@@ -3466,7 +3465,6 @@ impl Cvt {
         );
 
         let dst = dst.as_image_slice();
-        dst.assert_fits_image();
         let (dst_view, dst_offset, dst_extent) = resolve_image_slice(&self.device, &dst);
 
         let src_slice = src.as_buffer_slice();

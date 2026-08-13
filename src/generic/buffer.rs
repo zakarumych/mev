@@ -153,7 +153,7 @@ where
 {
     #[inline(always)]
     fn size(&self) -> usize {
-        std::mem::size_of_val(*self)
+        std::mem::size_of_val(self.as_slice())
     }
 
     #[inline(always)]
@@ -487,6 +487,13 @@ pub trait AsBufferSlice {
     fn as_buffer_slice(&self) -> BufferSlice<'_>;
 }
 
+impl<B: AsBufferSlice> AsBufferSlice for &B {
+    #[inline(always)]
+    fn as_buffer_slice(&self) -> BufferSlice<'_> {
+        (*self).as_buffer_slice()
+    }
+}
+
 impl AsBufferSlice for BufferSlice<'_> {
     #[inline(always)]
     fn as_buffer_slice(&self) -> BufferSlice<'_> {
@@ -502,16 +509,6 @@ impl AsBufferSlice for Buffer {
             size: self.size(),
             buffer: Cow::Borrowed(self),
         }
-    }
-}
-
-impl<B> AsBufferSlice for &B
-where
-    B: AsBufferSlice,
-{
-    #[inline(always)]
-    fn as_buffer_slice(&self) -> BufferSlice<'_> {
-        (*self).as_buffer_slice()
     }
 }
 

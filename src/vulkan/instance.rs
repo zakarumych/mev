@@ -27,11 +27,24 @@ macro_rules! extension_name {
 pub(super) struct InstanceGuard {
     entry: ash::Entry,
     instance: ash::Instance,
+
+    #[cfg(any(debug_assertions, feature = "debug"))]
+    debug_utils: Option<ash::ext::debug_utils::Instance>,
+
+    #[cfg(any(debug_assertions, feature = "debug"))]
+    messenger: Option<vk::DebugUtilsMessengerEXT>,
 }
 
 impl Drop for InstanceGuard {
     fn drop(&mut self) {
         unsafe {
+            #[cfg(any(debug_assertions, feature = "debug"))]
+            if let Some(debug_utils) = &self.debug_utils {
+                if let Some(messenger) = self.messenger {
+                    debug_utils.destroy_debug_utils_messenger(messenger, None);
+                }
+            }
+
             self.instance.destroy_instance(None);
         }
     }
@@ -67,9 +80,6 @@ pub struct Instance {
 
     // # Extensions
     get_physical_device_properties2: Option<ash::khr::get_physical_device_properties2::Instance>,
-
-    #[cfg(any(debug_assertions, feature = "debug"))]
-    debug_utils: Option<ash::ext::debug_utils::Instance>,
 
     surface: Option<ash::khr::surface::Instance>,
 
@@ -162,7 +172,7 @@ impl Instance {
 
         #[cfg(any(debug_assertions, feature = "debug"))]
         if let Some(layer) = unsafe { find_layer(&layers, "VK_LAYER_KHRONOS_validation") } {
-            enabled_layer_names.push(layer.layer_name.as_ptr());
+            enabled_layer_names.push(extension_name!("VK_LAYER_KHRONOS_validation"));
         }
 
         #[cfg(any(debug_assertions, feature = "debug"))]
@@ -294,32 +304,35 @@ impl Instance {
 
         // Create the Vulkan instance.
 
-        let result = unsafe {
-            entry.create_instance(
-                &vk::InstanceCreateInfo::default()
-                    .application_info(
-                        &vk::ApplicationInfo::default()
-                            .api_version(api_version)
-                            .application_version(0)
-                            .engine_name(CStr::from_bytes_with_nul(b"nothing-engine\0").unwrap())
-                            .engine_version(engine_version()),
-                    )
-                    .enabled_layer_names(&enabled_layer_names)
-                    .enabled_extension_names(&enabled_extension_names)
-                    .push_next(
-                        &mut vk::DebugUtilsMessengerCreateInfoEXT::default()
-                            .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
-                            .message_type(
-                                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                            )
-                            .pfn_user_callback(Some(vulkan_debug_callback))
-                            .user_data(std::ptr::null_mut()),
-                    ),
-                None,
+        let application_info = vk::ApplicationInfo::default()
+            .api_version(api_version)
+            .application_version(0)
+            .engine_name(CStr::from_bytes_with_nul(b"nothing-engine\0").unwrap())
+            .engine_version(engine_version());
+
+        let mut instance_create_info = vk::InstanceCreateInfo::default()
+            .application_info(&application_info)
+            .enabled_layer_names(&enabled_layer_names)
+            .enabled_extension_names(&enabled_extension_names);
+
+        #[cfg(any(debug_assertions, feature = "debug"))]
+        let mut debug_utils_messenger_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+            .message_severity(vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE)
+            .message_type(
+                vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                    | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                    | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
             )
-        };
+            .pfn_user_callback(Some(vulkan_debug_callback))
+            .user_data(std::ptr::null_mut());
+
+        #[cfg(any(debug_assertions, feature = "debug"))]
+        if has_debug_utils {
+            instance_create_info =
+                instance_create_info.push_next(&mut debug_utils_messenger_create_info);
+        }
+
+        let result = unsafe { entry.create_instance(&instance_create_info, None) };
 
         let instance = result.map_err(|err| match err {
             vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
@@ -339,6 +352,29 @@ impl Instance {
         #[cfg(any(debug_assertions, feature = "debug"))]
         let debug_utils =
             has_debug_utils.then(|| ash::ext::debug_utils::Instance::new(&entry, &instance));
+
+        #[cfg(any(debug_assertions, feature = "debug"))]
+        let messenger = if let Some(debug_utils) = &debug_utils {
+            let result = unsafe {
+                debug_utils.create_debug_utils_messenger(&debug_utils_messenger_create_info, None)
+            };
+
+            match result {
+                Ok(messenger) => Some(messenger),
+                Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                Err(vk::Result::ERROR_VALIDATION_FAILED_EXT) => {
+                    tracing::error!("Failed to create debug utils messenger: validation failed");
+                    None
+                }
+                Err(vk::Result::ERROR_UNKNOWN) => {
+                    tracing::error!("Failed to create debug utils messenger: unknown error");
+                    None
+                }
+                Err(err) => unexpected_error(err),
+            }
+        } else {
+            None
+        };
 
         // Init surface extension functions
         let mut surface = None;
@@ -580,7 +616,14 @@ impl Instance {
         Ok(Instance {
             version,
             instance: instance.clone(),
-            guard: Arc::new(InstanceGuard { entry, instance }),
+            guard: Arc::new(InstanceGuard {
+                entry,
+                instance,
+                #[cfg(any(debug_assertions, feature = "debug"))]
+                debug_utils,
+                #[cfg(any(debug_assertions, feature = "debug"))]
+                messenger,
+            }),
             devices: filtered_device,
             vk_features: device_features,
             vk_properties: device_properties,
@@ -589,8 +632,6 @@ impl Instance {
             },
 
             get_physical_device_properties2,
-            #[cfg(any(debug_assertions, feature = "debug"))]
-            debug_utils,
             surface,
 
             #[cfg(target_os = "windows")]
@@ -803,6 +844,7 @@ impl crate::traits::Instance for Instance {
 
         #[cfg(any(debug_assertions, feature = "debug"))]
         let debug_utils = self
+            .guard
             .debug_utils
             .is_some()
             .then(|| ash::ext::debug_utils::Device::new(&self.instance, &device));
@@ -918,21 +960,52 @@ unsafe fn vulkan_debug_callback_impl(
             (
                 object.object_type,
                 object.object_handle,
-                unsafe { CStr::from_ptr(object.p_object_name) }
-                    .to_str()
-                    .unwrap_or("<Non-UTF8>"),
+                if object.p_object_name.is_null() {
+                    "<Unnamed>"
+                } else {
+                    unsafe { CStr::from_ptr(object.p_object_name) }
+                        .to_str()
+                        .unwrap_or("<Non-UTF8>")
+                },
             )
         })
         .collect::<Vec<_>>();
 
-    tracing::event!(
-        target: "vulkan",
-        tracing::Level::TRACE,
-        message_id_name,
-        message_id_number,
-        message,
-        objects = ?objects,
-    );
+    match message_severity {
+        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => tracing::event!(
+            target: "vulkan",
+            tracing::Level::TRACE,
+            message_id_name,
+            message_id_number,
+            message,
+            objects = ?objects,
+        ),
+        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => tracing::event!(
+            target: "vulkan",
+            tracing::Level::INFO,
+            message_id_name,
+            message_id_number,
+            message,
+            objects = ?objects,
+        ),
+        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => tracing::event!(
+            target: "vulkan",
+            tracing::Level::WARN,
+            message_id_name,
+            message_id_number,
+            message,
+            objects = ?objects,
+        ),
+        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => tracing::event!(
+            target: "vulkan",
+            tracing::Level::ERROR,
+            message_id_name,
+            message_id_number,
+            message,
+            objects = ?objects,
+        ),
+        _ => unreachable!(),
+    }
 }
 
 pub fn memory_properties_from_ash(

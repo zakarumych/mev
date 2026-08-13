@@ -603,7 +603,14 @@ impl Queue {
                     self.present_indices.clear();
                     self.present_fences.clear();
                 }
-                Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
+                Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => {
+                    self.present_semaphores.clear();
+                    self.present_swapchains.clear();
+                    self.present_indices.clear();
+                    self.present_fences.clear();
+
+                    handle_host_oom();
+                }
                 Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
                     self.device.set_oom();
                     if submit_result.is_ok() {

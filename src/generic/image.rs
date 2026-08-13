@@ -951,6 +951,12 @@ pub trait AsImageSlice<const D: usize> {
     fn as_image_slice(&self) -> ImageSlice<'_, D>;
 }
 
+impl<const D: usize, I: AsImageSlice<D>> AsImageSlice<D> for &I {
+    fn as_image_slice(&self) -> ImageSlice<'_, D> {
+        (*self).as_image_slice()
+    }
+}
+
 impl<const D: usize> AsImageSlice<D> for Image {
     fn as_image_slice(&self) -> ImageSlice<'_, D> {
         let extent = self.extent().expect_nd();
