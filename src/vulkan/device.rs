@@ -2014,7 +2014,7 @@ impl crate::traits::Device for Device {
             }
         };
 
-        Ok(Surface::new(self.clone(), surface_handle))
+        Surface::new(self.clone(), surface_handle)
     }
 
     fn new_fake_surface(&self, image: Image) -> Result<Surface, SurfaceError> {
@@ -2097,6 +2097,8 @@ pub(crate) fn compile_shader(
         },
         task_dispatch_limits: None,
         mesh_shader_primitive_indices_clamp: false,
+        emit_int_div_checks: false,
+        trace_ray_argument_validation: false,
     };
 
     let words = naga::back::spv::write_vec(&module, &info, &options, None)

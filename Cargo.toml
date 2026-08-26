@@ -106,7 +106,7 @@ objc2-foundation = { version = "0.3.2" }
 objc2-core-graphics = { version = "0.3.2" }
 objc2-quartz-core = { version = "0.3.2" }
 objc2-metal = { version = "0.3.2" }
-naga = { version = "29.0.3", features = ["spv-in", "wgsl-in", "glsl-in"] }
+naga = { version = "30.0", features = ["spv-in", "wgsl-in", "glsl-in"] }
 parking_lot = "0.12.5"
 pollster = "0.3"
 proc-macro2 = "1"
@@ -123,4 +123,4 @@ js-sys = "0.3.103"
 web-sys = "0.3.103"
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.76"
-wgpu = { version = "29" }
+wgpu = { version = "30.0" }

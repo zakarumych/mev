@@ -1,11 +1,11 @@
 use crate::{
-    ArgumentKind, Blend, BlendDesc, ClearColor, Extent1, PresentMode, PrimitiveTopology,
-    VertexStepMode,
+    ArgumentKind, Blend, BlendDesc, ClearColor, ColorSpace, Extent1, PresentMode,
+    PrimitiveTopology, VertexStepMode,
     generic::{
         AddressMode, BlendFactor, BlendOp, BufferUsage, CompareFunction, Culling, Extent2, Extent3,
-        FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage,
-        MipMapMode, Offset2, Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags,
-        ShaderStage, ShaderStages, Swizzle, VertexFormat, WriteMask,
+        FamilyCapabilities, Filter, FrontFace, ImageExtent, ImageUsage, MipMapMode, Offset2,
+        Offset3, PipelineStage, PipelineStages, PixelFormat, QueueFlags, ShaderStage, ShaderStages,
+        Swizzle, VertexFormat, WriteMask,
     },
     mat,
 };
@@ -98,6 +98,7 @@ where
 }
 
 impl FromWgpu<wgpu::BufferUsages> for BufferUsage {
+    #[inline]
     fn from_wgpu(wgpu: wgpu::BufferUsages) -> Self {
         let mut flags = BufferUsage::empty();
 
@@ -142,6 +143,7 @@ impl FromWgpu<wgpu::BufferUsages> for BufferUsage {
 }
 
 impl WgpuFrom<BufferUsage> for wgpu::BufferUsages {
+    #[inline]
     fn wgpu_from(mev: BufferUsage) -> Self {
         let mut flags = wgpu::BufferUsages::empty();
 
@@ -186,6 +188,7 @@ impl WgpuFrom<BufferUsage> for wgpu::BufferUsages {
 }
 
 impl FromWgpu<wgpu::TextureUsages> for ImageUsage {
+    #[inline]
     fn from_wgpu(wgpu: wgpu::TextureUsages) -> Self {
         let mut flags = ImageUsage::empty();
 
@@ -214,6 +217,7 @@ impl FromWgpu<wgpu::TextureUsages> for ImageUsage {
 }
 
 impl WgpuFrom<ImageUsage> for wgpu::TextureUsages {
+    #[inline]
     fn wgpu_from(mev: ImageUsage) -> Self {
         let mut flags = wgpu::TextureUsages::empty();
         if mev.contains(ImageUsage::TRANSFER_SRC) {
@@ -236,6 +240,7 @@ impl WgpuFrom<ImageUsage> for wgpu::TextureUsages {
 }
 
 impl TryWgpuFrom<PixelFormat> for wgpu::TextureFormat {
+    #[inline]
     fn try_wgpu_from(mev: PixelFormat) -> Option<Self> {
         use wgpu::TextureFormat::*;
         match mev {
@@ -299,6 +304,7 @@ impl TryWgpuFrom<PixelFormat> for wgpu::TextureFormat {
         }
     }
 
+    #[inline]
     fn expect_wgpu_from(t: PixelFormat) -> Self {
         match Self::try_wgpu_from(t) {
             Some(format) => format,
@@ -308,6 +314,7 @@ impl TryWgpuFrom<PixelFormat> for wgpu::TextureFormat {
 }
 
 impl TryFromWgpu<wgpu::TextureFormat> for PixelFormat {
+    #[inline]
     fn try_from_wgpu(wgpu: wgpu::TextureFormat) -> Option<Self> {
         use wgpu::TextureFormat::*;
 
@@ -372,6 +379,7 @@ impl TryFromWgpu<wgpu::TextureFormat> for PixelFormat {
         }
     }
 
+    #[inline]
     fn expect_from_wgpu(t: wgpu::TextureFormat) -> Self {
         match Self::try_from_wgpu(t) {
             Some(format) => format,
@@ -381,6 +389,7 @@ impl TryFromWgpu<wgpu::TextureFormat> for PixelFormat {
 }
 
 impl WgpuFrom<VertexFormat> for wgpu::VertexFormat {
+    #[inline]
     fn wgpu_from(mev: VertexFormat) -> Self {
         match mev {
             VertexFormat::Uint8 => wgpu::VertexFormat::Uint8,
@@ -432,6 +441,7 @@ impl WgpuFrom<VertexFormat> for wgpu::VertexFormat {
 }
 
 impl WgpuFrom<ImageExtent> for wgpu::Extent3d {
+    #[inline]
     fn wgpu_from(mev: ImageExtent) -> Self {
         match mev {
             ImageExtent::D1(extent) => wgpu::Extent3d {
@@ -454,6 +464,7 @@ impl WgpuFrom<ImageExtent> for wgpu::Extent3d {
 }
 
 impl FromWgpu<(wgpu::TextureDimension, wgpu::Extent3d)> for ImageExtent {
+    #[inline]
     fn from_wgpu((dim, extent): (wgpu::TextureDimension, wgpu::Extent3d)) -> Self {
         match dim {
             wgpu::TextureDimension::D1 => ImageExtent::D1(Extent1::new(extent.width)),
@@ -470,6 +481,7 @@ impl FromWgpu<(wgpu::TextureDimension, wgpu::Extent3d)> for ImageExtent {
 }
 
 impl WgpuFrom<ShaderStages> for wgpu::ShaderStages {
+    #[inline]
     fn wgpu_from(mev: ShaderStages) -> Self {
         let mut flags = wgpu::ShaderStages::empty();
 
@@ -490,6 +502,7 @@ impl WgpuFrom<ShaderStages> for wgpu::ShaderStages {
 }
 
 impl WgpuFrom<ArgumentKind> for wgpu::BindingType {
+    #[inline]
     fn wgpu_from(mev: ArgumentKind) -> Self {
         match mev {
             ArgumentKind::UniformBuffer => wgpu::BindingType::Buffer {
@@ -520,6 +533,7 @@ impl WgpuFrom<ArgumentKind> for wgpu::BindingType {
 }
 
 impl WgpuFrom<ClearColor> for wgpu::Color {
+    #[inline]
     fn wgpu_from(mev: ClearColor) -> Self {
         wgpu::Color {
             r: mev.0.into(),
@@ -531,6 +545,7 @@ impl WgpuFrom<ClearColor> for wgpu::Color {
 }
 
 impl WgpuFrom<VertexStepMode> for wgpu::VertexStepMode {
+    #[inline]
     fn wgpu_from(mev: VertexStepMode) -> Self {
         match mev {
             VertexStepMode::Vertex => wgpu::VertexStepMode::Vertex,
@@ -541,6 +556,7 @@ impl WgpuFrom<VertexStepMode> for wgpu::VertexStepMode {
 }
 
 impl WgpuFrom<BlendOp> for wgpu::BlendOperation {
+    #[inline]
     fn wgpu_from(mev: BlendOp) -> Self {
         match mev {
             BlendOp::Add => wgpu::BlendOperation::Add,
@@ -553,6 +569,7 @@ impl WgpuFrom<BlendOp> for wgpu::BlendOperation {
 }
 
 impl WgpuFrom<BlendFactor> for wgpu::BlendFactor {
+    #[inline]
     fn wgpu_from(mev: BlendFactor) -> Self {
         match mev {
             BlendFactor::Zero => wgpu::BlendFactor::Zero,
@@ -571,6 +588,7 @@ impl WgpuFrom<BlendFactor> for wgpu::BlendFactor {
 }
 
 impl WgpuFrom<Blend> for wgpu::BlendComponent {
+    #[inline]
     fn wgpu_from(mev: Blend) -> Self {
         wgpu::BlendComponent {
             src_factor: mev.src.into_wgpu(),
@@ -581,6 +599,7 @@ impl WgpuFrom<Blend> for wgpu::BlendComponent {
 }
 
 impl WgpuFrom<WriteMask> for wgpu::ColorWrites {
+    #[inline]
     fn wgpu_from(mev: WriteMask) -> Self {
         let mut writes = wgpu::ColorWrites::empty();
 
@@ -601,6 +620,7 @@ impl WgpuFrom<WriteMask> for wgpu::ColorWrites {
 }
 
 impl WgpuFrom<CompareFunction> for wgpu::CompareFunction {
+    #[inline]
     fn wgpu_from(mev: CompareFunction) -> Self {
         match mev {
             CompareFunction::Never => wgpu::CompareFunction::Never,
@@ -616,6 +636,7 @@ impl WgpuFrom<CompareFunction> for wgpu::CompareFunction {
 }
 
 impl WgpuFrom<PrimitiveTopology> for wgpu::PrimitiveTopology {
+    #[inline]
     fn wgpu_from(mev: PrimitiveTopology) -> Self {
         match mev {
             PrimitiveTopology::Point => wgpu::PrimitiveTopology::PointList,
@@ -626,6 +647,7 @@ impl WgpuFrom<PrimitiveTopology> for wgpu::PrimitiveTopology {
 }
 
 impl WgpuFrom<FrontFace> for wgpu::FrontFace {
+    #[inline]
     fn wgpu_from(mev: FrontFace) -> Self {
         match mev {
             FrontFace::Clockwise => wgpu::FrontFace::Cw,
@@ -635,6 +657,7 @@ impl WgpuFrom<FrontFace> for wgpu::FrontFace {
 }
 
 impl WgpuFrom<Culling> for Option<wgpu::Face> {
+    #[inline]
     fn wgpu_from(mev: Culling) -> Self {
         match mev {
             Culling::None => None,
@@ -645,6 +668,7 @@ impl WgpuFrom<Culling> for Option<wgpu::Face> {
 }
 
 impl WgpuFrom<AddressMode> for wgpu::AddressMode {
+    #[inline]
     fn wgpu_from(mev: AddressMode) -> Self {
         match mev {
             AddressMode::Repeat => wgpu::AddressMode::Repeat,
@@ -655,6 +679,7 @@ impl WgpuFrom<AddressMode> for wgpu::AddressMode {
 }
 
 impl WgpuFrom<Filter> for wgpu::FilterMode {
+    #[inline]
     fn wgpu_from(mev: Filter) -> Self {
         match mev {
             Filter::Nearest => wgpu::FilterMode::Nearest,
@@ -664,6 +689,7 @@ impl WgpuFrom<Filter> for wgpu::FilterMode {
 }
 
 impl WgpuFrom<MipMapMode> for wgpu::MipmapFilterMode {
+    #[inline]
     fn wgpu_from(mev: MipMapMode) -> Self {
         match mev {
             MipMapMode::Nearest => wgpu::MipmapFilterMode::Nearest,
@@ -673,11 +699,52 @@ impl WgpuFrom<MipMapMode> for wgpu::MipmapFilterMode {
 }
 
 impl WgpuFrom<PresentMode> for wgpu::PresentMode {
+    #[inline]
     fn wgpu_from(mev: PresentMode) -> Self {
         match mev {
             PresentMode::Immediate => wgpu::PresentMode::Immediate,
             PresentMode::Mailbox => wgpu::PresentMode::Mailbox,
             PresentMode::Fifo => wgpu::PresentMode::Fifo,
+        }
+    }
+}
+
+impl TryFromWgpu<wgpu::PresentMode> for PresentMode {
+    #[inline]
+    fn try_from_wgpu(wgpu: wgpu::PresentMode) -> Option<Self> {
+        match wgpu {
+            wgpu::PresentMode::Immediate => Some(PresentMode::Immediate),
+            wgpu::PresentMode::Mailbox => Some(PresentMode::Mailbox),
+            wgpu::PresentMode::Fifo => Some(PresentMode::Fifo),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn expect_from_wgpu(t: wgpu::PresentMode) -> Self {
+        match Self::try_from_wgpu(t) {
+            Some(mode) => mode,
+            None => panic!("Unsupported wgpu::PresentMode: {:?}", t),
+        }
+    }
+}
+
+impl WgpuFrom<ColorSpace> for wgpu::SurfaceColorSpace {
+    #[inline]
+    fn wgpu_from(mev: ColorSpace) -> Self {
+        match mev {
+            ColorSpace::SrgbLinear => wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            ColorSpace::SrgbNonLinear => wgpu::SurfaceColorSpace::Srgb,
+        }
+    }
+}
+
+impl WgpuFrom<ColorSpace> for wgpu::SurfaceColorSpaces {
+    #[inline]
+    fn wgpu_from(mev: ColorSpace) -> Self {
+        match mev {
+            ColorSpace::SrgbLinear => wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+            ColorSpace::SrgbNonLinear => wgpu::SurfaceColorSpaces::SRGB,
         }
     }
 }

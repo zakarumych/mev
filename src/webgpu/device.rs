@@ -234,14 +234,16 @@ impl crate::traits::Device for Device {
                 );
             }
 
-            let vertex_buffers: Vec<wgpu::VertexBufferLayout> = desc
+            let vertex_buffers: Vec<Option<wgpu::VertexBufferLayout>> = desc
                 .vertex_layouts
                 .iter()
                 .enumerate()
-                .map(|(i, layout)| wgpu::VertexBufferLayout {
-                    array_stride: layout.stride as u64,
-                    step_mode: layout.step_mode.into_wgpu(),
-                    attributes: &attrs[i],
+                .map(|(i, layout)| {
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: layout.stride as u64,
+                        step_mode: layout.step_mode.into_wgpu(),
+                        attributes: &attrs[i],
+                    })
                 })
                 .collect();
 

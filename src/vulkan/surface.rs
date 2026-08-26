@@ -136,8 +136,8 @@ impl Drop for Surface {
 }
 
 impl Surface {
-    pub(super) fn new(device: Device, surface: vk::SurfaceKHR) -> Self {
-        Surface {
+    pub(super) fn new(device: Device, surface: vk::SurfaceKHR) -> Result<Self, SurfaceError> {
+        let mut surface = Surface {
             device,
             surface,
             current: None,
@@ -160,7 +160,9 @@ impl Surface {
 
             cooldown: 0,
             status: SurfaceStatus::empty(),
-        }
+        };
+        surface.update_surface_parameters()?;
+        Ok(surface)
     }
 
     pub(super) fn fake(device: Device, image: Image, semaphore: vk::Semaphore) -> Self {
@@ -762,27 +764,45 @@ impl crate::traits::Surface for Surface {
     }
 
     fn preferred_format(&mut self, format: PixelFormat) {
-        self.preferred_format = Some(format);
+        if self.preferred_format != Some(format) {
+            self.preferred_format = Some(format);
+            self.cooldown = 0;
+        }
     }
 
     fn preferred_color_space(&mut self, color_space: ColorSpace) {
-        self.preferred_color_space = Some(color_space);
+        if self.preferred_color_space != Some(color_space) {
+            self.preferred_color_space = Some(color_space);
+            self.cooldown = 0;
+        }
     }
 
     fn preferred_extent(&mut self, extent: Extent2) {
-        self.preferred_extent = Some(extent);
+        if self.preferred_extent != Some(extent) {
+            self.preferred_extent = Some(extent);
+            self.cooldown = 0;
+        }
     }
 
     fn preferred_present_mode(&mut self, mode: PresentMode) {
-        self.preferred_mode = Some(mode);
+        if self.preferred_mode != Some(mode) {
+            self.preferred_mode = Some(mode);
+            self.cooldown = 0;
+        }
     }
 
     fn preferred_usage(&mut self, usage: ImageUsage) {
-        self.preferred_usage = Some(usage);
+        if self.preferred_usage != Some(usage) {
+            self.preferred_usage = Some(usage);
+            self.cooldown = 0;
+        }
     }
 
     fn preferred_image_count(&mut self, count: u32) {
-        self.preferred_image_count = Some(count);
+        if self.preferred_image_count != Some(count) {
+            self.preferred_image_count = Some(count);
+            self.cooldown = 0;
+        }
     }
 
     fn next_frame(&mut self) -> Result<Frame, SurfaceError> {

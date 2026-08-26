@@ -118,7 +118,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
             .iter()
             .map(|att| {
                 Some(wgpu::RenderPassColorAttachment {
-                    view: att.image.wgpu_view(),
+                    view: att.image.image().wgpu_view(),
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -138,7 +138,7 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 
         let depth_stencil_attachment = desc.depth_stencil_attachment.as_ref().map(|att| {
             wgpu::RenderPassDepthStencilAttachment {
-                view: att.image.wgpu_view(),
+                view: att.image.image().wgpu_view(),
                 depth_ops: Some(wgpu::Operations {
                     load: match att.load {
                         LoadOp::Load => wgpu::LoadOp::Load,
@@ -187,10 +187,14 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         let first_attachment = desc
             .color_attachments
             .first()
-            .map(|color| color.image)
-            .or_else(|| desc.depth_stencil_attachment.as_ref().map(|depth| depth.image));
+            .map(|color| &color.image)
+            .or_else(|| {
+                desc.depth_stencil_attachment
+                    .as_ref()
+                    .map(|depth| &depth.image)
+            });
         if let Some(image) = first_attachment {
-            let extent = image.extent().expect_2d();
+            let extent = image.extent();
             render.with_viewport(Offset3::ZERO, extent.to_3d().cast_as_f32());
             render.with_scissor(Offset2::ZERO, extent);
         }

@@ -88,6 +88,8 @@ impl ApplicationHandler for TriangleApp {
             let mut surface = self.queue.new_surface(&window, &window).unwrap();
 
             let size = window.inner_size();
+            tracing::error!("Surface created with size: {:?}", size);
+
             surface.preferred_extent(mev::Extent2::new(size.width, size.height));
             surface.preferred_usage(mev::ImageUsage::TARGET);
 

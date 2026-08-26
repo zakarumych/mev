@@ -70,7 +70,7 @@ impl crate::traits::Queue for Queue {
         self.queue.submit(wgpu_buffers);
 
         for st in surface_textures {
-            st.present();
+            self.queue.present(st);
         }
 
         self.epoch += 1;
