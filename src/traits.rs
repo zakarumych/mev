@@ -9,8 +9,8 @@ use crate::generic::{
     ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc,
     ImageDims, ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3,
     PipelineError, PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc,
-    SamplerDesc, Shader, ShaderLibraryError, SurfaceError, TexelShape, TlasBuildDesc, TlasDesc,
-    ViewDesc,
+    SamplerDesc, Shader, ShaderLibraryError, SurfaceCapabilities, SurfaceError, TexelShape,
+    TlasBuildDesc, TlasDesc, ViewDesc,
 };
 
 // match_backend! {
@@ -39,6 +39,13 @@ with_webgpu! {
 
 pub(crate) trait Instance: Debug + Resource {
     fn capabilities(&self) -> &Capabilities;
+
+    /// Returns capabilities for specific Surface
+    fn surface_capabilities(
+        &self,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<SurfaceCapabilities, SurfaceError>;
 
     fn new_device(
         &self,

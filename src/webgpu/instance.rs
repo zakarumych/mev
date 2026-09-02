@@ -5,8 +5,8 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::MemoryHints::Performance;
 
 use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
-    Features, QueueFlags, SurfaceError,
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceSurfaceCapabilities,
+    DeviceType, FamilyCapabilities, Features, QueueFlags, SurfaceCapabilities, SurfaceError,
 };
 
 use super::{Device, Queue, Surface};
@@ -105,6 +105,27 @@ impl crate::traits::Resource for Instance {}
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// Returns capabilities for specific Surface
+    fn surface_capabilities(
+        &self,
+        _window: &impl HasWindowHandle,
+        _display: &impl HasDisplayHandle,
+    ) -> Result<SurfaceCapabilities, SurfaceError> {
+        Ok(SurfaceCapabilities {
+            devices: self
+                .capabilities
+                .devices
+                .iter()
+                .map(|device| DeviceSurfaceCapabilities {
+                    families: vec![
+                        device.features.contains(Features::SURFACE);
+                        device.families.len()
+                    ],
+                })
+                .collect(),
+        })
     }
 
     async fn new_device_async(

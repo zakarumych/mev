@@ -9,11 +9,11 @@ use std::{
 use ash::*;
 use hashbrown::HashMap;
 use mev_proc::hidden_trait;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 
 use crate::generic::{
-    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
-    Features, OutOfMemory, SurfaceError,
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceSurfaceCapabilities,
+    DeviceType, FamilyCapabilities, Features, OutOfMemory, SurfaceCapabilities, SurfaceError,
 };
 
 use super::{Queue, Surface, Version, device::Device, from::*, handle_host_oom, unexpected_error};
@@ -651,6 +651,172 @@ impl crate::traits::Resource for Instance {}
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// Returns capabilities for specific Surface
+    fn surface_capabilities(
+        &self,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<SurfaceCapabilities, SurfaceError> {
+        if self.surface.is_none() {
+            return Ok(SurfaceCapabilities {
+                devices: self
+                    .capabilities
+                    .devices
+                    .iter()
+                    .map(|device| DeviceSurfaceCapabilities {
+                        families: vec![false; device.families.len()],
+                    })
+                    .collect(),
+            });
+        }
+
+        let window = window
+            .window_handle()
+            .map_err(|_| SurfaceError::SurfaceLost)?;
+        let display = display
+            .display_handle()
+            .map_err(|_| SurfaceError::SurfaceLost)?;
+
+        // Describes how to query presentation support for a queue family,
+        // without creating an actual `VkSurfaceKHR`.
+        enum Presentable {
+            Always,
+            #[cfg(target_os = "windows")]
+            Win32,
+            #[cfg(all(unix, not(target_os = "android")))]
+            Xlib {
+                display: *mut vk::Display,
+                visual_id: vk::VisualID,
+            },
+            #[cfg(all(unix, not(target_os = "android")))]
+            Xcb {
+                connection: *mut vk::xcb_connection_t,
+                visual_id: vk::xcb_visualid_t,
+            },
+            #[cfg(all(unix, not(target_os = "android")))]
+            Wayland {
+                display: *mut vk::wl_display,
+            },
+        }
+
+        let presentable = match (window.as_raw(), display.as_raw()) {
+            #[cfg(target_os = "windows")]
+            (RawWindowHandle::Win32(_), RawDisplayHandle::Windows(_)) => Presentable::Win32,
+            #[cfg(target_os = "windows")]
+            (RawWindowHandle::Win32(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xlib(window), RawDisplayHandle::Xlib(display)) => {
+                let display = display.display.ok_or(SurfaceError::SurfaceLost)?;
+                Presentable::Xlib {
+                    display: display.as_ptr(),
+                    visual_id: window.visual_id,
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xlib(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xcb(window), RawDisplayHandle::Xcb(display)) => {
+                let connection = display.connection.ok_or(SurfaceError::SurfaceLost)?;
+                let visual_id = window.visual_id.ok_or(SurfaceError::SurfaceLost)?;
+                Presentable::Xcb {
+                    connection: connection.as_ptr(),
+                    visual_id: visual_id.get(),
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Xcb(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Wayland(_), RawDisplayHandle::Wayland(display)) => {
+                Presentable::Wayland {
+                    display: display.display.as_ptr(),
+                }
+            }
+            #[cfg(all(unix, not(target_os = "android")))]
+            (RawWindowHandle::Wayland(_), _) => {
+                panic!("Mismatched window and display type")
+            }
+            #[cfg(all(unix, target_os = "android"))]
+            (RawWindowHandle::AndroidNdk(_), RawDisplayHandle::Android(_)) => Presentable::Always,
+            _ => {
+                unreachable!("Unsupported window type for this platform")
+            }
+        };
+
+        let devices = self
+            .capabilities
+            .devices
+            .iter()
+            .enumerate()
+            .map(|(idx, device)| {
+                let physical_device = self.devices[idx];
+
+                let families = (0..device.families.len() as u32)
+                    .map(|family_index| match &presentable {
+                        Presentable::Always => true,
+                        #[cfg(target_os = "windows")]
+                        Presentable::Win32 => unsafe {
+                            self.win32_surface
+                                .as_ref()
+                                .expect("Win32 surface not available")
+                                .get_physical_device_win32_presentation_support(
+                                    physical_device,
+                                    family_index,
+                                )
+                        },
+                        #[cfg(all(unix, not(target_os = "android")))]
+                        Presentable::Xlib { display, visual_id } => unsafe {
+                            self.xlib_surface
+                                .as_ref()
+                                .expect("Xlib surface not available")
+                                .get_physical_device_xlib_presentation_support(
+                                    physical_device,
+                                    family_index,
+                                    *display,
+                                    *visual_id,
+                                )
+                        },
+                        #[cfg(all(unix, not(target_os = "android")))]
+                        Presentable::Xcb {
+                            connection,
+                            visual_id,
+                        } => unsafe {
+                            self.xcb_surface
+                                .as_ref()
+                                .expect("Xcb surface not available")
+                                .get_physical_device_xcb_presentation_support(
+                                    physical_device,
+                                    family_index,
+                                    &mut **connection,
+                                    *visual_id,
+                                )
+                        },
+                        #[cfg(all(unix, not(target_os = "android")))]
+                        Presentable::Wayland { display } => unsafe {
+                            self.wayland_surface
+                                .as_ref()
+                                .expect("Wayland surface not available")
+                                .get_physical_device_wayland_presentation_support(
+                                    physical_device,
+                                    family_index,
+                                    &mut **display,
+                                )
+                        },
+                    })
+                    .collect();
+
+                DeviceSurfaceCapabilities { families }
+            })
+            .collect();
+
+        Ok(SurfaceCapabilities { devices })
     }
 
     fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {

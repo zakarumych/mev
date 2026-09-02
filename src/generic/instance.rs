@@ -52,6 +52,19 @@ pub struct Capabilities {
     pub devices: Vec<DeviceCapabilities>,
 }
 
+/// Device capabilities for specific surface.
+#[derive(Clone, Debug)]
+pub struct DeviceSurfaceCapabilities {
+    /// Which queue families are capable to present to the surface.
+    pub families: Vec<bool>,
+}
+
+/// Capabilities of the devices for specific surface.
+#[derive(Clone, Debug)]
+pub struct SurfaceCapabilities {
+    pub devices: Vec<DeviceSurfaceCapabilities>,
+}
+
 /// Specifies how the device should be created.
 pub struct DeviceDesc<'a> {
     /// Index of the device.

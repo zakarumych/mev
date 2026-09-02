@@ -47,7 +47,10 @@ pub use self::{
         ImageN, ImageRegion, ImageSlice, ImageSlice1D, ImageSlice2D, ImageSlice3D, ImageUsage,
         Swizzle, ViewDesc,
     },
-    instance::{Capabilities, DeviceCapabilities, DeviceDesc, DeviceType, FamilyCapabilities},
+    instance::{
+        Capabilities, DeviceCapabilities, DeviceDesc, DeviceSurfaceCapabilities, DeviceType,
+        FamilyCapabilities, SurfaceCapabilities,
+    },
     queue::QueueFlags,
     render::{
         AttachmentDesc, Blend, BlendDesc, BlendFactor, BlendOp, ClearColor, ClearDepthStencil,
@@ -78,6 +81,7 @@ impl fmt::Display for OutOfMemory {
 
 impl Error for OutOfMemory {}
 
+#[derive(Clone, Copy)]
 pub enum DeviceError {
     OutOfMemory,
     DeviceLost,
