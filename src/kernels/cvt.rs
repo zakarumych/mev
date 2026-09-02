@@ -298,17 +298,21 @@ struct EndpointDesc {
     format: PixelFormat,
 }
 
-/// Cache key for the render pipelines built by `make_render_pipeline`. One
-/// pipeline shape per distinct (endpoint kinds/formats, swizzle, axis map,
-/// ranks, resample, wrap) combination actually used; `axes`'s slots beyond
-/// `src_rank` are ignored. `wrap` records whether the generated WGSL wraps
-/// exact-index source coordinates through `apply_address_mode` (a text
-/// difference, hence a distinct pipeline; the `AddressMode` *values* flow
-/// as runtime constants and are not part of the key). The render pipeline's
-/// destination is always `Image` (never `Buffer` - sRGB `Image`
-/// destinations route here specifically because a WGSL storage texture has
-/// no sRGB write format), so unlike [`CvtComputeKey`] it never needs a
-/// `dst_tight_len` shape discriminant.
+/// Cache key for the render pipelines built by `make_render_pipeline`.
+///
+/// One pipeline shape per distinct (endpoint kinds/formats, swizzle,
+/// axis map, ranks, resample, wrap) combination actually used;
+/// `axes`'s slots beyond `src_rank` are ignored.
+///
+/// `wrap` records whether the generated WGSL wraps exact-index source
+/// coordinates through `apply_address_mode` (a text difference, hence
+/// a distinct pipeline; the `AddressMode` *values* flow as runtime
+/// constants and are not part of the key).
+///
+/// The render pipeline's destination is always `Image` (never `Buffer` -
+/// sRGB `Image` destinations route here specifically
+/// because a WGSL storage texture has no sRGB write format),
+/// so unlike [`CvtComputeKey`] it never needs a `dst_tight_len` shape discriminant.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CvtKey {
     src: EndpointDesc,
@@ -322,12 +326,15 @@ struct CvtKey {
 }
 
 /// Cache key for the compute pipelines built by `make_compute_pipeline_nd`.
-/// Same fields as [`CvtKey`], plus `dst_tight_len` (`T`, see module docs'
-/// tiled-dispatch algorithm): when `dst.kind == Buffer`, the generated
-/// WGSL's *shape* differs qualitatively per `T` (which axes fold into the
-/// flat tight-chain wrap vs. get their own independently-grouped dispatch
-/// dimension), so it must be part of what selects/builds a distinct
-/// pipeline. Meaningless (always `0`) when `dst.kind != Buffer`.
+///
+/// Same fields as [`CvtKey`], plus `dst_tight_len` (`T`, see
+/// module docs' tiled-dispatch algorithm): when `dst.kind == Buffer`,
+/// the generated WGSL's *shape* differs qualitatively per `T` (which axes
+/// fold into the flat tight-chain wrap vs. get their own
+/// independently-grouped dispatch dimension), so it must be part of what selects/builds
+/// a distinct pipeline.
+///
+/// Meaningless (always `0`) when `dst.kind != Buffer`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CvtComputeKey {
     src: EndpointDesc,
@@ -463,8 +470,9 @@ fn apply_address_mode(x: i32, size: i32, mode: u32) -> i32 {
 
 /// Half<->float conversion, needed whenever a `Buffer` endpoint has a true
 /// (non-normalized) 16-bit float component (`VertexFormat::Float16` /
-/// `PixelFormat::R16Float`-family used as a buffer format). Image endpoints
-/// never need this - hardware handles f16 texture formats natively.
+/// `PixelFormat::R16Float`-family used as a buffer format).
+///
+/// Image endpoints never need this - hardware handles f16 texture formats natively.
 const HALF_FLOAT_HELPERS: &str = r#"
 fn mev_half_to_float(h: u32) -> f32 {
     return unpack2x16float(h).x;
@@ -629,14 +637,15 @@ fn gen_swizzle(swizzle: Swizzle, src_kind: CanonicalKind) -> String {
 
 /// Generates `let {var}: {ty} = ...;` converting swizzled canonical value
 /// `sw_var` (of `src`'s canonical type) into `dst`'s target representation,
-/// per the cross-kind conversion table (module docs / plan §3). Returns the
-/// WGSL scalar type name of the produced value.
+/// per the cross-kind conversion table (module docs / plan §3).
+///
+/// Returns the WGSL scalar type name of the produced value.
 ///
 /// When `dst_is_image` is set and `dst` is `Float`-kind, the final
-/// `* dst_max` requantization step is skipped: `textureStore` into a
-/// Unorm/Snorm/Float storage format auto-quantizes from the canonical
-/// `[0,1]`/`[-1,1]`/true-float value, so doing it manually here would
-/// double-scale.
+/// `* dst_max` requantization step is skipped:
+/// `textureStore` into a Unorm/Snorm/Float storage format
+/// auto-quantizes from the canonical `[0,1]`/`[-1,1]`/true-float value,
+/// so doing it manually here would double-scale.
 fn gen_convert_channel(
     var: &str,
     sw_var: &str,
@@ -751,18 +760,23 @@ fn gen_convert_channel(
     (format!("    let {var}: {ty} = {expr};\n"), ty)
 }
 
-/// Generates the store statements writing `out_{r,g,b,a}` (already in
-/// `dst`'s target representation, per [`gen_convert_channel`]) into a
-/// buffer named `target` (always declared plain `array<u32>`), at the
-/// element whose byte-offset expression is `elem_byte`. `bits == 32`
-/// components are a single plain store (a 32-bit component already fully
-/// owns its word). `bits < 32` components go through a plain (non-atomic)
+/// Generates the store statements writing `out_{r,g,b,a}`
+/// (already in `dst`'s target representation, per [`gen_convert_channel`])
+/// into a buffer named `target` (always declared plain `array<u32>`),
+/// at the element whose byte-offset expression is `elem_byte`.
+///
+/// `bits == 32` components are a single plain store
+/// (a 32-bit component already fully owns its word).
+///
+/// `bits < 32` components go through a plain (non-atomic)
 /// masked read-modify-write - safe because the caller's dispatch structure
-/// guarantees no *other* thread ever touches this word (see module docs'
-/// tiled-dispatch algorithm) and, within one thread, statements execute
-/// sequentially, so a load-modify-store from the same thread cannot race
-/// with itself. Per-component locals are suffixed by the component's index
-/// `i` so multiple sub-word components in the same call (e.g. `Rg8Uint`)
+/// guarantees no *other* thread ever touches this word
+/// (see module docs' tiled-dispatch algorithm) and, within one thread,
+/// statements execute sequentially, so a load-modify-store
+/// from the same thread cannot race with itself.
+///
+/// Per-component locals are suffixed by the component's index `i`
+/// so multiple sub-word components in the same call (e.g. `Rg8Uint`)
 /// don't collide in the same WGSL scope.
 fn gen_buffer_encode(target: &str, elem_byte: &str, dst: &FormatLayout) -> String {
     let mut s = String::new();
@@ -814,23 +828,26 @@ fn needs_half_float(layout: &FormatLayout) -> bool {
 
 /// Byte size of one of `layout`'s (uniformly-sized) components: 1, 2 or 4.
 ///
-/// A component can only ever straddle a 4-byte storage-buffer word if its
-/// absolute byte offset isn't a multiple of its own width - a 1-byte
-/// component never straddles regardless of offset; 2/4-byte components
-/// need their offset 2-/4-byte aligned respectively. Requiring every
-/// byte-offset/stride to be a multiple of `component_byte_size` (rather
-/// than a flat 4 bytes) is therefore the minimal correct precondition, and
-/// keeps common tightly-packed narrow-format buffers (e.g. a plain `R8`
-/// row) usable without artificial padding.
+/// A component can only ever straddle a 4-byte storage-buffer word
+/// if its absolute byte offset isn't a multiple of its own width
+/// - a 1-byte component never straddles regardless of offset;
+/// - 2/4-byte components need their offset 2-/4-byte aligned respectively.
+///
+/// Requiring every byte-offset/stride to be a multiple of `component_byte_size`
+/// (rather than a flat 4 bytes) is therefore the minimal correct precondition,
+/// and keeps common tightly-packed narrow-format buffers
+/// (e.g. a plain `R8` row) usable without artificial padding.
 fn component_byte_size(layout: &FormatLayout) -> usize {
     layout.bits() as usize / 8
 }
 
-/// Resolves an `ImageSlice<N>` into a single-layer, single-level `Image`
-/// view (bound at the slice's `level`/`layers`) plus the slice's
-/// offset/extent, for binding into a Cvt pipeline. Cvt's shader bindings
-/// are always plain (non-array) 2D textures reading level 0 of whatever's
-/// bound, so the slice must describe exactly one layer - asserted here.
+/// Resolves an `ImageSlice<N>` into a single-layer, single-level `Image` view
+/// (bound at the slice's `level`/`layers`) plus the slice's offset/extent,
+/// for binding into a Cvt pipeline.
+///
+/// Cvt's shader bindings are always plain (non-array) 2D textures
+/// reading level 0 of whatever's bound,
+/// so the slice must describe exactly one layer - asserted here.
 fn resolve_image_slice<const N: usize>(
     device: &Device,
     slice: &ImageSlice<'_, N>,
@@ -881,55 +898,60 @@ fn gen_resample_int_wrap(
 
 /// Generates the shared body (per-source-axis coordinate, decode, swizzle,
 /// convert) used by every compute/render pipeline variant, for a source
-/// endpoint of rank `src_rank` (<= 4) described by `axes` (source-axis
-/// indexed; a `MappedAxis::Dst` axis references a destination axis whose
-/// unraveled coordinate `dst_c{axis}` the caller has already computed
-/// before calling this). `dst_is_image` controls whether
-/// `gen_convert_channel` skips the final normalized-dst requantization
+/// endpoint of rank `src_rank` (<= 4) described by `axes`
+/// (source-axis indexed; a `MappedAxis::Dst` axis references a destination
+/// axis whose unraveled coordinate `dst_c{axis}` the caller has already
+/// computed before calling this).
+///
+/// `dst_is_image` controls whether `gen_convert_channel` skips
+/// the final normalized-dst requantization
 /// (deferred to hardware on `textureStore`).
 ///
-/// When `resample` is `false`, every source axis is exact-index: a plain
-/// integer `src_coord{s}`, either `constants.src_offset[s]`
+/// When `resample` is `false`, every source axis is exact-index:
+/// a plain integer `src_coord{s}`, either `constants.src_offset[s]`
 /// (`MappedAxis::Fixed`) or `constants.src_offset[s] + dst_c{axis}`
-/// (mirrored as `... + (dst_extent[axis] - 1 - dst_c{axis})`) for
-/// `MappedAxis::Dst` - except when `src.kind == EndpointKind::Buffer`
-/// (no offset concept; fold any desired starting coordinate into
-/// `src_byte_offset` instead), where the `constants.src_offset[s]` term is
-/// elided entirely (literal `0` / `i32(dst_c{axis})` / the mirrored
-/// equivalent), since the `Buffer`-src constants structs carry no
-/// `src_offset` field at all. When `wrap` is additionally set, each
-/// exact-index `MappedAxis::Dst` coordinate is passed through
-/// `apply_address_mode` before use - against the image's real physical
-/// extent (`constants.src_image_size`, axes 0/1 - the only axes an `Image`
-/// endpoint ever addresses) for an `Image` src, or the logical
-/// `constants.src_extent` region for a `Buffer` src (no larger "physical
-/// buffer extent" concept exists in this API). `wrap` has no effect on the
-/// resample path, which always wraps (see below).
+/// (mirrored as `... + (dst_extent[axis] - 1 - dst_c{axis})`)
+/// for `MappedAxis::Dst` - except when `src.kind == EndpointKind::Buffer`
+/// (no offset concept; fold any desired starting coordinate
+/// into `src_byte_offset` instead), where the `constants.src_offset[s]` term
+/// is elided entirely (literal `0` / `i32(dst_c{axis})` / the mirrored
+/// equivalent), since the `Buffer`-src constants structs carry
+/// no `src_offset` field at all.
+///
+/// When `wrap` is additionally set, each exact-index `MappedAxis::Dst`
+/// coordinate is passed through `apply_address_mode` before use
+/// against the image's real physical extent for an `Image` src,
+/// or the logical `constants.src_extent` region for a `Buffer` src.
+///
+/// `wrap` has no effect on the resample path, which always wraps (see below).
 ///
 /// When `resample` is `true`, a `MappedAxis::Dst` source axis instead
-/// computes a ratio `t = (dst_c{axis} + 0.5) / dst_extent[axis]` (mirrored
-/// as `t = 1.0 - t`), then a continuous source coordinate `src_coord_f{s} =
-/// src_offset[s] + t * src_extent[s]` (for a `Buffer` src, elided to just
-/// `t * src_extent[s]`, same reasoning as the non-resample path above).
-/// What happens to that continuous coordinate then depends on the source
-/// endpoint:
+/// computes a ratio `t = (dst_c{axis} + 0.5) / dst_extent[axis]`
+/// (mirrored as `t = 1.0 - t`), then a continuous source coordinate
+/// `src_coord_f{s} = src_offset[s] + t * src_extent[s]`
+/// (for a `Buffer` src, elided to just `t * src_extent[s]`,
+/// same reasoning as the non-resample path above).
 ///
-/// - `Image`, `CanonicalKind::Float`: normalized into a `uv` and
-///   hardware-sampled via `textureSampleLevel` through a real `Sampler`
-///   (built by the caller from the requested filter/address mode), with
-///   address-mode wrapping handled by the sampler itself against the
-///   image's real physical extent.
-/// - `Image`, `CanonicalKind::Uint`/`Sint`: no hardware sampler exists for
-///   integer texture formats, so it's `floor`ed to an integer texel and
-///   wrapped manually via `apply_address_mode` against the image's real
-///   physical extent (`constants.src_image_size`), then read with
-///   `textureLoad` - always nearest, never filtered.
-/// - `Buffer` (regardless of `CanonicalKind`): buffers have no hardware
-///   sampler and no meaningful notion of bilinear interpolation between
-///   struct elements, so it's always `floor`ed and wrapped via
-///   `apply_address_mode` exactly like the integer-image case, but against
-///   the logical `constants.src_extent` region itself (there is no larger
-///   "physical buffer extent" concept in this API, unlike the image case).
+/// What happens to that continuous coordinate then depends on the source endpoint:
+///
+/// - `Image`, `CanonicalKind::Float`: normalized into a `uv`
+///   and hardware-sampled via `textureSampleLevel` through a real `Sampler`
+///   (built by the caller from the requested filter/address mode),
+///   with address-mode wrapping handled by the sampler itself
+///   against the image's real physical extent.
+/// - `Image`, `CanonicalKind::Uint`/`Sint`: no hardware sampler exists
+///   for integer texture formats, so it's `floor`ed to an integer texel
+///   and wrapped manually via `apply_address_mode`
+///   against the image's real physical extent
+///   (`constants.src_image_size`), then read with `textureLoad`
+///   - always nearest, never filtered.
+/// - `Buffer` (regardless of `CanonicalKind`): buffers have
+///   no hardware sampler and no meaningful notion of bilinear interpolation
+///   between struct elements, so it's always `floor`ed and wrapped
+///   via `apply_address_mode` exactly like the integer-image case,
+///   but against the logical `constants.src_extent` region itself
+///   (there is no larger "physical buffer extent" concept in this API,
+///   unlike the image case).
 ///
 /// `MappedAxis::Fixed` axes are unaffected by resampling (no scaling
 /// participates, same exact-index formula as above).
@@ -1110,12 +1132,15 @@ fn gen_endpoint_decode_convert(
 // ============================================================================
 
 /// Maps a describable, non-sRGB `PixelFormat` to the WGSL storage-format
-/// keyword for a `texture_storage_2d<FORMAT, write>` binding, for
-/// `Float`-kind (Unorm/Snorm/Float) destinations. Mirrors `Blit`'s own
-/// table exactly: WGSL's storage-format keyword set has no entry for
-/// 3-channel (`Rgb*`) or 32-bit-normalized (`R32Unorm`/`R32Snorm`/...)
-/// formats, so `Image` destinations of those formats are not supported by
-/// the compute path (panics) - the same inherent limitation `Blit` has.
+/// keyword for a `texture_storage_2d<FORMAT, write>` binding,
+/// for `Float`-kind (Unorm/Snorm/Float) destinations.
+///
+/// Mirrors `Blit`'s own table exactly: WGSL's storage-format keyword set
+/// has no entry for 3-channel (`Rgb*`) or 32-bit-normalized
+/// (`R32Unorm`/`R32Snorm`/...) formats, so `Image` destinations
+/// of those formats are not supported
+/// by the compute path (panics)
+/// - the same inherent limitation `Blit` has.
 fn wgsl_storage_format(format: PixelFormat) -> &'static str {
     match format {
         PixelFormat::R8Unorm => "r8unorm",
@@ -1186,17 +1211,18 @@ fn dst_image_storage_format(dst_layout: &FormatLayout, format: PixelFormat) -> &
 // `Buffer<->Image`; any rank <= 4)
 // ============================================================================
 
-// The constants are passed as push constants (`with_constants`), one
-// specialized struct per (src.kind, dst.kind) endpoint combination, each
-// carrying only the fields that combination actually needs (an `Image`
-// endpoint contributes an `_offset`/`_image_size` pair, a `Buffer` endpoint
-// contributes a `_byte_offset`/`_stride` pair - `dst_extent`,
-// `total_dst_elements`, `src_extent`, `address_mode` are common to all
-// four). WGSL's `push_constant` (`immediate`) address space has no
-// 16-byte-array-stride rule the way `uniform` does, so every field here
-// packs tightly (matching `AutoDeviceRepr`'s no-implicit-padding
-// requirement) exactly like the shared struct these replace used to under
-// `storage`.
+// The constants are passed as push constants (`with_constants`),
+// one specialized struct per (src.kind, dst.kind) endpoint combination,
+// each carrying only the fields that combination actually needs
+// (an `Image` endpoint contributes an `_offset`/`_image_size` pair,
+// a `Buffer` endpoint contributes a `_byte_offset`/`_stride` pair
+// - `dst_extent`, `total_dst_elements`, `src_extent`, `address_mode`
+// are common to all four).
+//
+// WGSL's `push_constant` (`immediate`) address space
+// has no 16-byte-array-stride rule the way `uniform` does,
+// so every field here packs tightly,
+// matching `AutoDeviceRepr`'s no-implicit-padding requirement.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Zeroable, bytemuck::Pod, mev::AutoDeviceRepr)]
 struct CvtConstantsBufferToBuffer {
@@ -1248,8 +1274,10 @@ struct CvtConstantsImageToBuffer {
     dst_stride: [u32; 4],
     /// The source `Image` region's pixel offset.
     src_offset: [i32; 4],
-    /// The source `Image`'s physical extent, used by the resample path's
-    /// `apply_address_mode` wrapping. Zero/unused on the exact-index path.
+    /// The source `Image`'s physical extent, used by the resample
+    /// path's `apply_address_mode` wrapping.
+    ///
+    /// Zero/unused on the exact-index path.
     src_image_size: [u32; 2],
     total_dst_elements: u32,
     /// Resample-only: the logical source region extent, used both to scale
@@ -1272,8 +1300,10 @@ struct CvtConstantsImageToImage {
     dst_image_size: [u32; 2],
     /// The source `Image` region's pixel offset.
     src_offset: [i32; 4],
-    /// The source `Image`'s physical extent, used by the resample path's
-    /// `apply_address_mode` wrapping. Zero/unused on the exact-index path.
+    /// The source `Image`'s physical extent, used by the resample
+    /// path's `apply_address_mode` wrapping.
+    ///
+    /// Zero/unused on the exact-index path.
     src_image_size: [u32; 2],
     total_dst_elements: u32,
     /// Resample-only: the logical source region extent, used both to scale
@@ -1371,11 +1401,13 @@ struct CvtImageSrcRenderArguments {
     src: Image,
 }
 
-/// `_resample` counterpart of [`CvtImageSrcRenderArguments`] for a
-/// `CanonicalKind::Float` `Image` source (hardware-sampled through
-/// `sampler`). Not used for `Uint`/`Sint` source kinds - those have no
-/// hardware sampler and reuse the plain [`CvtImageSrcRenderArguments`]
-/// layout, doing manual `textureLoad` + `apply_address_mode` instead
+/// `_resample` counterpart of [`CvtImageSrcRenderArguments`]
+/// for a `CanonicalKind::Float` `Image` source
+/// (hardware-sampled through `sampler`).
+///
+/// Not used for `Uint`/`Sint` source kinds - those have no hardware sampler
+/// and reuse the plain [`CvtImageSrcRenderArguments`] layout,
+/// doing manual `textureLoad` + `apply_address_mode` instead
 /// (mirrors [`CvtImageToImageResampleArguments`] on the compute side).
 #[derive(Arguments)]
 struct CvtImageSrcRenderResampleArguments {
@@ -1461,42 +1493,51 @@ fn cvt_nd_constants_wgsl(src_kind: EndpointKind, dst_kind: EndpointKind) -> &'st
 // ============================================================================
 // Buffer destination: tiled, non-atomic write dispatch
 //
-// Every destination `Buffer` write is safe without atomics because the
-// dispatch structure below guarantees, purely geometrically, that no two
-// GPU threads ever touch the same 4-byte storage word. Destination axes
-// `0..dst_rank` (X, Y, Z, W - fastest to slowest) are classified `tight`
-// (exactly contiguous with the predecessor) or `aligned` (word-aligned,
-// possibly with a gap) or `bad` (unsupported, panics) - `aligned` is
-// checked *before* `tight`, so an axis satisfying both is `aligned`. `T`
-// (the length of the unbroken tight prefix from axis 0) selects one of a
-// small number of generated-WGSL dispatch shapes: axes `0..T` collapse
-// into one flat "tight chain" thread index (`gid.x`, 4 elements/thread,
-// wrapping across axis boundaries); axes `T..dst_rank` (or `0..dst_rank`
-// if `T == 0`) are each independently grouped by 4 with no wrapping, one
-// per remaining dispatch dimension (`gid.y`/`gid.z`, folding two axes into
-// `gid.z` via a secondary flat unravel if 3 remain - only possible at
-// `dst_rank == 4`). See the design notes accompanying this kernel's
-// implementation for the full algorithm.
+// Every destination `Buffer` write is safe without atomics
+// because the dispatch structure below guarantees, purely geometrically,
+// that no two GPU threads ever touch the same 4-byte storage word.
+//
+// Destination axes `0..dst_rank` (X, Y, Z, W - fastest to slowest)
+// are classified `tight` (exactly contiguous with the predecessor)
+// or `aligned` (word-aligned, possibly with a gap) or `bad`
+// (unsupported, panics) - `aligned` is checked *before* `tight`,
+// so an axis satisfying both is `aligned`.
+//
+// `T` (the length of the unbroken tight prefix from axis 0)
+// selects one of a small number of generated-WGSL dispatch shapes:
+// axes `0..T` collapse into one flat "tight chain" thread index
+// (`gid.x`, 4 elements/thread, wrapping across axis boundaries);
+// axes `T..dst_rank` (or `0..dst_rank` if `T == 0`)
+// are each independently grouped by 4 with no wrapping,
+// one per remaining dispatch dimension (`gid.y`/`gid.z`,
+// folding two axes into `gid.z` via a secondary flat unravel
+// if 3 remain - only possible at `dst_rank == 4`).
+//
+// See the design notes accompanying this kernel's implementation
+// for the full algorithm.
 // ============================================================================
 
-/// Computes `T` - the length of the unbroken tight-chain prefix starting at
-/// destination axis 0 - for a `Buffer` destination described by
-/// `dst_extent`/`dst_stride` (both length `dst_rank`, `dst_rank <= 4`) and
-/// `byte_size` (the destination format's element byte size). Panics (before
-/// any GPU work) if:
+/// Computes `T` - the length of the unbroken tight-chain prefix
+/// starting at destination axis 0 - for a `Buffer` destination
+/// described by `dst_extent`/`dst_stride` (both length `dst_rank`,
+/// `dst_rank <= 4`) and `byte_size` (the destination format's element byte size).
+///
+/// Panics (before any GPU work) if:
 /// - the general no-aliasing precondition is violated at any axis
 ///   (`dst_stride[0] >= byte_size`; `dst_stride[d] >= dst_extent[d-1] *
 ///   dst_stride[d-1]` for `d >= 1`), or
 /// - any axis is classified neither `tight` nor `aligned` ("bad" -
 ///   unsupported dst layout).
 ///
-/// Classification checks `aligned` (`dst_stride[d] % 4 == 0`) before
-/// `tight` (`dst_stride[d] == dst_extent[d-1] * dst_stride[d-1]`, or
-/// `dst_stride[0] == byte_size` for axis 0): an axis satisfying both is
-/// `aligned`, not `tight`. Once the chain breaks (an axis is `aligned`),
-/// every subsequent axis is independently `aligned`-or-`bad` - the chain
-/// never re-extends even if a later axis is numerically tight relative to
-/// its immediate predecessor.
+/// Classification checks `aligned` (`dst_stride[d] % 4 == 0`) before `tight`
+/// (`dst_stride[d] == dst_extent[d-1] * dst_stride[d-1]`,
+/// or `dst_stride[0] == byte_size` for axis 0):
+/// an axis satisfying both is `aligned`, not `tight`.
+///
+/// Once the chain breaks (an axis is `aligned`),
+/// every subsequent axis is independently `aligned`-or-`bad`
+/// the chain never re-extends even if a later axis is numerically tight
+/// relative to its immediate predecessor.
 fn classify_dst_tight_chain(dst_extent: &[u32], dst_stride: &[usize], byte_size: usize) -> usize {
     let dst_rank = dst_extent.len();
     debug_assert_eq!(dst_stride.len(), dst_rank);
@@ -1522,7 +1563,7 @@ fn classify_dst_tight_chain(dst_extent: &[u32], dst_stride: &[usize], byte_size:
     let mut tight_len = 0;
     let mut chain_open = true;
     for d in 0..dst_rank {
-        let aligned = dst_stride[d] % 4 == 0;
+        let aligned = dst_stride[d].is_multiple_of(4);
         if chain_open && !aligned {
             let tight = if d == 0 {
                 dst_stride[0] == byte_size
@@ -1581,9 +1622,11 @@ impl DstTileUnits {
         self.tight_len >= 1
     }
 
-    /// Axis indices handled independently on `gid.y`/`gid.z` (or folded
-    /// together into `gid.z`), in increasing order. Does not include the
-    /// `gid.x` unit (the tight chain, or axis 0 alone if `T == 0`).
+    /// Axis indices handled independently on `gid.y`/`gid.z`
+    /// (or folded together into `gid.z`), in increasing order.
+    ///
+    /// Does not include the `gid.x` unit
+    /// (the tight chain, or axis 0 alone if `T == 0`).
     fn remaining(&self) -> Vec<usize> {
         if self.x_is_chain() {
             (self.tight_len..self.rank).collect()
@@ -1605,13 +1648,14 @@ impl DstTileUnits {
     }
 }
 
-/// Number of dispatch groups along each of `gid.x`/`gid.y`/`gid.z`, given
-/// the actual runtime `dst_extent` (each group covers up to 4 elements
-/// along its unit's axis/axes - see module docs). A dimension with no
-/// assigned unit is `1` (not `0`): it must stay a no-op single group so the
-/// *other* dimensions' real work still executes, unlike a real axis whose
-/// own extent is legitimately `0` (correctly yielding an empty dispatch
-/// along that axis).
+/// Number of dispatch groups along each of `gid.x`/`gid.y`/`gid.z`,
+/// given the actual runtime `dst_extent` (each group covers up to 4 elements
+/// along its unit's axis/axes - see module docs).
+///
+/// A dimension with no assigned unit is `1` (not `0`):
+/// it must stay a no-op single group so the *other* dimensions' real work
+/// still executes, unlike a real axis whose own extent is legitimately `0`
+/// (correctly yielding an empty dispatch along that axis).
 fn dst_tile_groups(units: DstTileUnits, dst_extent: &[u32]) -> (u32, u32, u32) {
     let groups_x = if units.x_is_chain() {
         let total: u64 = dst_extent[..units.tight_len]
@@ -1720,16 +1764,18 @@ fn dst_tile_unit_list(units: DstTileUnits) -> Vec<DstTileUnit> {
 }
 
 /// Generates the full tiled, non-atomic dispatch body for a `Buffer`
-/// destination (see module docs above). Emits its own `gid.x` bounds check
-/// (the workgroup-of-64 rounding tail along the `gid.x` unit) and, for
-/// every combination of up to 4 sub-indices per unit, a scoped block
-/// computing that sub-element's `dst_c{d}` coordinates, decoding/converting
-/// via [`gen_endpoint_decode_convert`] (unchanged - called once per
-/// in-bounds sub-element instead of once per thread), then encoding via
-/// [`gen_buffer_encode`]'s plain (non-atomic) masked read-modify-write.
-/// Each combination's block is its own WGSL scope (`{ ... }`), so the
-/// repeated `dst_c{d}`/`out_r`/etc. declarations across combinations never
-/// collide.
+/// destination (see module docs above).
+///
+/// Emits its own `gid.x` bounds check
+/// (the workgroup-of-64 rounding tail along the `gid.x` unit)
+/// and, for every combination of up to 4 sub-indices per unit,
+/// a scoped block computing that sub-element's `dst_c{d}` coordinates,
+/// decoding/converting via [`gen_endpoint_decode_convert`]
+/// (unchanged - called once per in-bounds sub-element instead of once per thread),
+/// then encoding via [`gen_buffer_encode`]'s plain (non-atomic) masked read-modify-write.
+///
+/// Each combination's block is its own WGSL scope (`{ ... }`),
+/// so the repeated `dst_c{d}`/`out_r`/etc. declarations across combinations never collide.
 #[allow(clippy::too_many_arguments)]
 fn gen_dst_buffer_tiled_body(
     src: EndpointDesc,
@@ -1880,15 +1926,15 @@ fn gen_dst_buffer_tiled_body(
 /// (`Image` destinations keep the original one-thread-per-element scheme -
 /// `textureStore` never aliases across threads, so it never needed this).
 ///
-/// When `resample` is `true` and the source is an `Image` of
-/// `CanonicalKind::Float`, an extra `sampler` binding is declared and the
-/// argument layout switches to the matching `*ResampleArguments` struct
-/// (see [`gen_endpoint_decode_convert`]). Every other `(src, dst)`
-/// combination keeps using the plain argument struct regardless of
-/// `resample`, since only the hardware-sampled path needs a bound `Sampler`
-/// resource (integer-image and buffer resample paths do their own
-/// address-mode wrapping from a plain `u32` uniform, no extra binding
-/// required).
+/// When `resample` is `true` and the source is an `Image`
+/// of `CanonicalKind::Float`, an extra `sampler` binding is declared
+/// and the argument layout switches to the matching `*ResampleArguments` struct (see [`gen_endpoint_decode_convert`]).
+///
+/// Every other `(src, dst)` combination keeps using the plain argument struct
+/// regardless of `resample`, since only the hardware-sampled path needs
+/// a bound `Sampler` resource (integer-image and buffer resample paths
+/// do their own address-mode wrapping from a plain `u32` uniform,
+/// no extra binding required).
 #[allow(clippy::too_many_arguments)]
 fn make_compute_pipeline_nd(
     device: &Device,
@@ -2076,12 +2122,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
         .expect("Cvt: failed to create nd compute pipeline")
 }
 
-/// Builds the render pipeline for an sRGB `Image` destination (fullscreen
-/// triangle + fragment shader; hardware gamma-encodes on write to the sRGB
-/// color attachment, mirroring `Blit`'s `BlitKind::Srgb` path exactly). The
-/// destination is always an `Image` addressed at rank 3 (2 spatial axes
-/// driven by `frag_pos`, one always-degenerate iteration axis) - only
-/// `Image` destinations reach this pipeline in the first place.
+/// Builds the render pipeline for an sRGB `Image` destination
+/// (fullscreen triangle + fragment shader; hardware gamma-encodes on write
+/// to the sRGB color attachment, mirroring `Blit`'s `BlitKind::Srgb` path exactly).
+///
+/// The destination is always an `Image` addressed at rank 3
+/// (2 spatial axes driven by `frag_pos`, one always-degenerate iteration axis)
+/// - only `Image` destinations reach this pipeline in the first place.
 ///
 /// `src_rank` (<= 4) generalizes the source endpoint's addressed rank: for
 /// an `Image` source this is always 3 (only 2 axes are ever addressable -
@@ -2089,15 +2136,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {{
 /// described at any rank up to 4, exactly like the compute path's `Buffer`
 /// endpoints.
 ///
-/// When `resample` is `true` and the source is an `Image` of
-/// `CanonicalKind::Float`, an extra `sampler` binding is declared and the
-/// argument layout switches to [`CvtImageSrcRenderResampleArguments`],
-/// mirroring how `make_compute_pipeline_nd` picks its own
-/// `*ResampleArguments` struct for the same condition. Every other `(src,
-/// dst)` combination keeps using the plain argument struct regardless of
-/// `resample` (integer-image and buffer resample paths do their own
-/// address-mode wrapping from a plain `u32` uniform, no extra binding
-/// required).
+/// When `resample` is `true` and the source is an `Image`
+/// of `CanonicalKind::Float`, an extra `sampler` binding is declared
+/// and the argument layout switches to [`CvtImageSrcRenderResampleArguments`],
+/// mirroring how `make_compute_pipeline_nd` picks
+/// its own `*ResampleArguments` struct for the same condition.
+///
+/// Every other `(src, dst)` combination keeps using the plain argument struct
+/// regardless of `resample` (integer-image and buffer resample paths
+/// do their own address-mode wrapping from a plain `u32` uniform,
+/// no extra binding required).
+#[allow(clippy::too_many_arguments)]
 fn make_render_pipeline(
     device: &Device,
     src: EndpointDesc,
@@ -2255,13 +2304,15 @@ fn make_in_place_pipeline(
 
     let byte_size = dst_layout.byte_size;
 
-    // Always rank-1 and inherently tight by contract (flat
-    // `byte_offset + linear*byte_size` addressing, no stride concept at
-    // all - `T = D = 1`, no outer aligned axes ever needed): the simplest
-    // instance of the tiled non-atomic scheme (see module docs above
-    // `classify_dst_tight_chain`). Each thread owns 4 consecutive elements,
-    // wrapping is always safe since there's nothing to wrap into but more
-    // of the same tightly-packed run.
+    // Always rank-1 and inherently tight by contract
+    // (flat `byte_offset + linear*byte_size` addressing, no stride concept
+    // at all - `T = D = 1`, no outer aligned axes ever needed):
+    // the simplest instance of the tiled non-atomic scheme
+    // (see module docs above `classify_dst_tight_chain`).
+    //
+    // Each thread owns 4 consecutive elements,
+    // wrapping is always safe since there's nothing
+    // to wrap into but more of the same tightly-packed run.
     let mut body = String::new();
     body += "    let groups: u32 = (constants.element_count + 3u) / 4u;\n";
     body += "    if (gid.x >= groups) {\n        return;\n    }\n";
@@ -2364,10 +2415,11 @@ fn pad4_addr_mode<const N: usize>(a: [AddressMode; N]) -> [u32; 4] {
 
 /// Converts an arbitrary-rank `address_mode` array into the fixed rank-3
 /// array required by `SamplerDesc` (hardware samplers are always built
-/// against a 2D `Image`, so only indices 0/1 are ever meaningfully read -
-/// see the module's Image-endpoint decode codegen). Extra entries beyond
-/// index 2 are dropped; missing entries are filled with `AddressMode`'s
-/// default.
+/// against a 2D `Image`, so only indices 0/1 are ever meaningfully read
+/// - see the module's Image-endpoint decode codegen).
+///
+/// Extra entries beyond index 2 are dropped;
+/// missing entries are filled with `AddressMode`'s default.
 fn sampler_addr_mode3<const N: usize>(a: [AddressMode; N]) -> [AddressMode; 3] {
     let mut out = [AddressMode::default(); 3];
     let n = N.min(3);
@@ -2377,9 +2429,10 @@ fn sampler_addr_mode3<const N: usize>(a: [AddressMode; N]) -> [AddressMode; 3] {
 
 /// Panics unless the strided region (`extent` elements per axis, laid out
 /// by `strides`, each element `elem_byte_size` bytes) fits within `slice`,
-/// starting at the slice's own byte offset - the buffer-endpoint
-/// counterpart of [`ImageSlice::assert_fits_image`]. An empty region (any
-/// zero extent) touches nothing and always fits.
+/// starting at the slice's own byte offset
+/// - the buffer-endpoint counterpart of [`ImageSlice::assert_fits_image`].
+///
+/// An empty region (any zero extent) touches nothing and always fits.
 fn assert_fits_buffer_slice(
     role: &str,
     slice: &BufferSlice<'_>,
@@ -2387,7 +2440,7 @@ fn assert_fits_buffer_slice(
     extent: &[u32],
     elem_byte_size: usize,
 ) {
-    if extent.iter().any(|&e| e == 0) {
+    if extent.contains(&0) {
         return;
     }
     let mut span = elem_byte_size;
@@ -2406,24 +2459,28 @@ fn assert_fits_buffer_slice(
 // ============================================================================
 
 /// Options shared by all four `Cvt` pair `_with` methods
-/// (`buffer_to_buffer_with`, `image_to_image_with`, `image_to_buffer_with`,
-/// `buffer_to_image_with`). Defaults to a plain exact copy: identity axis
-/// map, identity swizzle, no resize, out-of-bounds source reads denied.
+/// (`buffer_to_buffer_with`, `image_to_image_with`, `image_to_buffer_with`, `buffer_to_image_with`).
+///
+/// Defaults to a plain exact copy: identity axis map, identity swizzle,
+/// no resize, out-of-bounds source reads denied.
 ///
 /// `resize`'s two independent filters (`min_filter`, `mag_filter`, mirroring
-/// [`SamplerDesc`]'s fields of the same name) are only meaningful for an
-/// `Image` src with a Float-kind pixel format, where they drive a real
-/// hardware `Sampler`. In every other case - a `Buffer` src (no hardware
-/// sampler at all) or an `Image` src with an integer-kind (Uint/Sint) pixel
-/// format (no hardware sampler for integer texture formats) - both filters
+/// [`SamplerDesc`]'s fields of the same name) are only meaningful
+/// for an `Image` src with a Float-kind pixel format,
+/// where they drive a real hardware `Sampler`.
+///
+/// In every other case - a `Buffer` src (no hardware sampler at all)
+/// or an `Image` src with an integer-kind (Uint/Sint) pixel format
+/// (no hardware sampler for integer texture formats) - both filters
 /// must be `Filter::Nearest`; passing `Filter::Linear` in either slot panics
 /// (before recording any GPU work) at the call site that can't honor it.
 ///
-/// Accepted directly at the call site (via `Into`): an [`AxisSwizzle`], a
-/// [`Swizzle`], a [`Filter`] (enables `resize`, setting both min and mag to
-/// the same value), an `[AddressMode; SRC]` (enables out-of-bounds reads),
-/// `(AxisSwizzle, Swizzle)` or `(Filter, [AddressMode; SRC])`. Any other
-/// combination goes through the builder methods or a struct literal.
+/// Accepted directly at the call site (via `Into`): an [`AxisSwizzle`],
+/// a [`Swizzle`], a [`Filter`] (enables `resize`, setting both min and mag
+/// to the same value), an `[AddressMode; SRC]` (enables out-of-bounds reads),
+/// `(AxisSwizzle, Swizzle)` or `(Filter, [AddressMode; SRC])`.
+///
+/// Any other combination goes through the builder methods or a struct literal.
 #[derive(Clone, Copy, Debug)]
 pub struct CvtOptions<const SRC: usize> {
     /// Per-source-axis map from destination axes
@@ -2437,8 +2494,10 @@ pub struct CvtOptions<const SRC: usize> {
     /// actually honored versus panicking.
     pub resize: Option<(Filter, Filter)>,
     /// `None`: the source region must fit its resource (panics otherwise).
-    /// `Some(modes)`: out-of-range source reads wrap/clamp/mirror per axis
-    /// instead. Never affects destination writes.
+    ///
+    /// `Some(modes)`: out-of-range source reads wrap/clamp/mirror per axis instead.
+    ///
+    /// Never affects destination writes.
     pub address_mode: Option<[AddressMode; SRC]>,
 }
 
@@ -2562,9 +2621,8 @@ impl Cvt {
 
     /// Converts `src` into `dst`, both `Buffer`s of the same rank `N`, with
     /// default options: exact copy, identity axis map and swizzle,
-    /// out-of-bounds reads denied (src/dst element formats may still differ
-    /// - this is a format conversion, not a byte copy). Use
-    /// [`Cvt::buffer_to_buffer_with`] for anything else.
+    /// out-of-bounds reads denied (src/dst element formats may still differ).
+    /// Use [`Cvt::buffer_to_buffer_with`] for anything else.
     pub fn buffer_to_buffer<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
@@ -2583,36 +2641,36 @@ impl Cvt {
         );
     }
 
-    /// Converts `src`'s contents into `dst`, both `Buffer` endpoints, up to
-    /// 4 dimensions, per `opts` (see [`CvtOptions`], including
-    /// the values accepted directly via `Into`).
+    /// Converts `src`'s contents into `dst`, both `Buffer` endpoints,
+    /// up to 4 dimensions, per `opts`
+    /// (see [`CvtOptions`], including the values accepted directly via `Into`).
     ///
-    /// With `opts.resize` unset this is an exact-index copy: extents must
-    /// match along every mapped axis. With it set, each destination element
-    /// reads the source coordinate computed by scaling the destination's
-    /// position ratio across `src_extent` (see the module's resample
-    /// codegen for the exact per-axis formula) - always nearest-index
-    /// (buffers have no hardware sampler; a caller wanting filtered
-    /// resampling must decode to an `Image` first), wrapped by the address
-    /// mode against the `src_extent` region itself (there is no larger
-    /// "physical buffer extent" concept in this API, unlike `Image`
-    /// endpoints which wrap against their real physical extent).
+    /// With `opts.resize` unset this is an exact-index copy:
+    /// extents must match along every mapped axis.
     ///
-    /// With `opts.address_mode` unset, the source region must fit within
-    /// `src`'s slice (asserted; where the resample path needs a mode value
-    /// anyway, `ClampToEdge` is used). The destination region must fit
-    /// within `dst`'s slice unconditionally - address mode never redirects
-    /// writes.
+    /// With it set, each destination element reads the source coordinate
+    /// computed by scaling the destination's position ratio across `src_extent` - always nearest-index,
+    /// wrapped by the address mode against the `src_extent` region itself
+    /// (there is no larger "physical buffer extent" concept in this API,
+    /// unlike `Image` endpoints which wrap against their real physical extent).
     ///
-    /// Panics (before recording any GPU work) if the formats are not
-    /// `compatible`, or `SRC`/`DST` exceed 4, or a region fails its fit
-    /// check as above, or any byte offset/stride isn't a multiple of its
-    /// side's component byte size (1/2/4 - required so that no component
-    /// ever straddles a 4-byte storage-buffer word), or the destination
-    /// stride/offset pattern fails the tiled non-atomic write dispatch's
-    /// own preconditions (no-aliasing stride requirement, 4-byte-aligned
-    /// `dst_byte_offset`, every axis classified `tight` or `aligned` - see
-    /// `classify_dst_tight_chain`).
+    /// With `opts.address_mode` unset, the source region must fit
+    /// within `src`'s slice (asserted; where the resample path needs
+    /// a mode value anyway, `ClampToEdge` is used).
+    ///
+    /// The destination region must fit within `dst`'s slice unconditionally
+    /// - address mode never redirects writes.
+    ///
+    /// Panics (before recording any GPU work) if the formats are not `compatible`,
+    /// or `SRC`/`DST` exceed 4,
+    /// or a region fails its fit check as above,
+    /// or any byte offset/stride isn't a multiple of its side's component byte size
+    /// (1/2/4 - required so that no component ever straddles
+    /// a 4-byte storage-buffer word),
+    /// or the destination stride/offset pattern fails the tiled
+    /// non-atomic write dispatch's own preconditions (no-aliasing stride requirement,
+    /// 4-byte-aligned `dst_byte_offset`, every axis classified `tight` or `aligned`
+    /// - see `classify_dst_tight_chain`).
     pub fn buffer_to_buffer_with<const SRC: usize, const DST: usize>(
         &self,
         encoder: &mut CommandEncoder,
@@ -2622,6 +2680,8 @@ impl Cvt {
         dst_shape: TexelShape<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
+        #![allow(clippy::needless_range_loop)]
+
         let CvtOptions {
             axes,
             swizzle,
@@ -2811,12 +2871,14 @@ impl Cvt {
     /// the same element position, starting at byte offset `0`.
     ///
     /// Buffer-only (there is no `cvt_image_in_place`); requires
-    /// `describe(src_format).byte_size == describe(dst_format).byte_size`
-    /// (asserted). Uses a dedicated pipeline binding exactly one storage
-    /// resource - not a two-`Buffer` alias of the two-resource copy path.
-    /// Takes `src_format`/`dst_format`/`swizzle` directly rather than a
-    /// `CvtDesc`: there is no axis map here (a single buffer, same element
-    /// position in and out).
+    /// `describe(src_format).byte_size == describe(dst_format).byte_size` (asserted).
+    ///
+    /// Uses a dedicated pipeline binding exactly one storage resource
+    /// - not a two-`Buffer` alias of the two-resource copy path.
+    ///
+    /// Takes `src_format`/`dst_format`/`swizzle` directly rather than a `CvtDesc`:
+    /// there is no axis map here (a single buffer, same element position
+    /// in and out).
     pub fn buffer_in_place(
         &self,
         encoder: &mut CommandEncoder,
@@ -2826,9 +2888,6 @@ impl Cvt {
         element_count: u32,
         swizzle: Swizzle,
     ) {
-        let src_format: PixelFormat = src_format.into();
-        let dst_format: PixelFormat = dst_format.into();
-
         assert!(
             cvt_compatible(src_format, dst_format),
             "Cvt: src format {:?} is not compatible with dst format {:?}",
@@ -2880,11 +2939,12 @@ impl Cvt {
         compute.dispatch(groups);
     }
 
-    /// Converts `src` into `dst`, both `Image`s of the same rank `N`, with
-    /// default options: exact copy, identity axis map and swizzle,
-    /// out-of-bounds reads denied (src/dst pixel formats may still differ -
-    /// this is a format conversion, not a byte copy). Use
-    /// [`Cvt::image_to_image_with`] for anything else.
+    /// Converts `src` into `dst`, both `Image`s of the same rank `N`,
+    /// with default options: exact copy, identity axis map and swizzle,
+    /// out-of-bounds reads denied (src/dst pixel formats may still differ
+    /// - this is a format conversion, not a byte copy).
+    ///
+    /// Use [`Cvt::image_to_image_with`] for anything else.
     pub fn image_to_image<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
@@ -2894,33 +2954,38 @@ impl Cvt {
         self.image_to_image_with::<N, N>(encoder, src, dst, CvtOptions::default());
     }
 
-    /// Converts a rectangular region of `src` into a rectangular region of
-    /// `dst`, both `Image`s, up to 4 dimensions (`2 <= SRC <= 4` and
-    /// `2 <= DST <= 4` - `Image` endpoints are always sampled/stored in at
-    /// least X/Y, so unlike `buffer_to_buffer_with` there is a rank floor
-    /// of 2), per `opts` (see [`CvtOptions`], including the values
-    /// accepted directly via `Into`).
+    /// Converts a rectangular region of `src` into a rectangular region of `dst`,
+    /// both `Image`s, up to 4 dimensions
+    /// (`2 <= SRC <= 4` and `2 <= DST <= 4` - `Image` endpoints
+    /// are always sampled/stored in at least X/Y,
+    /// so unlike `buffer_to_buffer_with` there is a rank floor of 2),
+    /// per `opts` (see [`CvtOptions`], including the values accepted directly via `Into`).
     ///
-    /// With `opts.resize` unset this is an exact-index copy: extents must
-    /// match along every mapped axis. With `opts.resize` set, the src/dst
-    /// extents may differ along mapped axes: `dst`'s content is read from
-    /// `src` by scaling each destination axis's position ratio across
-    /// `src_extent` (see [`gen_endpoint_decode_convert`] for the exact
-    /// per-axis formula). When `src`'s pixel format is float-representable
-    /// (Unorm/Snorm/Float), the resampled source is hardware sampled
-    /// through a real `Sampler` built from the resize filter and address
-    /// mode; when it is `Uint`/`Sint`, there is no hardware sampler for
-    /// integer texture formats, so it is always nearest-index with manual
-    /// address-mode wrapping - requesting `Filter::Linear` for an
-    /// integer-kind `src` panics rather than silently falling back to
-    /// nearest.
+    /// With `opts.resize` unset this is an exact-index copy:
+    /// extents must match along every mapped axis.
+    ///
+    /// With `opts.resize` set, the src/dst extents may differ along mapped axes:
+    /// `dst`'s content is read from `src` by scaling each destination
+    /// axis's position ratio across `src_extent`
+    /// (see [`gen_endpoint_decode_convert`] for the exact per-axis formula).
+    ///
+    /// When `src`'s pixel format is float-representable (Unorm/Snorm/Float),
+    /// the resampled source is hardware sampled through a real `Sampler`
+    /// built from the resize filter and address mode;
+    /// when it is `Uint`/`Sint`, there is no hardware sampler
+    /// for integer texture formats, so it is always nearest-index
+    /// with manual address-mode wrapping - requesting `Filter::Linear`
+    /// for an integer-kind `src` panics rather than silently falling back to nearest.
     ///
     /// With `opts.address_mode` unset, the source region must fit its image
     /// (asserted; where the resample path needs a mode value anyway,
-    /// `ClampToEdge` is used). When set, out-of-range source reads
-    /// wrap/clamp/mirror per axis against the image's real physical extent
-    /// instead. The destination region must fit its image unconditionally -
-    /// address mode never redirects writes.
+    /// `ClampToEdge` is used).
+    ///
+    /// When set, out-of-range source reads wrap/clamp/mirror per axis
+    /// against the image's real physical extent instead.
+    ///
+    /// The destination region must fit its image unconditionally
+    /// - address mode never redirects writes.
     ///
     /// Panics (before recording any GPU work) if `SRC`/`DST` are outside
     /// `2..=4`, the formats are not `compatible`, a region fails its fit
@@ -3182,10 +3247,11 @@ impl Cvt {
         }
     }
 
-    /// Converts `src` into `dst`, `src` an `Image` and `dst` a `Buffer` of
-    /// matching rank `N`, with default options: exact copy, identity axis
-    /// map and swizzle, out-of-bounds source reads denied. Use
-    /// [`Cvt::image_to_buffer_with`] for anything else.
+    /// Converts `src` into `dst`, `src` an `Image` and `dst` a `Buffer`
+    /// of matching rank `N`, with default options: exact copy,
+    /// identity axis map and swizzle, out-of-bounds source reads denied.
+    ///
+    /// Use [`Cvt::image_to_buffer_with`] for anything else.
     pub fn image_to_buffer<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
@@ -3196,20 +3262,22 @@ impl Cvt {
         self.image_to_buffer_with::<N, N>(encoder, src, dst, dst_shape, CvtOptions::default());
     }
 
-    /// Converts a rectangular region of `src` (an `Image`) into `dst` (a
-    /// `Buffer`), described by `dst_format` with per-axis byte strides
-    /// `dst_strides` (`dst_strides[0]` is the X-axis stride - the byte
-    /// offset from one element to the next; it need not equal the format's
-    /// tightly-packed element size), per `opts` (see [`CvtOptions`],
-    /// including the values accepted directly via `Into`). See
-    /// [`Cvt::image_to_image_with`]'s docs for the `resize`/`address_mode`
+    /// Converts a rectangular region of `src` (an `Image`) into `dst` (a `Buffer`),
+    /// described by `dst_format` with per-axis byte strides `dst_strides`
+    /// (`dst_strides[0]` is the X-axis stride - the byte offset
+    /// from one element to the next; it need not equal
+    /// the format's tightly-packed element size), per `opts`
+    /// (see [`CvtOptions`], including the values accepted directly via `Into`).
+    ///
+    /// See [`Cvt::image_to_image_with`]'s docs for the `resize`/`address_mode`
     /// semantics (hardware-sampled resample for a float-representable `src`,
-    /// manual nearest-index address-mode wrapping for `Uint`/`Sint`, `dst`
-    /// fit always asserted, `src` fit asserted unless `address_mode` is set)
-    /// - they apply identically here, keyed off `src`'s (the `Image`) pixel
-    /// format. There is no sRGB-destination restriction here: `dst` is a
-    /// `Buffer`, so there is no hardware gamma-encode-on-write path to route
-    /// through in the first place.
+    /// manual nearest-index address-mode wrapping for `Uint`/`Sint`,
+    /// `dst` fit always asserted, `src` fit asserted unless `address_mode` is set)
+    /// - they apply identically here, keyed off `src`'s (the `Image`) pixel format.
+    ///
+    /// There is no sRGB-destination restriction here: `dst` is a `Buffer`,
+    /// so there is no hardware gamma-encode-on-write path
+    /// to route through in the first place.
     ///
     /// Panics (before recording any GPU work) under the same conditions as
     /// `image_to_image_with` (formats not `compatible`, `Filter::Linear`
@@ -3406,10 +3474,11 @@ impl Cvt {
         compute.dispatch(groups);
     }
 
-    /// Converts `src` into `dst`, `src` a `Buffer` and `dst` an `Image` of
-    /// matching rank `N`, with default options: exact copy, identity axis
-    /// map and swizzle, out-of-bounds source reads denied. Use
-    /// [`Cvt::buffer_to_image_with`] for anything else.
+    /// Converts `src` into `dst`, `src` a `Buffer` and `dst` an `Image`
+    /// of matching rank `N`, with default options: exact copy,
+    /// identity axis map and swizzle, out-of-bounds source reads denied.
+    ///
+    /// Use [`Cvt::buffer_to_image_with`] for anything else.
     pub fn buffer_to_image<const N: usize>(
         &self,
         encoder: &mut CommandEncoder,
@@ -3422,15 +3491,15 @@ impl Cvt {
 
     /// Converts `src` (a `Buffer`, described by `src_format` with per-axis
     /// byte strides `src_strides` - `src_strides[0]` is the X-axis stride,
-    /// the byte offset from one element to the next; it need not equal the
-    /// format's tightly-packed element size) into a rectangular region of
-    /// `dst` (an `Image`), per `opts` (see [`CvtOptions`],
-    /// including the values accepted directly via `Into`). Mirror of
-    /// [`Cvt::buffer_to_buffer_with`]; see its docs for the `resize`/
-    /// `address_mode` semantics (always nearest-index - a `Buffer` src has
-    /// no hardware sampler, `dst` fit always asserted, `src` fit asserted
-    /// unless `address_mode` is set). Routes through the sRGB render
-    /// pipeline when `dst`'s format is sRGB.
+    /// the byte offset from one element to the next; it need not equal
+    /// the format's tightly-packed element size) into a rectangular region
+    /// of `dst` (an `Image`), per `opts`
+    /// (see [`CvtOptions`], including the values accepted directly via `Into`).
+    ///
+    /// Mirror of [`Cvt::buffer_to_buffer_with`]; see its docs
+    /// for the `resize`/`address_mode` semantics.
+    ///
+    /// Routes through the sRGB render pipeline when `dst`'s format is sRGB.
     ///
     /// Panics (before recording any GPU work) under the same conditions as
     /// `buffer_to_buffer_with` (formats not `compatible`, a region fails its
@@ -3443,6 +3512,8 @@ impl Cvt {
         dst: impl AsImageSlice<DST>,
         opts: impl Into<CvtOptions<SRC>>,
     ) {
+        #![allow(clippy::needless_range_loop)]
+
         let CvtOptions {
             axes,
             swizzle,
@@ -3672,9 +3743,10 @@ impl Cvt {
 }
 
 // ============================================================================
-// Tests: pure codegen/classification logic (no GPU device needed). The
-// tiled dispatch's actual read-back correctness is verified on real
-// hardware by `examples/cvt_smoke.rs`.
+// Tests: pure codegen/classification logic (no GPU device needed).
+//
+// The tiled dispatch's actual read-back correctness is verified
+// on real hardware by `examples/cvt_smoke.rs`.
 // ============================================================================
 
 #[cfg(test)]

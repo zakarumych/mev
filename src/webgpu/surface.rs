@@ -1,5 +1,7 @@
 use std::fmt;
 
+use mev_proc::hidden_trait;
+
 use crate::{
     ColorSpace, Extent2, ImageUsage, PresentMode,
     backend::from::{TryFromWgpu, TryIntoWgpu, TryWgpuInto, WgpuFrom},
@@ -132,7 +134,7 @@ impl Surface {
 
 impl crate::traits::Resource for Surface {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Surface for Surface {
     fn available_formats(&self) -> &[(PixelFormat, ColorSpace)] {
         &self.mev_formats
@@ -230,7 +232,7 @@ pub struct Frame {
 
 impl crate::traits::Resource for Frame {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Frame for Frame {
     fn image(&self) -> &Image2D {
         &self.image

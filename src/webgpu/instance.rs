@@ -1,16 +1,15 @@
 use std::{fmt, rc::Rc};
 
+use mev_proc::hidden_trait;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use wgpu::MemoryHints::Performance;
 
-use crate::{
-    DeviceType,
-    generic::{
-        Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, FamilyCapabilities, Features,
-        QueueFlags,
-    },
+use crate::generic::{
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
+    Features, QueueFlags, SurfaceError,
 };
 
-use super::{Device, Queue};
+use super::{Device, Queue, Surface};
 
 pub struct Instance {
     instance: Rc<wgpu::Instance>,
@@ -102,6 +101,7 @@ impl fmt::Debug for Instance {
 
 impl crate::traits::Resource for Instance {}
 
+// #[hidden_trait]
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
@@ -110,7 +110,7 @@ impl crate::traits::Instance for Instance {
     async fn new_device_async(
         &self,
         info: DeviceDesc<'_>,
-    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError> {
+    ) -> Result<(Device, Vec<Queue>), DeviceError> {
         assert!(
             info.queues.len() <= 1,
             "Only one queue is supported for now"
@@ -178,21 +178,26 @@ impl crate::traits::Instance for Instance {
             pollster::block_on(self.new_device_async(info))
         }
     }
-}
 
-impl Instance {
-    pub fn capabilities(&self) -> &Capabilities {
-        &self.capabilities
-    }
-
-    pub async fn new_device_async(
+    fn new_device_with_surface(
         &self,
         info: DeviceDesc<'_>,
-    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError> {
-        crate::traits::Instance::new_device_async(self, info).await
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
     }
 
-    pub fn new_device(&self, info: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
-        crate::traits::Instance::new_device(self, info)
+    async fn new_device_with_surface_async(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
     }
 }

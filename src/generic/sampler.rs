@@ -93,7 +93,7 @@ impl Hash for SamplerDesc {
         self.mag_filter.hash(state);
         self.mip_map_mode.hash(state);
         self.address_mode.hash(state);
-        self.anisotropy.map(|v| v.to_bits().hash(state));
+        self.anisotropy.map(f32::to_bits).hash(state);
         self.min_lod.to_bits().hash(state);
         self.max_lod.to_bits().hash(state);
         self.normalized.hash(state);

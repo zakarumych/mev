@@ -5,6 +5,7 @@ use objc2_core_foundation::{CGFloat, CGRect, CGSize};
 use objc2_foundation::NSObject;
 use objc2_metal::MTLDrawable;
 use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use mev_proc::hidden_trait;
 
 use crate::{
     ColorSpace, Extent2, PixelFormat, PresentMode,
@@ -94,7 +95,7 @@ unsafe fn view_size(view: *const NSObject) -> CGSize {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Surface for Surface {
     fn available_formats(&self) -> &[(PixelFormat, ColorSpace)] {
         match &self.backing {
@@ -220,7 +221,7 @@ impl Frame {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Frame for Frame {
     #[inline]
     fn image(&self) -> &Image2D {

@@ -1,6 +1,7 @@
 use std::{fmt, sync::Arc};
 
 use hashbrown::HashMap;
+use mev_proc::hidden_trait;
 use objc2::{
     class, msg_send,
     rc::Retained,
@@ -79,7 +80,7 @@ impl Device {
 
 impl crate::traits::Resource for Device {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
@@ -577,6 +578,10 @@ fn compile_shader(
         bounds_check_policies: Default::default(),
         zero_initialize_workgroup_memory: false,
         force_loop_bounding: true,
+        emit_int_div_checks: false,
+        task_dispatch_limits: None,
+        mesh_shader_primitive_indices_clamp: false,
+        ray_query_initialization_tracking: false,
     };
 
     let mut entry_point_data = HashMap::new();
@@ -698,6 +703,7 @@ fn compile_shader(
             allow_and_force_point_size: false,
             vertex_pulling_transform: true,
             vertex_buffer_mappings: vec![],
+            binding_array_length_map: Default::default(),
         },
     )
     .map_err(ShaderLibraryError::GenMsl)?;

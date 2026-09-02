@@ -191,10 +191,11 @@ pub struct VertexAttributeDesc {
 }
 
 /// Step mode for vertex buffer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VertexStepMode {
     /// Advance every vertex.
     /// Repeat for each instance.
+    #[default]
     Vertex,
 
     /// Advance every `rate` instances.
@@ -202,12 +203,6 @@ pub enum VertexStepMode {
 
     /// No advancement.
     Constant,
-}
-
-impl Default for VertexStepMode {
-    fn default() -> Self {
-        VertexStepMode::Vertex
-    }
 }
 
 /// Describes vertex buffer layout.
@@ -540,6 +535,7 @@ impl<'a> RenderPipelineDesc<'a> {
 }
 
 /// Describes rasterization options.
+#[derive(Default)]
 pub struct RasterDesc<'a> {
     /// Fragment shader.
     pub fragment_shader: Option<Shader<'a>>,
@@ -555,18 +551,6 @@ pub struct RasterDesc<'a> {
 
     /// Face culling mode.
     pub culling: Culling,
-}
-
-impl Default for RasterDesc<'_> {
-    fn default() -> Self {
-        RasterDesc {
-            fragment_shader: None,
-            color_targets: Vec::new(),
-            depth_stencil: None,
-            front_face: FrontFace::default(),
-            culling: Culling::default(),
-        }
-    }
 }
 
 impl<'a> RasterDesc<'a> {

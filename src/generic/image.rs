@@ -408,15 +408,16 @@ pub trait ImageDims {
     /// The layer count this describes.
     fn layers(&self) -> u32;
 
-    /// Called before any GPU allocation happens. Default no-op; overridden
-    /// to panic on an invalid combination (e.g. array dims with `layers <=
-    /// 1`) so the check fires before wasting a real allocation, not after.
+    /// Called before any GPU allocation happens.
+    ///
+    /// Default no-op; overridden to panic on an invalid combination (e.g. array dims with `layers <= 1`)
+    /// so the check fires before wasting a real allocation, not after.
     fn validate(&self) {}
 
-    /// Wraps a freshly-created erased [`Image`] into `Self::Image`. Callers
-    /// guarantee the image actually matches this dims value (same
-    /// extent/layers used to create it), so implementations may construct
-    /// unchecked.
+    /// Wraps a freshly-created erased [`Image`] into `Self::Image`.
+    ///
+    /// Callers guarantee the image actually matches this dims value (same extent/layers used to create it),
+    /// so implementations may construct unchecked.
     fn wrap(image: Image) -> Self::Image;
 }
 
@@ -829,6 +830,10 @@ impl<const D: usize> ImageSlice<'_, D> {
         &self.image
     }
 
+    pub fn format(&self) -> PixelFormat {
+        self.image.format()
+    }
+
     pub fn level(&self) -> u32 {
         self.level
     }
@@ -908,11 +913,12 @@ impl Image {
         }
     }
 
-    /// Like `view`, but returns a typed, single-layer `ImageN<D>` instead of
-    /// an erased `Image`. `desc` must describe exactly one layer (`ViewDesc`
-    /// defaults to `layers: 1`; use `ViewDesc::layer` to pick which one out
-    /// of a multi-layer image). Panics if `desc.layers != 1` or the
-    /// resulting view isn't `D`-dimensional.
+    /// Like `view`, but returns a typed, single-layer `ImageN<D>` instead of an erased `Image`.
+    ///
+    /// `desc` must describe exactly one layer (`ViewDesc` defaults to `layers: 1`;
+    /// use `ViewDesc::layer` to pick which one out of a multi-layer image).
+    ///
+    /// Panics if `desc.layers != 1` or the resulting view isn't `D`-dimensional.
     pub fn view_layer<const D: usize>(
         &self,
         device: &crate::backend::Device,
@@ -1047,16 +1053,19 @@ impl<const D: usize> ImageArrayN<D> {
         self.0.usage()
     }
 
-    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Image {
-        self.0.view(device, desc)
+    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Self {
+        ImageArrayN::new_unchecked(self.0.view(device, desc))
     }
 
-    /// Like `view`, but returns a typed, single-layer `ImageN<D>` view of
-    /// this array image instead of an erased `Image`. `desc` must describe
-    /// exactly one layer (`ViewDesc` defaults to `layers: 1`; use
-    /// `ViewDesc::layer` to pick which one). `D` is already guaranteed to
-    /// match (same as `self`'s own `D`), so only the layer count is
-    /// checked. Panics if `desc.layers != 1`.
+    /// Like `view`, but returns a typed, single-layer `ImageN<D>` view of this array image instead of an erased `Image`.
+    ///
+    /// `desc` must describe exactly one layer (`ViewDesc` defaults to `layers: 1`;
+    /// use `ViewDesc::layer` to pick which one).
+    ///
+    /// `D` is already guaranteed to match (same as `self`'s own `D`),
+    /// so only the layer count is checked.
+    ///
+    /// Panics if `desc.layers != 1`.
     pub fn view_layer(&self, device: &crate::backend::Device, desc: ViewDesc) -> ImageN<D> {
         assert_eq!(
             desc.layers.end - desc.layers.start,
@@ -1148,8 +1157,10 @@ impl<const D: usize> ImageN<D> {
     }
 
     #[inline(always)]
-    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Image {
-        self.0.view(device, desc)
+    pub fn view(&self, device: &crate::backend::Device, desc: ViewDesc) -> Self {
+        assert_eq!(desc.levels.start, 0);
+        assert_eq!(desc.levels.end, 1);
+        self.0.view_layer(device, desc)
     }
 
     #[inline(always)]

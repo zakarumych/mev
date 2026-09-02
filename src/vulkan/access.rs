@@ -54,9 +54,9 @@ pub(super) fn access_for_stages(stages: PipelineStages) -> ash::vk::AccessFlags 
             | PipelineStages::FRAGMENT_SHADER
             | PipelineStages::COMPUTE_SHADER,
     ) {
-        // UNIFORM_READ is a distinct access from SHADER_READ and covers uniform
-        // buffer reads. Omitting it leaves the constant cache stale on hardware
-        // that keeps uniform reads in a separate cache.
+        // UNIFORM_READ is a distinct access from SHADER_READ and covers uniform buffer reads.
+        //
+        // Omitting it leaves the constant cache stale on hardware that keeps uniform reads in a separate cache.
         access |= ash::vk::AccessFlags::UNIFORM_READ
             | ash::vk::AccessFlags::SHADER_READ
             | ash::vk::AccessFlags::SHADER_WRITE;

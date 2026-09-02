@@ -6,9 +6,9 @@ fn main() {
 
     let windows = std::env::var_os("CARGO_CFG_WINDOWS").is_some();
     let unix = std::env::var_os("CARGO_CFG_UNIX").is_some();
-    let macos = std::env::var_os("CARGO_CFG_TARGET_OS").map_or(false, |os| os == "macos");
-    let ios = std::env::var_os("CARGO_CFG_TARGET_OS").map_or(false, |os| os == "ios");
-    let wasm32 = std::env::var("CARGO_CFG_TARGET_ARCH").map_or(false, |os| os == "wasm32");
+    let macos = std::env::var_os("CARGO_CFG_TARGET_OS").is_some_and(|os| os == "macos");
+    let ios = std::env::var_os("CARGO_CFG_TARGET_OS").is_some_and(|os| os == "ios");
+    let wasm32 = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|os| os == "wasm32");
 
     if wasm32 {
         println!("cargo::rustc-cfg=mev_backend=\"webgpu\"");

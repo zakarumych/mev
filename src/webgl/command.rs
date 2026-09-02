@@ -77,7 +77,7 @@ impl<'a> RenderCommandEncoder<'a> {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     fn with_pipeline(&mut self, pipeline: &RenderPipeline) {}
 }
@@ -86,14 +86,14 @@ pub struct CopyCommandEncoder<'a> {
     commands: &'a mut Vec<Command>,
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {}
 
 pub struct ComputeCommandEncoder<'a> {
     commands: &'a mut Vec<Command>,
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {}
 
 pub struct AccelerationStructureCommandEncoder<'a> {

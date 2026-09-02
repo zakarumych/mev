@@ -36,7 +36,7 @@ impl Deref for Queue {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Queue for Queue {
     fn device(&self) -> &Device {
         &self.device

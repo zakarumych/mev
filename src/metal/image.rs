@@ -3,6 +3,7 @@ use std::{
     num::NonZero,
 };
 
+use mev_proc::hidden_trait;
 use objc2::{
     msg_send,
     rc::{Retained, autoreleasepool},
@@ -17,8 +18,8 @@ use objc2_metal::{
 use crate::{
     ImageUsage,
     generic::{
-        ArgumentKind, Automatic, ComponentMap, Extent1, Extent2, Extent3, ImageArrayN,
-        ImageExtent, ImageN, OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
+        ArgumentKind, Automatic, ComponentMap, Extent1, Extent2, Extent3, ImageArrayN, ImageExtent,
+        ImageN, OutOfMemory, PixelFormat, Sampled, Storage, Swizzle, ViewDesc,
     },
 };
 
@@ -62,7 +63,7 @@ impl Image {
 
 impl crate::traits::Resource for Image {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {
         self.texture.pixelFormat().expect_metal_into()

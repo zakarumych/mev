@@ -48,9 +48,7 @@ pub(crate) trait Instance: Debug + Resource {
     async fn new_device_async(
         &self,
         info: DeviceDesc<'_>,
-    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError> {
-        self.new_device(info)
-    }
+    ) -> Result<(crate::backend::Device, Vec<crate::backend::Queue>), DeviceError>;
 
     fn new_device_with_surface(
         &self,
@@ -64,11 +62,7 @@ pub(crate) trait Instance: Debug + Resource {
             crate::backend::Surface,
         ),
         SurfaceError,
-    > {
-        let (device, queues) = self.new_device(info)?;
-        let surface = device.new_surface(window, display)?;
-        Ok((device, queues, surface))
-    }
+    >;
 
     async fn new_device_with_surface_async(
         &self,
@@ -82,11 +76,7 @@ pub(crate) trait Instance: Debug + Resource {
             crate::backend::Surface,
         ),
         SurfaceError,
-    > {
-        let (device, queues) = self.new_device_async(info).await?;
-        let surface = device.new_surface(window, display)?;
-        Ok((device, queues, surface))
-    }
+    >;
 }
 
 pub(crate) trait Device: Clone + Debug + Eq + Resource {
@@ -124,13 +114,11 @@ pub(crate) trait Device: Clone + Debug + Eq + Resource {
             name: desc.name,
         });
 
-        if size > 0 {
-            if buffer.map(..).is_ok() {
-                if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                    desc.data.write(mapped.as_mut());
-                }
-                buffer.unmap();
+        if size > 0 && buffer.map(..).is_ok() {
+            if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                desc.data.write(mapped.as_mut());
             }
+            buffer.unmap();
         }
 
         buffer
@@ -288,17 +276,19 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
 
     /// Writes data to the buffer.
     ///
-    /// Caller is responsible for synchronization; use `write_buffer_sync` to
-    /// have the barriers emitted.
+    /// Caller is responsible for synchronization;
+    /// use `write_buffer_sync` to have the barriers emitted.
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit);
 
     /// Writes data to the buffer.
     fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]);
 
-    /// Writes data and emits the surrounding barriers. `prev_use` = stages
-    /// that previously used the buffer, `next_use` = stages that will use it
-    /// next. Both are mandatory since the caller must know the buffer's
-    /// usage on both sides of the write.
+    /// Writes data and emits the surrounding barriers.
+    ///
+    /// `prev_use` = stages that previously used the buffer,
+    /// `next_use` = stages that will use it next.
+    ///
+    /// Both are mandatory since the caller must know the buffer's usage on both sides of the write.
     fn write_buffer_sync(
         &mut self,
         slice: impl AsBufferSlice,
@@ -318,22 +308,23 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
         dst: &impl crate::AsBufferSlice,
     );
 
-    /// Copies pixels from `src` (a buffer region, described by `src_shape`)
-    /// into `dst`. `N` (1..=3) is how many axes `src_shape` actually
-    /// specifies: `N == 1` gives just an element stride/format (row and
-    /// plane pitch are both inferred tightly-packed from `src_shape.extent`
-    /// and `dst`'s pixel format), `N == 2` additionally gives a row stride
-    /// (plane pitch is inferred), and `N == 3` gives row and plane strides
-    /// explicitly. Within whatever `src_shape` does specify, any individual
-    /// axis's stride may still be left unset for a tightly-packed default.
+    /// Copies pixels from `src` (a buffer region, described by `src_shape`) into `dst`.
     ///
-    /// `src_shape`'s element (axis 0 / X) stride is NOT actually configurable
-    /// here: native buffer<->image copy commands (Vulkan/Metal/wgpu) always
-    /// read a row's elements tightly packed - if set, it must equal `dst`'s
-    /// pixel format's own tightly-packed element size (asserted; panics
-    /// otherwise, in all build profiles). For a transfer with padded/strided
-    /// elements, use `Cvt` instead - its software-addressed compute kernel
-    /// supports arbitrary per-axis byte strides.
+    /// `N` (1..=3) is how many axes `src_shape` actually specifies:
+    /// `N == 1` gives just an element stride/format (row and plane pitch are both inferred tightly-packed from `src_shape.extent` and `dst`'s pixel format),
+    /// `N == 2` additionally gives a row stride (plane pitch is inferred),
+    /// and `N == 3` gives row and plane strides explicitly.
+    ///
+    /// Within whatever `src_shape` does specify,
+    /// any individual axis's stride may still be left unset for a tightly-packed default.
+    ///
+    /// `src_shape`'s element (axis 0 / X) stride is NOT actually configurable here:
+    /// native buffer<->image copy commands (Vulkan/Metal/wgpu) always read a row's elements tightly packed -
+    /// if set, it must equal `dst`'s pixel format's own tightly-packed element size
+    /// (asserted; panics otherwise, in all build profiles).
+    ///
+    /// For a transfer with padded/strided elements, use `Cvt` instead -
+    /// its software-addressed compute kernel supports arbitrary per-axis byte strides.
     fn copy_buffer_to_image<const N: usize>(
         &mut self,
         src: &impl crate::AsBufferSlice,
@@ -348,13 +339,13 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
         dst: &impl crate::AsImageSlice<N>,
     );
 
-    /// Copies pixels from `src` into `dst` (a buffer region, described by
-    /// `dst_shape`). Same `dst_shape` semantics as `copy_buffer_to_image`,
+    /// Copies pixels from `src` into `dst` (a buffer region, described by `dst_shape`).
+    ///
+    /// Same `dst_shape` semantics as `copy_buffer_to_image`,
     /// including `N` (1..=3) meaning how many axes `dst_shape` specifies
-    /// (row/plane stride may be left unset, or omitted entirely via a
-    /// smaller `N`, for tight packing; element stride, if set, must equal
-    /// `src`'s pixel format's tight element size, asserted in all build
-    /// profiles; use `Cvt` for padded/strided elements).
+    /// (row/plane stride may be left unset, or omitted entirely via a smaller `N`, for tight packing;
+    /// element stride, if set, must equal `src`'s pixel format's tight element size, asserted in all build profiles;
+    /// use `Cvt` for padded/strided elements).
     fn copy_image_to_buffer<const N: usize>(
         &mut self,
         src: &impl crate::AsImageSlice<N>,
@@ -469,7 +460,7 @@ pub(crate) trait Image: Clone + Debug + Eq + Hash + Resource {
     /// from host and use in any way.
     ///
     /// If old content is not needed then no synchronization is required.
-    /// Otherwise memory barrier with is required.
+    /// Otherwise memory barrier is required.
     fn detached(&self) -> bool;
 }
 

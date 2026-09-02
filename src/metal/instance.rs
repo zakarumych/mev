@@ -1,14 +1,16 @@
 use std::fmt;
 
+use mev_proc::hidden_trait;
 use objc2::{Message, rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCopyAllDevices, MTLDevice};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::generic::{
     Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
-    Features, QueueFlags,
+    Features, QueueFlags, SurfaceError,
 };
 
-use super::{Device, Queue};
+use super::{Device, Queue, Surface};
 
 pub struct Instance {
     devices: Vec<Retained<ProtocolObject<dyn MTLDevice>>>,
@@ -76,7 +78,7 @@ impl fmt::Debug for Instance {
 
 impl crate::traits::Resource for Instance {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Instance for Instance {
     #[inline(always)]
     fn capabilities(&self) -> &Capabilities {
@@ -107,5 +109,34 @@ impl crate::traits::Instance for Instance {
             .collect();
 
         Ok((device, queues))
+    }
+
+    async fn new_device_async(
+        &self,
+        info: DeviceDesc<'_>,
+    ) -> Result<(Device, Vec<Queue>), DeviceError> {
+        self.new_device(info)
+    }
+
+    fn new_device_with_surface(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
+    }
+
+    async fn new_device_with_surface_async(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
     }
 }

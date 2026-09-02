@@ -77,7 +77,7 @@ impl fmt::Debug for Library {
 
 impl crate::traits::Resource for Library {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Library for Library {
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a> {
         Shader {

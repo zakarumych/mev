@@ -209,7 +209,7 @@ impl Eq for Buffer {}
 
 impl crate::traits::Resource for Buffer {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Buffer for Buffer {
     #[inline(always)]
     fn size(&self) -> usize {

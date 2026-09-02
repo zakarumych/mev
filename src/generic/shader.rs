@@ -314,14 +314,7 @@ pub(crate) fn parse_shader<'a>(
     let info = naga::valid::Validator::new(flags, caps)
         .validate(&module)
         .map_err(|e| {
-            emit_annotated_error(
-                &e,
-                filename.and_then(|filename| {
-                    std::str::from_utf8(code)
-                        .ok()
-                        .map(|source| (filename, source))
-                }),
-            );
+            emit_annotated_error(&e, filename.zip(std::str::from_utf8(code).ok()));
             ShaderLibraryError::ValidationFailed
         })?;
 

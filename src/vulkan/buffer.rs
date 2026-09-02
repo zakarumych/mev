@@ -10,6 +10,7 @@ use std::{
 
 use ash::vk;
 use gpu_alloc::MemoryBlock;
+use mev_proc::hidden_trait;
 
 use crate::{
     BufferMappedRange, BufferMappedRangeMut, DeviceError,
@@ -162,7 +163,7 @@ impl Buffer {
             }
             Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
                 device.set_oom();
-                return Err(DeviceError::OutOfMemory);
+                Err(DeviceError::OutOfMemory)
             }
             _ => unreachable!(),
         }
@@ -191,7 +192,7 @@ impl Buffer {
             }
             Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
                 device.set_oom();
-                return Err(DeviceError::OutOfMemory);
+                Err(DeviceError::OutOfMemory)
             }
             _ => unreachable!(),
         }
@@ -200,7 +201,7 @@ impl Buffer {
 
 impl crate::traits::Resource for Buffer {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Buffer for Buffer {
     /// Returns the buffer size in bytes.
     #[inline(always)]
@@ -492,7 +493,7 @@ impl crate::traits::Buffer for Buffer {
             }
             Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
                 device.set_oom();
-                return Err(DeviceError::OutOfMemory);
+                Err(DeviceError::OutOfMemory)
             }
             _ => unreachable!(),
         }
@@ -560,7 +561,7 @@ impl crate::traits::Buffer for Buffer {
             }
             Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
                 device.set_oom();
-                return Err(DeviceError::OutOfMemory);
+                Err(DeviceError::OutOfMemory)
             }
             _ => unreachable!(),
         }

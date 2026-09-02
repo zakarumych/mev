@@ -2,36 +2,25 @@ use super::{Buffer, CommandBuffer, ComputePipeline, Image, RenderPipeline, Sampl
 
 /// Stores references to vulkan objects
 /// to keep them alive.
+#[derive(Default)]
 pub struct Refs {
     buffers: Vec<Buffer>,
     images: Vec<Image>,
     samplers: Vec<Sampler>,
     render_pipelines: Vec<RenderPipeline>,
     compute_pipelines: Vec<ComputePipeline>,
-    // cbufs: Vec<CommandBuffer>,
-    // refs: Vec<Refs>,
 }
 
 impl Refs {
     pub fn new() -> Self {
-        Refs {
-            buffers: Vec::new(),
-            images: Vec::new(),
-            samplers: Vec::new(),
-            render_pipelines: Vec::new(),
-            compute_pipelines: Vec::new(),
-            // cbufs: Vec::new(),
-            // refs: Vec::new(),
-        }
+        Refs::default()
     }
 
     pub fn clear(&mut self) {
-        // self.buffers.clear();
+        // FIXME: Clear buffers // self.buffers.clear();
         self.images.clear();
         self.samplers.clear();
         self.render_pipelines.clear();
-        // self.cbufs.clear();
-        // self.refs.clear();
     }
 
     pub fn add_buffer(&mut self, buffer: Buffer) {

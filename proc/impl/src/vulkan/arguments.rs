@@ -74,8 +74,9 @@ pub fn derive(
                         if !tokens.is_empty() {
                             tokens.extend(quote_spanned!(vertex.span() => | ));
                         }
-                        tokens
-                            .extend(quote_spanned!(vertex.span() => #mev::ShaderStages::VERTEX.bits()))
+                        tokens.extend(
+                            quote_spanned!(vertex.span() => #mev::ShaderStages::VERTEX.bits()),
+                        )
                     }
                     Shader::Fragment(fragment) => {
                         if !tokens.is_empty() {
@@ -106,12 +107,10 @@ pub fn derive(
     let update_name = quote::format_ident!("__MevGenerated{}Update", name);
 
     match &data.fields {
-        syn::Fields::Unit => {
-            return Err(syn::Error::new_spanned(
-                &data.fields,
-                "unit structs are not supported by `#[derive(Arguments)]`",
-            ));
-        }
+        syn::Fields::Unit => Err(syn::Error::new_spanned(
+            &data.fields,
+            "unit structs are not supported by `#[derive(Arguments)]`",
+        )),
         syn::Fields::Unnamed(_) => todo!(),
         syn::Fields::Named(fields) => {
             let field_names = fields

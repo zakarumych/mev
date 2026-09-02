@@ -8,15 +8,15 @@ use std::{
 
 use ash::*;
 use hashbrown::HashMap;
+use mev_proc::hidden_trait;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use crate::{
-    DeviceError, DeviceType,
-    generic::{
-        Capabilities, DeviceCapabilities, DeviceDesc, FamilyCapabilities, Features, OutOfMemory,
-    },
+use crate::generic::{
+    Capabilities, DeviceCapabilities, DeviceDesc, DeviceError, DeviceType, FamilyCapabilities,
+    Features, OutOfMemory, SurfaceError,
 };
 
-use super::{Queue, Version, device::Device, from::*, handle_host_oom, unexpected_error};
+use super::{Queue, Surface, Version, device::Device, from::*, handle_host_oom, unexpected_error};
 
 macro_rules! extension_name {
     ($name:literal) => {
@@ -39,10 +39,10 @@ impl Drop for InstanceGuard {
     fn drop(&mut self) {
         unsafe {
             #[cfg(any(debug_assertions, feature = "debug"))]
-            if let Some(debug_utils) = &self.debug_utils {
-                if let Some(messenger) = self.messenger {
-                    debug_utils.destroy_debug_utils_messenger(messenger, None);
-                }
+            if let Some(debug_utils) = &self.debug_utils
+                && let Some(messenger) = self.messenger
+            {
+                debug_utils.destroy_debug_utils_messenger(messenger, None);
             }
 
             self.instance.destroy_instance(None);
@@ -115,7 +115,7 @@ unsafe fn find_layer<'a>(
     })
 }
 
-unsafe fn has_extension<'a>(extensions: &'a [vk::ExtensionProperties], name: &str) -> bool {
+unsafe fn has_extension(extensions: &[vk::ExtensionProperties], name: &str) -> bool {
     extensions.iter().any(|extension| unsafe {
         CStr::from_ptr(extension.extension_name.as_ptr()).to_bytes() == name.as_bytes()
     })
@@ -289,12 +289,11 @@ impl Instance {
         tracing::debug!("Vulkan API version: {version:?}");
 
         let mut has_physical_device_properties2 = false;
-        if version < Version::V1_1 {
-            if unsafe { has_extension(&extensions, "VK_KHR_get_physical_device_properties2") } {
-                has_physical_device_properties2 = true;
-                enabled_extension_names
-                    .push(extension_name!("VK_KHR_get_physical_device_properties2"));
-            }
+        if version < Version::V1_1
+            && unsafe { has_extension(&extensions, "VK_KHR_get_physical_device_properties2") }
+        {
+            has_physical_device_properties2 = true;
+            enabled_extension_names.push(extension_name!("VK_KHR_get_physical_device_properties2"));
         }
 
         tracing::debug!(
@@ -307,7 +306,7 @@ impl Instance {
         let application_info = vk::ApplicationInfo::default()
             .api_version(api_version)
             .application_version(0)
-            .engine_name(CStr::from_bytes_with_nul(b"nothing-engine\0").unwrap())
+            .engine_name(c"nothing-engine")
             .engine_version(engine_version());
 
         let mut instance_create_info = vk::InstanceCreateInfo::default()
@@ -482,18 +481,18 @@ impl Instance {
 
             let features = features.features;
 
-            if version < Version::V1_1 {
-                if !unsafe { has_extension(&extensions, "VK_KHR_descriptor_update_template") } {
-                    // Skip devices that don't support descriptor update templates.
-                    continue;
-                }
+            if version < Version::V1_1
+                && !unsafe { has_extension(&extensions, "VK_KHR_descriptor_update_template") }
+            {
+                // Skip devices that don't support descriptor update templates.
+                continue;
             }
 
-            if features13.dynamic_rendering == 0 {
-                if !unsafe { has_extension(&extensions, "VK_KHR_dynamic_rendering") } {
-                    // Skip devices that don't support dynamic rendering.
-                    continue;
-                }
+            if features13.dynamic_rendering == 0
+                && !unsafe { has_extension(&extensions, "VK_KHR_dynamic_rendering") }
+            {
+                // Skip devices that don't support dynamic rendering.
+                continue;
             }
 
             // if features13.inline_uniform_block == 0 {
@@ -517,10 +516,8 @@ impl Instance {
 
             let mut mev_features = Features::empty();
 
-            if has_surface {
-                if unsafe { has_extension(&extensions, "VK_KHR_swapchain") } {
-                    mev_features |= Features::SURFACE;
-                }
+            if has_surface && unsafe { has_extension(&extensions, "VK_KHR_swapchain") } {
+                mev_features |= Features::SURFACE;
             }
 
             let mut properties = vk::PhysicalDeviceProperties2::default();
@@ -581,7 +578,7 @@ impl Instance {
                 _ => DeviceType::Unknown,
             };
 
-            let device_power = filtered_device.push(device);
+            filtered_device.push(device);
 
             let name = match properties.properties.device_name_as_c_str() {
                 Ok(name) => name.to_str().unwrap_or("Unknown Device").to_owned(),
@@ -650,7 +647,7 @@ impl Instance {
 
 impl crate::traits::Resource for Instance {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
@@ -683,20 +680,22 @@ impl crate::traits::Instance for Instance {
                 .find(|info| info.queue_family_index == family)
             {
                 Some(info) => {
+                    assert!(info.queue_count < u32::MAX, "Too many queues requested");
                     info.queue_count += 1;
                 }
                 None => {
-                    let mut info = vk::DeviceQueueCreateInfo::default();
-                    info.queue_family_index = family;
-                    info.p_queue_priorities = priorities.as_mut_ptr();
-                    info.queue_count = 1;
+                    let mut info = vk::DeviceQueueCreateInfo {
+                        queue_family_index: family,
+                        p_queue_priorities: priorities.as_mut_ptr(),
+                        queue_count: 1,
+                        ..Default::default()
+                    };
                     queue_create_infos.push(info);
                 }
             }
         }
 
         for info in &queue_create_infos {
-            u32::try_from(info.queue_count).expect("Too many queues requested");
             let family_caps = &device_caps.families[info.queue_family_index as usize];
             let max_queue_count = family_caps.queue_count;
             assert!(
@@ -723,7 +722,7 @@ impl crate::traits::Instance for Instance {
                     .properties
                     .limits
                     .max_memory_allocation_count,
-                max_memory_allocation_size: u64::max_value(), // FIXME: Can query this information if instance is v1.1
+                max_memory_allocation_size: u64::MAX, // FIXME: Can query this information if instance is v1.1
                 non_coherent_atom_size: properties.properties.limits.non_coherent_atom_size,
                 memory_types: memory_properties.memory_types
                     [..memory_properties.memory_type_count as usize]
@@ -907,6 +906,35 @@ impl crate::traits::Instance for Instance {
         }
 
         Ok((device, queues))
+    }
+
+    async fn new_device_async(
+        &self,
+        info: DeviceDesc<'_>,
+    ) -> Result<(Device, Vec<Queue>), DeviceError> {
+        self.new_device(info)
+    }
+
+    fn new_device_with_surface(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
+    }
+
+    async fn new_device_with_surface_async(
+        &self,
+        info: DeviceDesc<'_>,
+        window: &impl HasWindowHandle,
+        display: &impl HasDisplayHandle,
+    ) -> Result<(Device, Vec<Queue>, Surface), SurfaceError> {
+        let (device, queues) = self.new_device(info)?;
+        let surface = device.new_surface(window, display)?;
+        Ok((device, queues, surface))
     }
 }
 

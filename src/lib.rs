@@ -1,12 +1,13 @@
-//! Tiny graphics crate made for nothing but fun.
+//! tiny graphics crate made for nothing but fun.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![allow(unused)]
+#![allow(clippy::needless_range_loop)]
 
-// The `Arguments`/`AutoDeviceRepr`/`DeviceRepr`/`VertexBinding` derive macros
-// (and the `match_backend!` macro) are generated assuming they are used from
-// outside this crate, referring to it by its published name `mev`. Aliasing
-// the crate to itself lets code inside `mev` (e.g. `src/kernels`) use these
-// derives too.
+// the `arguments`/`autodevicerepr`/`devicerepr`/`vertexbinding` derive macros
+// (and the `match_backend!` macro) are generated assuming they are used from outside this crate,
+// referring to it by its published name `mev`.
+//
+// aliasing the crate to itself lets code inside `mev` (e.g. `src/kernels`) use these derives too.
 extern crate self as mev;
 
 /// Macro that passes-through any tokens inside if chosen backend is Metal.

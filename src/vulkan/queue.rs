@@ -1,6 +1,7 @@
 use std::{char::MAX, collections::VecDeque, fmt, num::NonZero, ops::Deref};
 
 use ash::vk;
+use mev_proc::hidden_trait;
 use parking_lot::Mutex;
 
 use crate::generic::{DeviceError, OutOfMemory, PipelineStages, QueueFlags};
@@ -89,7 +90,7 @@ impl Pool {
         }
 
         self.allocated += 1;
-        return Ok(cbuf);
+        Ok(cbuf)
     }
 
     fn deallocate(&mut self, cbuf: vk::CommandBuffer) {
@@ -348,27 +349,25 @@ impl Queue {
     }
 
     fn refresh_pools(pools: &mut VecDeque<Pool>, device: &ash::Device) -> Result<(), OutOfMemory> {
-        if let Some(front) = pools.front_mut() {
-            if front.allocated == 0 {
-                // If front pool has no allocated command buffers, reuse it.
+        if let Some(front) = pools.front_mut()
+            && front.allocated == 0
+        {
+            // If front pool has no allocated command buffers, reuse it.
 
-                // Since pool is in array it *was* used to allocate command buffers
-                // unless allocation of the first command buffer failed.
-                // So don't hesitate to reset it first.
+            // Since pool is in array it *was* used to allocate command buffers
+            // unless allocation of the first command buffer failed.
+            // So don't hesitate to reset it first.
 
-                // Keep resources allocated by the pool.
+            // Keep resources allocated by the pool.
 
-                // If resetting fails with oom, report it to the caller,
-                // allocating new command buffer will probably fail too.
-                unsafe {
-                    device.reset_command_pool(front.pool, vk::CommandPoolResetFlags::empty())
-                }
+            // If resetting fails with oom, report it to the caller,
+            // allocating new command buffer will probably fail too.
+            unsafe { device.reset_command_pool(front.pool, vk::CommandPoolResetFlags::empty()) }
                 .map_err(map_oom)?;
 
-                // Place the pool to the back of the queue where it will be used in `get_pool`.
-                let reset_pool = unsafe { pools.pop_front().unwrap_unchecked() };
-                pools.push_back(reset_pool);
-            }
+            // Place the pool to the back of the queue where it will be used in `get_pool`.
+            let reset_pool = unsafe { pools.pop_front().unwrap_unchecked() };
+            pools.push_back(reset_pool);
         }
         Ok(())
     }
@@ -654,7 +653,7 @@ impl Deref for Queue {
 
 impl crate::traits::Resource for Queue {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Queue for Queue {
     /// Get the device associated with this queue.
     #[inline(always)]
@@ -697,7 +696,7 @@ impl crate::traits::Queue for Queue {
             self.device.clone(),
             handle,
             pool.pool,
-            self.free_refs.pop().unwrap_or_else(Refs::new),
+            self.free_refs.pop().unwrap_or_default(),
         )
     }
 

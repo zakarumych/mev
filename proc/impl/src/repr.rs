@@ -1,7 +1,6 @@
 use proc_easy::private::Spanned;
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
-use syn;
 
 pub fn derive(input: &syn::DeriveInput, mev: &TokenStream) -> syn::Result<TokenStream> {
     let name = &input.ident;

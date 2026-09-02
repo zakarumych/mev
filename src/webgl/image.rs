@@ -96,7 +96,7 @@ impl Eq for Image {}
 
 impl crate::traits::Resource for Image {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {
         self.inner.format

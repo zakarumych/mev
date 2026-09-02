@@ -75,9 +75,9 @@ pub trait BufferInit {
     /// Size in bytes of the buffer required to hold the initialized data.
     fn size(&self) -> usize;
 
-    /// Returns the data as a byte slice, if available without mapping buffer
-    /// memory. Lets backends with a direct upload-on-creation path skip an
-    /// explicit map/copy/unmap round trip.
+    /// Returns the data as a byte slice, if available without mapping buffer memory.
+    ///
+    /// Lets backends with a direct upload-on-creation path skip an explicit map/copy/unmap round trip.
     fn as_bytes(&self) -> Option<&[u8]> {
         None
     }
@@ -87,7 +87,7 @@ pub trait BufferInit {
     fn write(self, mem: &mut [u8]);
 }
 
-impl<'a, T> BufferInit for &'a [T]
+impl<T> BufferInit for &[T]
 where
     T: bytemuck::NoUninit,
 {
@@ -98,7 +98,7 @@ where
 
     #[inline(always)]
     fn as_bytes(&self) -> Option<&[u8]> {
-        Some(bytemuck::cast_slice(*self))
+        Some(bytemuck::cast_slice(self))
     }
 
     #[inline(always)]
@@ -127,7 +127,7 @@ where
     }
 }
 
-impl<'a, T, const N: usize> BufferInit for &'a [T; N]
+impl<T, const N: usize> BufferInit for &[T; N]
 where
     T: bytemuck::NoUninit,
 {
@@ -147,7 +147,7 @@ where
     }
 }
 
-impl<'a, T> BufferInit for &'a std::vec::Vec<T>
+impl<T> BufferInit for &std::vec::Vec<T>
 where
     T: bytemuck::NoUninit,
 {
@@ -341,7 +341,7 @@ impl<'a> AsRef<[u8]> for BufferMappedRangeMut<'a> {
 
 impl<'a> AsMut<[u8]> for BufferMappedRangeMut<'a> {
     fn as_mut(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u8, self.size) }
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.size) }
     }
 }
 

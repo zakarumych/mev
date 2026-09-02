@@ -1,5 +1,7 @@
 use std::{fmt, ops::Deref, rc::Rc};
 
+use mev_proc::hidden_trait;
+
 use crate::generic::{DeviceError, PipelineStages};
 
 use super::{CommandBuffer, CommandEncoder, Device, Frame};
@@ -37,7 +39,7 @@ impl Deref for Queue {
 
 impl crate::traits::Resource for Queue {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Queue for Queue {
     fn device(&self) -> &Device {
         &self.device

@@ -17,6 +17,7 @@ mod repr;
 mod vertex;
 mod vulkan;
 // mod webgl;
+mod hidden_trait;
 mod webgpu;
 
 pub fn arguments_derive(input: TokenStream, mev: &TokenStream) -> TokenStream {
@@ -69,6 +70,28 @@ pub fn derive_vertex(input: TokenStream, mev: &TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
 
     match vertex::derive(&input, mev) {
+        Ok(tokens) => tokens,
+        Err(err) => err.to_compile_error(),
+    }
+}
+
+/// Implements the `#[hidden_trait]` attribute macro.
+///
+/// Applied on top of `impl Trait for Type { .. }` it splits the impl in two:
+/// an inherent `impl Type { .. }` with all items made `pub`, and a companion
+/// `impl Trait for Type { .. }` whose items simply reexport the inherent ones.
+///
+/// This lets callers use trait methods on `Type` without having the trait
+/// itself in scope.
+pub fn hidden_trait(attr: TokenStream, input: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new_spanned(attr, "`#[hidden_trait]` does not take any arguments")
+            .to_compile_error();
+    }
+
+    let item_impl = parse_macro_input!(input as syn::ItemImpl);
+
+    match hidden_trait::expand(item_impl) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     }

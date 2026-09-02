@@ -13,6 +13,7 @@ use std::{
 use ash::vk::{self, Handle};
 use gpu_alloc::{AllocationFlags, MemoryBlock};
 use hashbrown::HashMap;
+use mev_proc::hidden_trait;
 use parking_lot::Mutex;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use slab::Slab;
@@ -210,18 +211,6 @@ impl PartialEq for DescriptorUpdateTemplateEntries {
                 && a.descriptor_type == b.descriptor_type
                 && a.offset == b.offset
                 && a.stride == b.stride
-        })
-    }
-
-    #[inline]
-    fn ne(&self, other: &Self) -> bool {
-        self.entries.iter().zip(other.entries.iter()).any(|(a, b)| {
-            a.dst_binding != b.dst_binding
-                && a.dst_array_element != b.dst_array_element
-                && a.descriptor_count != b.descriptor_count
-                && a.descriptor_type != b.descriptor_type
-                && a.offset != b.offset
-                && a.stride != b.stride
         })
     }
 }
@@ -648,6 +637,7 @@ impl fmt::Debug for Device {
 }
 
 impl Device {
+    #[allow(clippy::too_many_arguments)]
     #[rustfmt::skip]
     pub(super) fn new(
         guard: Arc<InstanceGuard>,
@@ -802,17 +792,17 @@ impl Device {
     #[inline]
     #[cfg(any(debug_assertions, feature = "debug"))]
     fn set_object_name<T: Handle>(&self, handle: T, name: &str) {
-        if !name.is_empty() {
-            if let Some(debug_utils) = &self.inner.debug_utils {
-                let name_cstr = ffi::CString::new(name).unwrap();
-                let _ = unsafe {
-                    debug_utils.set_debug_utils_object_name(
-                        &vk::DebugUtilsObjectNameInfoEXT::default()
-                            .object_handle(handle)
-                            .object_name(&name_cstr),
-                    )
-                };
-            }
+        if !name.is_empty()
+            && let Some(debug_utils) = &self.inner.debug_utils
+        {
+            let name_cstr = ffi::CString::new(name).unwrap();
+            let _ = unsafe {
+                debug_utils.set_debug_utils_object_name(
+                    &vk::DebugUtilsObjectNameInfoEXT::default()
+                        .object_handle(handle)
+                        .object_name(&name_cstr),
+                )
+            };
         }
     }
 
@@ -1134,7 +1124,7 @@ impl Device {
 
 impl crate::traits::Resource for Device {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         let me = &*self.inner;
@@ -1224,7 +1214,7 @@ impl crate::traits::Device for Device {
                     .module(desc.shader.library.module())
                     .name({
                         shader_name = ffi::CString::new(&*desc.shader.entry).unwrap();
-                        &*shader_name
+                        &shader_name
                     }),
             )
             .layout(layout.handle());
@@ -1328,7 +1318,7 @@ impl crate::traits::Device for Device {
                 .module(desc.vertex_shader.library.module())
                 .name({
                     vertex_shader_name = ffi::CString::new(&*desc.vertex_shader.entry).unwrap();
-                    &*vertex_shader_name
+                    &vertex_shader_name
                 }),
         ];
 
@@ -1350,7 +1340,7 @@ impl crate::traits::Device for Device {
                         .name({
                             fragment_shader_name =
                                 ffi::CString::new(&*fragment_shader.entry).unwrap();
-                            &*fragment_shader_name
+                            &fragment_shader_name
                         }),
                 );
 
@@ -1381,13 +1371,11 @@ impl crate::traits::Device for Device {
             }
 
             for color in &raster.color_targets {
-                // `colorWriteMask` gates which components are written to the
-                // attachment independently of `blendEnable` - it is not
-                // implied to be "all channels" just because blending is
-                // disabled. Default to writing every channel (matching
-                // `BlendDesc::default()`'s own `mask: WriteMask::all()`);
-                // `Some(blend)` below overrides it with the caller's chosen
-                // mask.
+                // `colorWriteMask` gates which components are written to the attachment independently of `blendEnable` -
+                // it is not implied to be "all channels" just because blending is disabled.
+                //
+                // Default to writing every channel (matching `BlendDesc::default()`'s own `mask: WriteMask::all()`);
+                // `Some(blend)` below overrides it with the caller's chosen mask.
                 let mut blend_state = vk::PipelineColorBlendAttachmentState::default()
                     .color_write_mask(color.mask.into_ash());
                 if let Some(blend) = color.blend {
@@ -1602,13 +1590,11 @@ impl crate::traits::Device for Device {
             name: desc.name,
         });
 
-        if size > 0 {
-            if buffer.map(..).is_ok() {
-                if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                    desc.data.write(mapped.as_mut());
-                }
-                buffer.unmap();
+        if size > 0 && buffer.map(..).is_ok() {
+            if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                desc.data.write(mapped.as_mut());
             }
+            buffer.unmap();
         }
 
         buffer
@@ -2082,19 +2068,16 @@ pub(crate) fn compile_shader(
         force_loop_bounding: true,
         ray_query_initialization_tracking: true,
         use_storage_input_output_16: true,
-        debug_info: match source_code {
-            None => None,
-            Some(source_code) => Some(naga::back::spv::DebugInfo {
-                source_code,
-                file_name: filename.unwrap_or("<nofile>").as_ref(),
-                language: match lang {
-                    ShaderLanguage::Wgsl => naga::back::spv::SourceLanguage::WGSL,
-                    ShaderLanguage::Glsl { .. } => naga::back::spv::SourceLanguage::GLSL,
-                    ShaderLanguage::Msl { .. } => naga::back::spv::SourceLanguage::Unknown,
-                    ShaderLanguage::SpirV => naga::back::spv::SourceLanguage::Unknown,
-                },
-            }),
-        },
+        debug_info: source_code.map(|s| naga::back::spv::DebugInfo {
+            source_code: s,
+            file_name: filename.unwrap_or("<nofile>"),
+            language: match lang {
+                ShaderLanguage::Wgsl => naga::back::spv::SourceLanguage::WGSL,
+                ShaderLanguage::Glsl { .. } => naga::back::spv::SourceLanguage::GLSL,
+                ShaderLanguage::Msl => naga::back::spv::SourceLanguage::Unknown,
+                ShaderLanguage::SpirV => naga::back::spv::SourceLanguage::Unknown,
+            },
+        }),
         task_dispatch_limits: None,
         mesh_shader_primitive_indices_clamp: false,
         emit_int_div_checks: false,

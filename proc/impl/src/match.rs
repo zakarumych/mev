@@ -147,8 +147,8 @@ pub fn match_backend(tokens: TokenStream, mev: &TokenStream) -> TokenStream {
                 }
             }
 
-            result.into()
+            result
         }
-        Err(err) => err.to_compile_error().into(),
+        Err(err) => err.to_compile_error(),
     }
 }

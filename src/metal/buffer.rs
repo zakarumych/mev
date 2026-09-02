@@ -8,6 +8,7 @@ use std::{
 use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSUInteger};
 use objc2_metal::{MTLBuffer, MTLComputeCommandEncoder, MTLRenderCommandEncoder};
+use mev_proc::hidden_trait;
 
 use crate::{
     BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferSlice, BufferUsage, DeviceError,
@@ -70,7 +71,7 @@ unsafe impl Sync for Buffer {}
 
 impl crate::traits::Resource for Buffer {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Buffer for Buffer {
     #[inline(always)]
     fn size(&self) -> usize {

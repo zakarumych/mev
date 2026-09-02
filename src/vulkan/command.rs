@@ -2,6 +2,7 @@ use std::range::Range;
 
 use ash::vk::Handle;
 use ash::vk::{self, Rect2D};
+use mev_proc::hidden_trait;
 use smallvec::SmallVec;
 
 use crate::{
@@ -20,19 +21,16 @@ use super::{
     layout::PipelineLayout, refs::Refs, unexpected_error,
 };
 
-/// Pads `shape`'s extent/resolved stride out to the 3 axes (element/row/
-/// plane) every native buffer<->image copy command needs, regardless of
-/// how many axes `shape` itself specifies (`N` is `1..=3` at these call
-/// sites). Any axis at or beyond `N` defaults to a tightly-packed value
-/// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives
-/// any unset axis).
+/// Pads `shape`'s extent/resolved stride out to the 3 axes (element/row/plane) every native buffer<->image copy command needs,
+/// regardless of how many axes `shape` itself specifies (`N` is `1..=3` at these call sites).
+///
+/// Any axis at or beyond `N` defaults to a tightly-packed value
+/// (extent `1`, stride derived the same way `TexelShape::byte_stride` derives any unset axis).
 fn pad_shape_to_3<const N: usize>(shape: &TexelShape<N>) -> (Extent3<u32>, [usize; 3]) {
     let resolved = shape.byte_stride();
 
     let mut extent = [1u32; 3];
-    for i in 0..N {
-        extent[i] = shape.extent.0[i];
-    }
+    extent[..N].copy_from_slice(&shape.extent.0);
 
     let mut out = [0usize; 3];
     for i in 0..3 {
@@ -91,7 +89,7 @@ impl CommandEncoder {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[inline(always)]
     fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
@@ -119,7 +117,7 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::CommandEncoder for CommandEncoder {
     #[inline]
     fn present(&mut self, frame: Frame, prev_use: PipelineStages) {
@@ -437,11 +435,11 @@ impl ComputeCommandEncoder<'_> {
 
     #[inline(always)]
     pub(super) fn refs_mut(&mut self) -> &mut Refs {
-        &mut self.refs
+        &mut *self.refs
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline]
     fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
@@ -469,7 +467,7 @@ impl crate::traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline]
     fn with_pipeline(&mut self, pipeline: &ComputePipeline) {
@@ -558,7 +556,7 @@ impl RenderCommandEncoder<'_> {
 
     #[inline(always)]
     pub(super) fn refs_mut(&mut self) -> &mut Refs {
-        &mut self.refs
+        &mut *self.refs
     }
 }
 
@@ -571,7 +569,7 @@ impl Drop for RenderCommandEncoder<'_> {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
     #[inline]
     fn with_pipeline(&mut self, pipeline: &RenderPipeline) {
@@ -750,7 +748,7 @@ pub struct CopyCommandEncoder<'a> {
     refs: &'a mut Refs,
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
     fn barrier(&mut self, prev_stages: PipelineStages, next_stages: PipelineStages) {
@@ -778,7 +776,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     }
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     #[inline]
     fn copy_buffer_to_buffer(
@@ -1121,7 +1119,7 @@ pub struct AccelerationStructureCommandEncoder<'a> {
     refs: &'a mut Refs,
 }
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::AccelerationStructureCommandEncoder
     for AccelerationStructureCommandEncoder<'_>
 {

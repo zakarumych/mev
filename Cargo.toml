@@ -20,7 +20,6 @@ bitflags.workspace = true
 bytemuck.workspace = true
 codespan-reporting.workspace = true
 hashbrown.workspace = true
-hidden-trait.workspace = true
 parking_lot.workspace = true
 raw-window-handle.workspace = true
 slab.workspace = true
@@ -98,7 +97,6 @@ bytemuck = { version = "1.24", features = ["derive", "min_const_generics"] }
 codespan-reporting = "0.13.1"
 gpu-alloc = { version = "0.6.2" }
 hashbrown = { version = "0.16.1" }
-hidden-trait = "0.1"
 libloading = "0.9.0"
 objc2 = { version = "0.6.4" }
 objc2-core-foundation = { version = "0.3.2" }

@@ -65,15 +65,12 @@ pub fn derive(
             let mut tokens = quote::quote!(0);
             for stage in attrs.shaders.flags.iter() {
                 match stage {
-                    Shader::Vertex(v) => tokens.extend(
-                        quote_spanned!(v.span() => | #mev::ShaderStages::VERTEX.bits()),
-                    ),
-                    Shader::Fragment(f) => tokens.extend(
-                        quote_spanned!(f.span() => | #mev::ShaderStages::FRAGMENT.bits()),
-                    ),
-                    Shader::Compute(c) => tokens.extend(
-                        quote_spanned!(c.span() => | #mev::ShaderStages::COMPUTE.bits()),
-                    ),
+                    Shader::Vertex(v) => tokens
+                        .extend(quote_spanned!(v.span() => | #mev::ShaderStages::VERTEX.bits())),
+                    Shader::Fragment(f) => tokens
+                        .extend(quote_spanned!(f.span() => | #mev::ShaderStages::FRAGMENT.bits())),
+                    Shader::Compute(c) => tokens
+                        .extend(quote_spanned!(c.span() => | #mev::ShaderStages::COMPUTE.bits())),
                 }
             }
             quote::quote!(#mev::ShaderStages::from_bits_truncate(#tokens))
@@ -81,12 +78,10 @@ pub fn derive(
         .collect::<Vec<_>>();
 
     match &data.fields {
-        syn::Fields::Unit => {
-            return Err(syn::Error::new_spanned(
-                &data.fields,
-                "unit structs are not supported by `#[derive(Arguments)]`",
-            ));
-        }
+        syn::Fields::Unit => Err(syn::Error::new_spanned(
+            &data.fields,
+            "unit structs are not supported by `#[derive(Arguments)]`",
+        )),
         syn::Fields::Unnamed(_) => todo!(),
         syn::Fields::Named(fields) => {
             let field_names = fields

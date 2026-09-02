@@ -1,5 +1,6 @@
 use std::{fmt, ops::Deref};
 
+use mev_proc::hidden_trait;
 use objc2::{Message, rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{MTLCommandBuffer, MTLCommandQueue};
 
@@ -110,7 +111,7 @@ impl Deref for Queue {
 
 impl crate::traits::Resource for Queue {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Queue for Queue {
     fn device(&self) -> &Device {
         &self.device

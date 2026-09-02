@@ -1,5 +1,7 @@
 use std::{fmt, hash, num::NonZero, rc::Rc};
 
+use mev_proc::hidden_trait;
+
 use crate::{
     ArgumentKind, Automatic, Sampled, Storage,
     backend::from::{TryIntoWgpu, TryWgpuInto},
@@ -77,15 +79,15 @@ impl hash::Hash for Image {
 
 impl crate::traits::Resource for Image {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Image for Image {
     fn format(&self) -> PixelFormat {
         self.view.texture().format().expect_wgpu_into()
     }
 
     fn extent(&self) -> ImageExtent {
-        let base: ImageExtent = (self.view.texture().dimension(), self.view.texture().size())
-            .wgpu_into();
+        let base: ImageExtent =
+            (self.view.texture().dimension(), self.view.texture().size()).wgpu_into();
         base.at_level(self.base_level)
     }
 

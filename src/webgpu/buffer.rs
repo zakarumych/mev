@@ -1,5 +1,7 @@
 use std::{fmt, hash, num::NonZero, rc::Rc};
 
+use mev_proc::hidden_trait;
+
 use crate::{
     ArgumentKind, ArgumentsSealed, Automatic, Storage, Uniform,
     backend::{arguments::ArgumentsField, from::WgpuInto},
@@ -53,7 +55,7 @@ impl hash::Hash for Buffer {
 
 impl crate::traits::Resource for Buffer {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Buffer for Buffer {
     fn size(&self) -> usize {
         self.inner.size() as usize

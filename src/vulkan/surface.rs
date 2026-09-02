@@ -2,6 +2,7 @@ use std::{collections::VecDeque, ops::Deref};
 
 use ash::vk::{self, Handle};
 use bitflags::Flags;
+use mev_proc::hidden_trait;
 use smallvec::SmallVec;
 
 use crate::{
@@ -54,6 +55,7 @@ struct FakeSwapchain {
     frame_idx: u64,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum MaybeFakeSwapchain {
     Real(Swapchain),
     Fake(FakeSwapchain),
@@ -461,16 +463,14 @@ impl Surface {
         let use_usage = pick_usage(&self.caps, self.preferred_usage, use_mev_format);
         let use_mev_usage = ImageUsage::from_ash(use_usage);
 
-        if !self.status.intersects(SurfaceStatus::NEEDS_RECONFIGURE) {
-            if let Some(MaybeFakeSwapchain::Real(swapchain)) = &self.current {
-                if swapchain.extent == use_extent
-                    && swapchain.format == use_format
-                    && swapchain.mode == use_mode
-                    && swapchain.usage == use_usage
-                {
-                    return Ok(());
-                }
-            }
+        if !self.status.intersects(SurfaceStatus::NEEDS_RECONFIGURE)
+            && let Some(MaybeFakeSwapchain::Real(swapchain)) = &self.current
+            && swapchain.extent == use_extent
+            && swapchain.format == use_format
+            && swapchain.mode == use_mode
+            && swapchain.usage == use_usage
+        {
+            return Ok(());
         }
 
         if use_extent.width == 0 || use_extent.height == 0 {
@@ -757,7 +757,7 @@ impl Surface {
 
 impl crate::traits::Resource for Surface {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Surface for Surface {
     fn available_formats(&self) -> &[(PixelFormat, ColorSpace)] {
         &self.mev_formats
@@ -949,7 +949,7 @@ impl Frame {
 
 impl crate::traits::Resource for Frame {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Frame for Frame {
     #[inline(always)]
     fn image(&self) -> &Image2D {

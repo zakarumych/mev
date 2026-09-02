@@ -9,6 +9,7 @@ use std::{
 use ash::vk::{self, Handle};
 use gpu_alloc::MemoryBlock;
 use hashbrown::{HashMap, hash_map::Entry};
+use mev_proc::hidden_trait;
 use parking_lot::Mutex;
 
 use crate::generic::{
@@ -105,6 +106,7 @@ impl DeviceOwned for Image {
 }
 
 impl Image {
+    #[allow(clippy::too_many_arguments)]
     fn build(
         owner: WeakDevice,
         handle: vk::Image,
@@ -150,6 +152,7 @@ impl Image {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         owner: WeakDevice,
         handle: vk::Image,
@@ -272,7 +275,7 @@ impl Image {
 
 impl crate::traits::Resource for Image {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Image for Image {
     #[inline]
     fn format(&self) -> PixelFormat {

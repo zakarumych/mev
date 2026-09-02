@@ -21,7 +21,7 @@ impl Device {
 
 impl crate::traits::Resource for Device {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Device for Device {
     fn new_buffer(&self, desc: crate::BufferDesc) -> crate::backend::Buffer {
         self.gl.create_buffer();

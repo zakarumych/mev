@@ -4,6 +4,7 @@
 //! surface/window, exercises the masked-atomic buffer-write pattern in
 //! isolation, then each `Cvt` op family, asserting results on the CPU
 //! after reading buffers back.
+#![allow(clippy::needless_range_loop)]
 
 use mev::kernels::{Axis, AxisMap, AxisSwizzle, Cvt, CvtOptions};
 use mev::{
@@ -1094,7 +1095,7 @@ fn test_rank4_all_aligned_z_fold(device: &mev::Device, queue: &mut mev::Queue, c
     let values: [u32; 16] = std::array::from_fn(|i| 1000 + i as u32);
     let src_data: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
     let src = make_readback_buffer(device, &src_data, "rank4_src");
-    let dst = make_readback_buffer(device, &vec![0u8; 64], "rank4_dst");
+    let dst = make_readback_buffer(device, &[0u8; 64], "rank4_dst");
 
     let extent = mev::Extent([2, 2, 2, 2]);
 
@@ -1205,7 +1206,8 @@ fn test_image_to_buffer_oob_clamp_wraps(device: &mev::Device, queue: &mut mev::Q
         let mut copy = encoder.copy();
         copy.copy_buffer_to_image(
             &staging,
-            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2)).with_row_stride(2 * 4),
+            TexelShape::new(PixelFormat::Rgba8Unorm, mev::Extent2::new(2, 2))
+                .with_row_stride(2 * 4),
             &src_image,
         );
         copy.barrier(PipelineStages::TRANSFER, PipelineStages::COMPUTE_SHADER);

@@ -24,3 +24,8 @@ pub fn derive_vertex(input: TokenStream) -> TokenStream {
 pub fn match_backend(input: TokenStream) -> TokenStream {
     mev_proc_impl::match_backend(input.into(), &quote::quote!(mev)).into()
 }
+
+#[proc_macro_attribute]
+pub fn hidden_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
+    mev_proc_impl::hidden_trait(attr.into(), item.into()).into()
+}

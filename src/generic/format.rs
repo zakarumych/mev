@@ -644,15 +644,15 @@ impl PixelFormat {
 
     #[inline]
     pub fn is_srgb(&self) -> bool {
-        match *self {
+        matches!(
+            self,
             PixelFormat::R8Srgb
-            | PixelFormat::Rg8Srgb
-            | PixelFormat::Rgb8Srgb
-            | PixelFormat::Rgba8Srgb
-            | PixelFormat::Bgr8Srgb
-            | PixelFormat::Bgra8Srgb => true,
-            _ => false,
-        }
+                | PixelFormat::Rg8Srgb
+                | PixelFormat::Rgb8Srgb
+                | PixelFormat::Rgba8Srgb
+                | PixelFormat::Bgr8Srgb
+                | PixelFormat::Bgra8Srgb
+        )
     }
 
     #[inline]

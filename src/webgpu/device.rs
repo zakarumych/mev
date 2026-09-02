@@ -1,5 +1,6 @@
 use std::{cell::RefCell, fmt, num::NonZero, rc::Rc};
 
+use mev_proc::hidden_trait;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
@@ -131,7 +132,7 @@ impl Eq for Device {}
 
 impl crate::traits::Resource for Device {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Device for Device {
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
@@ -169,7 +170,7 @@ impl crate::traits::Device for Device {
                 .collect::<SmallVec<[Option<&wgpu::BindGroupLayout>; 4]>>();
 
             let push_constant_size = u32::try_from(desc.constants)
-                .map_err(|_| PipelineError::Failure(format!("Invalid push constant size")))?;
+                .map_err(|_| PipelineError::Failure("Invalid push constant size".to_owned()))?;
 
             let layout =
                 self.inner
@@ -207,7 +208,7 @@ impl crate::traits::Device for Device {
                 .collect::<SmallVec<[Option<&wgpu::BindGroupLayout>; 4]>>();
 
             let push_constant_size = u32::try_from(desc.constants)
-                .map_err(|_| PipelineError::Failure(format!("Invalid push constant size")))?;
+                .map_err(|_| PipelineError::Failure("Invalid push constant size".to_owned()))?;
 
             let layout =
                 self.inner
@@ -360,13 +361,11 @@ impl crate::traits::Device for Device {
                     name: desc.name,
                 });
 
-                if size > 0 {
-                    if buffer.map(..).is_ok() {
-                        if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                            desc.data.write(mapped.as_mut());
-                        }
-                        buffer.unmap();
+                if size > 0 && buffer.map(..).is_ok() {
+                    if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+                        desc.data.write(mapped.as_mut());
                     }
+                    buffer.unmap();
                 }
 
                 buffer

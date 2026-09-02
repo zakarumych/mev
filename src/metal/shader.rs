@@ -4,6 +4,7 @@ use hashbrown::HashMap;
 use objc2::{rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::NSString;
 use objc2_metal::{MTLFunction, MTLLibrary};
+use mev_proc::hidden_trait;
 
 use crate::generic::{Shader, ShaderLibraryError};
 
@@ -131,7 +132,7 @@ impl Library {
 
 impl crate::traits::Resource for Library {}
 
-#[hidden_trait::expose]
+#[hidden_trait]
 impl crate::traits::Library for Library {
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a> {
         Shader {

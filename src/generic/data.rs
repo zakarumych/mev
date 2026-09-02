@@ -83,9 +83,9 @@ fn array_as_repr_slow<T: DeviceRepr, const N: usize>(array: &[T; N]) -> [T::Arra
     // Construct `ArrayRepr` from elements.
     let mut repr: MaybeUninit<[T::ArrayRepr; N]> = MaybeUninit::uninit();
     let ptr = repr.as_mut_ptr().cast::<T::ArrayRepr>();
-    for idx in 0..N {
+    for (idx, e) in array.iter().enumerate() {
         unsafe {
-            ptr.add(idx).write(array[idx].as_array_repr());
+            ptr.add(idx).write(e.as_array_repr());
         }
     }
     unsafe { repr.assume_init() }
