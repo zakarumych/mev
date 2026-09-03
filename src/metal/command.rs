@@ -695,6 +695,23 @@ impl traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
             );
         }
     }
+
+    #[inline(always)]
+    fn dispatch_indirect(&mut self, args: impl AsBufferSlice) {
+        let slice = args.as_buffer_slice();
+        let group_size = self.workgroup_size.unwrap_or([1, 1, 1]);
+        unsafe {
+            self.encoder.dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(
+                slice.buffer().metal(),
+                slice.offset() as NSUInteger,
+                MTLSize {
+                    width: group_size[0] as usize,
+                    height: group_size[1] as usize,
+                    depth: group_size[2] as usize,
+                },
+            );
+        }
+    }
 }
 
 pub struct RenderCommandEncoder<'a> {
@@ -982,6 +999,34 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
                         );
                 }
             }
+        }
+    }
+
+    #[inline]
+    fn draw_indirect(&mut self, args: impl AsBufferSlice) {
+        let slice = args.as_buffer_slice();
+        unsafe {
+            self.encoder.drawPrimitives_indirectBuffer_indirectBufferOffset(
+                self.primitive,
+                slice.buffer().metal(),
+                slice.offset() as NSUInteger,
+            );
+        }
+    }
+
+    #[inline]
+    fn draw_indexed_indirect(&mut self, args: impl AsBufferSlice) {
+        let slice = args.as_buffer_slice();
+        let index_buffer = self.index_buffer.as_deref().unwrap();
+        unsafe {
+            self.encoder.drawIndexedPrimitives_indexType_indexBuffer_indexBufferOffset_indirectBuffer_indirectBufferOffset(
+                self.primitive,
+                MTLIndexType::UInt32,
+                index_buffer,
+                self.index_buffer_offset,
+                slice.buffer().metal(),
+                slice.offset() as NSUInteger,
+            );
         }
     }
 }

@@ -7,6 +7,7 @@ mod data;
 mod feature;
 mod format;
 mod image;
+mod indirect;
 mod instance;
 mod queue;
 mod render;
@@ -47,6 +48,7 @@ pub use self::{
         ImageN, ImageRegion, ImageSlice, ImageSlice1D, ImageSlice2D, ImageSlice3D, ImageUsage,
         Swizzle, ViewDesc,
     },
+    indirect::{DispatchIndirectCommand, DrawIndexedIndirectCommand, DrawIndirectCommand},
     instance::{
         Capabilities, DeviceCapabilities, DeviceDesc, DeviceSurfaceCapabilities, DeviceType,
         FamilyCapabilities, SurfaceCapabilities,

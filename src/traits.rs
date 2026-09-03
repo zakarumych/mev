@@ -272,6 +272,10 @@ pub(crate) trait ComputeCommandEncoder: SyncCommandEncoder {
 
     /// Dispatches compute work.
     fn dispatch(&mut self, groups: Extent3);
+
+    /// Dispatches compute work using arguments read from `args` (a `DispatchIndirectCommand`
+    /// laid out at `args`'s offset: `{ x: u32, y: u32, z: u32 }`, 12 bytes, tightly packed).
+    fn dispatch_indirect(&mut self, args: impl AsBufferSlice);
 }
 
 pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
@@ -391,6 +395,16 @@ pub(crate) trait RenderCommandEncoder {
         indices: impl Into<Range<u32>>,
         instances: impl Into<Range<u32>>,
     );
+
+    /// Draws primitives using arguments read from `args` (a `DrawIndirectCommand`:
+    /// `{ vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32 }`,
+    /// 16 bytes, tightly packed).
+    fn draw_indirect(&mut self, args: impl AsBufferSlice);
+
+    /// Draws indexed primitives using arguments read from `args` (a `DrawIndexedIndirectCommand`:
+    /// `{ index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32 }`,
+    /// 20 bytes, tightly packed).
+    fn draw_indexed_indirect(&mut self, args: impl AsBufferSlice);
 }
 
 pub(crate) trait AccelerationStructureCommandEncoder {

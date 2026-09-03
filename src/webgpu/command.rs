@@ -581,6 +581,12 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
         self.pass
             .dispatch_workgroups(groups.width(), groups.height(), groups.depth());
     }
+
+    fn dispatch_indirect(&mut self, args: impl AsBufferSlice) {
+        let s = args.as_buffer_slice();
+        self.pass
+            .dispatch_workgroups_indirect(s.buffer().wgpu(), s.offset() as u64);
+    }
 }
 
 // Fields declared in this order so `pass` drops before the view arcs (Rust drops in reverse order)
@@ -689,6 +695,17 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
             vertex_offset,
             instances.start..instances.end,
         );
+    }
+
+    fn draw_indirect(&mut self, args: impl AsBufferSlice) {
+        let s = args.as_buffer_slice();
+        self.pass.draw_indirect(s.buffer().wgpu(), s.offset() as u64);
+    }
+
+    fn draw_indexed_indirect(&mut self, args: impl AsBufferSlice) {
+        let s = args.as_buffer_slice();
+        self.pass
+            .draw_indexed_indirect(s.buffer().wgpu(), s.offset() as u64);
     }
 }
 

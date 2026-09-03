@@ -529,6 +529,22 @@ impl crate::traits::ComputeCommandEncoder for ComputeCommandEncoder<'_> {
             )
         }
     }
+
+    #[inline]
+    fn dispatch_indirect(&mut self, args: impl AsBufferSlice) {
+        if self.handle.is_null() {
+            return;
+        }
+        let slice: crate::generic::BufferSlice = args.as_buffer_slice();
+        unsafe {
+            self.device.ash().cmd_dispatch_indirect(
+                self.handle,
+                slice.buffer.handle(),
+                slice.offset as u64,
+            )
+        }
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
+    }
 }
 
 pub struct RenderCommandEncoder<'a> {
@@ -739,6 +755,42 @@ impl crate::traits::RenderCommandEncoder for RenderCommandEncoder<'_> {
                 instances.start,
             );
         }
+    }
+
+    #[inline]
+    fn draw_indirect(&mut self, args: impl AsBufferSlice) {
+        if self.handle.is_null() {
+            return;
+        }
+        let slice: crate::generic::BufferSlice = args.as_buffer_slice();
+        unsafe {
+            self.device.ash().cmd_draw_indirect(
+                self.handle,
+                slice.buffer.handle(),
+                slice.offset as u64,
+                1,
+                0,
+            );
+        }
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
+    }
+
+    #[inline]
+    fn draw_indexed_indirect(&mut self, args: impl AsBufferSlice) {
+        if self.handle.is_null() {
+            return;
+        }
+        let slice: crate::generic::BufferSlice = args.as_buffer_slice();
+        unsafe {
+            self.device.ash().cmd_draw_indexed_indirect(
+                self.handle,
+                slice.buffer.handle(),
+                slice.offset as u64,
+                1,
+                0,
+            );
+        }
+        self.refs.add_buffer(slice.buffer.clone().into_owned());
     }
 }
 
