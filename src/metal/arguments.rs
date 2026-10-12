@@ -7,6 +7,32 @@ use crate::generic::{ArgumentGroupLayout, ArgumentKind, ArgumentsSealed};
 
 use super::{ComputeCommandEncoder, RenderCommandEncoder, shader::Bindings};
 
+impl ComputeCommandEncoder<'_> {
+    pub(crate) fn with_buffer_arguments(
+        &mut self,
+        group: u32,
+        buffers: &[(ArgumentKind, crate::BufferSlice<'_>)],
+    ) {
+        for (index, (kind, buffer)) in buffers.iter().enumerate() {
+            assert!(
+                matches!(
+                    kind,
+                    ArgumentKind::UniformBuffer | ArgumentKind::StorageBuffer
+                ),
+                "Only buffer arguments can be bound"
+            );
+            let buffer = buffer.clone().into_owned();
+            <crate::BufferSlice<'static> as ArgumentsField<crate::Automatic>>::bind_compute_argument(
+                &buffer,
+                group,
+                index as u32,
+                self.bindings(),
+                self.metal(),
+            );
+        }
+    }
+}
+
 pub trait Arguments: 'static {
     const LAYOUT: ArgumentGroupLayout<'static>;
 

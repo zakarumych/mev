@@ -1,4 +1,9 @@
-use std::{error::Error, fmt, sync::Arc};
+use std::{
+    error::Error,
+    fmt,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 use ash::vk;
 use ash::vk::Handle;
@@ -63,7 +68,7 @@ impl RenderPipeline {
         }
     }
 
-    pub fn is_null(&self) -> bool {
+    pub(crate) fn is_null(&self) -> bool {
         self.handle.is_null()
     }
 
@@ -73,5 +78,20 @@ impl RenderPipeline {
 
     pub(super) fn layout(&self) -> &PipelineLayout {
         &self.inner.layout
+    }
+}
+
+impl Hash for RenderPipeline {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.handle.hash(state);
+    }
+}
+
+impl fmt::Debug for RenderPipeline {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RenderPipeline")
+            .field("handle", &self.handle)
+            .field("idx", &self.inner.idx)
+            .finish()
     }
 }

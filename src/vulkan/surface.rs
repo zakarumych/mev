@@ -26,6 +26,7 @@ bitflags::bitflags! {
         const LOST = 0x01;
         const OUT_OF_DATE = 0x02;
         const SUBOPTIMAL = 0x04;
+        const UNKNOWN = 0x08;
 
         const NEEDS_RECONFIGURE = 0x06; // OUT_OF_DATE | SUBOPTIMAL
     }
@@ -245,10 +246,14 @@ impl Surface {
                 }
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.device.set_oom();
                     return Err(SurfaceError::OutOfMemory);
                 }
                 vk::Result::ERROR_SURFACE_LOST_KHR => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.status.insert(SurfaceStatus::LOST);
                     return Err(SurfaceError::SurfaceLost);
                 }
@@ -257,7 +262,11 @@ impl Surface {
                         "Validation failed when querying surface formats. This should not happen."
                     )
                 }
-                vk::Result::ERROR_UNKNOWN => unknown_error(),
+                vk::Result::ERROR_UNKNOWN => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
+                    return Ok(());
+                }
                 err => unexpected_error(err),
             }
         }
@@ -305,10 +314,14 @@ impl Surface {
                 }
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.device.set_oom();
                     return Err(SurfaceError::OutOfMemory);
                 }
                 vk::Result::ERROR_SURFACE_LOST_KHR => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.status.insert(SurfaceStatus::LOST);
                     return Err(SurfaceError::SurfaceLost);
                 }
@@ -317,7 +330,11 @@ impl Surface {
                         "Validation failed when querying surface formats. This should not happen."
                     )
                 }
-                vk::Result::ERROR_UNKNOWN => unknown_error(),
+                vk::Result::ERROR_UNKNOWN => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
+                    return Ok(());
+                }
                 err => unexpected_error(err),
             }
         }
@@ -375,10 +392,14 @@ impl Surface {
                 }
                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
                 vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.device.set_oom();
                     return Err(SurfaceError::OutOfMemory);
                 }
                 vk::Result::ERROR_SURFACE_LOST_KHR => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
                     self.status.insert(SurfaceStatus::LOST);
                     return Err(SurfaceError::SurfaceLost);
                 }
@@ -387,7 +408,11 @@ impl Surface {
                         "Validation failed when querying surface formats. This should not happen."
                     )
                 }
-                vk::Result::ERROR_UNKNOWN => unknown_error(),
+                vk::Result::ERROR_UNKNOWN => {
+                    self.retired.extend(self.current.take());
+                    self.caps = vk::SurfaceCapabilitiesKHR::default();
+                    return Ok(());
+                }
                 err => unexpected_error(err),
             }
         }
@@ -405,13 +430,21 @@ impl Surface {
             Ok(caps) => caps,
             Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
             Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                self.retired.extend(self.current.take());
+                self.caps = vk::SurfaceCapabilitiesKHR::default();
                 self.device.set_oom();
                 return Err(SurfaceError::OutOfMemory);
             }
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => {
+                self.retired.extend(self.current.take());
+                self.caps = vk::SurfaceCapabilitiesKHR::default();
                 self.status.insert(SurfaceStatus::LOST);
-                self.device.set_lost();
                 return Err(SurfaceError::SurfaceLost);
+            }
+            Err(vk::Result::ERROR_UNKNOWN) => {
+                self.retired.extend(self.current.take());
+                self.caps = vk::SurfaceCapabilitiesKHR::default();
+                return Ok(());
             }
             Err(err) => unexpected_error(err),
         };
@@ -480,13 +513,7 @@ impl Surface {
                 return Ok(());
             }
 
-            match self.current.take() {
-                None => {}
-                Some(MaybeFakeSwapchain::Real(swapchain)) => {
-                    self.retired.push_back(MaybeFakeSwapchain::Real(swapchain));
-                }
-                _ => unreachable!(),
-            }
+            self.retired.extend(self.current.take());
 
             let image = self.device.new_image(ImageDesc {
                 dims: ImageExtent::D2(Extent2::new(1, 1)),
@@ -554,9 +581,7 @@ impl Surface {
         };
 
         // Old swapchain is retired even if the creation of the new one fails.
-        if let Some(old) = old {
-            self.retired.push_back(old);
-        }
+        self.retired.extend(old);
 
         let handle = match result {
             Ok(handle) => handle,
@@ -590,6 +615,10 @@ impl Surface {
             Ok(images) => images,
             Err(vk::Result::ERROR_OUT_OF_HOST_MEMORY) => handle_host_oom(),
             Err(vk::Result::ERROR_OUT_OF_DEVICE_MEMORY) => {
+                // Destroy swapchain that wasn't used yet.
+                unsafe {
+                    self.device.swapchain().destroy_swapchain(handle, None);
+                }
                 self.device.set_oom();
                 return Err(SurfaceError::OutOfMemory);
             }
@@ -853,6 +882,7 @@ impl crate::traits::Surface for Surface {
                             self.configure()?;
                             continue;
                         }
+                        Err(vk::Result::ERROR_UNKNOWN) => todo!(),
                         Err(err) => unexpected_error(err),
                     };
 

@@ -1,11 +1,69 @@
 use std::{num::NonZero, ptr::NonNull};
 
+use ash::vk::Handle;
+
 use crate::generic::{ArgumentGroupLayout, ArgumentKind, ArgumentsSealed};
 
 use super::{
     command::{ComputeCommandEncoder, RenderCommandEncoder},
     refs::Refs,
 };
+
+impl ComputeCommandEncoder<'_> {
+    pub(crate) fn with_buffer_arguments(
+        &mut self,
+        group: u32,
+        buffers: &[(ArgumentKind, crate::BufferSlice<'_>)],
+    ) {
+        if self.handle().is_null() || self.device().get_error().is_err() {
+            return;
+        }
+        let Some(layout) = self.current_layout().cloned() else {
+            panic!("Argument binding requires a pipeline to be bound to the encoder");
+        };
+
+        let infos: Vec<_> = buffers
+            .iter()
+            .map(|(_, slice)| {
+                ash::vk::DescriptorBufferInfo::default()
+                    .buffer(slice.buffer().handle())
+                    .offset(slice.offset() as u64)
+                    .range(slice.size() as u64)
+            })
+            .collect();
+        let writes: Vec<_> = buffers
+            .iter()
+            .zip(&infos)
+            .enumerate()
+            .map(|(binding, ((kind, _), info))| {
+                assert!(
+                    matches!(
+                        kind,
+                        ArgumentKind::UniformBuffer | ArgumentKind::StorageBuffer
+                    ),
+                    "Only buffer arguments can be bound"
+                );
+                ash::vk::WriteDescriptorSet::default()
+                    .dst_binding(binding as u32)
+                    .descriptor_type(descriptor_type(*kind))
+                    .buffer_info(std::slice::from_ref(info))
+            })
+            .collect();
+
+        unsafe {
+            self.device().push_descriptor().cmd_push_descriptor_set(
+                self.handle(),
+                ash::vk::PipelineBindPoint::COMPUTE,
+                layout.handle(),
+                group,
+                &writes,
+            );
+        }
+        for (_, slice) in buffers {
+            self.refs_mut().add_buffer(slice.buffer().clone());
+        }
+    }
+}
 
 #[doc(hidden)]
 pub trait Arguments: 'static {

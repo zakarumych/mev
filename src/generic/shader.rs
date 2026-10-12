@@ -53,12 +53,9 @@ bitflags::bitflags! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShaderLanguage {
     /// SPIR-V.
-    /// This is native format for Vulkan.
-    /// Shader source code will be compiled to native format on other backends.
     SpirV,
 
-    /// WGSL (WebGPU Shading Language).
-    /// This is native format for WebGPU.
+    /// WGSL.
     /// Shader source code will be compiled to native format.
     Wgsl,
 
@@ -68,9 +65,7 @@ pub enum ShaderLanguage {
     /// Requires specifying shader stage.
     Glsl { stage: ShaderStage },
 
-    /// MSL (Metal Shading Language).
-    /// This is native format for Metal.
-    /// Shader source code will be compiled to native format on other backends.
+    /// MSL.
     Msl,
 }
 
@@ -267,6 +262,22 @@ impl fmt::Display for ShaderLibraryError {
             ShaderLibraryError::GenSpirV(err) => write!(f, "generate SPIR-V: {}", err),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             ShaderLibraryError::GenMsl(err) => write!(f, "generate MSL: {}", err),
+        }
+    }
+}
+
+impl std::error::Error for ShaderLibraryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ShaderLibraryError::NonUtf8(err) => Some(err),
+            ShaderLibraryError::ParseSpirV(err) => Some(err),
+            ShaderLibraryError::ParseWgsl(err) => Some(err),
+            ShaderLibraryError::ParseGlsl(err) => Some(err),
+            ShaderLibraryError::ValidationFailed => None,
+            #[cfg(any(windows, all(unix, not(any(target_os = "macos", target_os = "ios")))))]
+            ShaderLibraryError::GenSpirV(err) => Some(err),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            ShaderLibraryError::GenMsl(err) => Some(err),
         }
     }
 }

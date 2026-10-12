@@ -116,14 +116,14 @@ impl FromAsh<vk::QueueFamilyProperties2<'_>> for FamilyCapabilities {
 impl FromAsh<vk::QueueFlags> for QueueFlags {
     #[inline]
     fn from_ash(value: vk::QueueFlags) -> Self {
-        // from_flags!(vk::QueueFlags => QueueFlags, [GRAPHICS, COMPUTE, TRANSFER], value)
-
         let mut result = QueueFlags::empty();
         if value.contains(vk::QueueFlags::GRAPHICS) {
             result |= QueueFlags::GRAPHICS | QueueFlags::TRANSFER;
-        } else if value.contains(vk::QueueFlags::COMPUTE) {
+        }
+        if value.contains(vk::QueueFlags::COMPUTE) {
             result |= QueueFlags::COMPUTE | QueueFlags::TRANSFER;
-        } else if value.contains(vk::QueueFlags::TRANSFER) {
+        }
+        if value.contains(vk::QueueFlags::TRANSFER) {
             result |= QueueFlags::TRANSFER;
         }
         result
@@ -814,6 +814,33 @@ impl AshFrom<PresentMode> for ash::vk::PresentModeKHR {
             PresentMode::Fifo => ash::vk::PresentModeKHR::FIFO,
             PresentMode::Mailbox => ash::vk::PresentModeKHR::MAILBOX,
             PresentMode::Immediate => ash::vk::PresentModeKHR::IMMEDIATE,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FromAsh, QueueFlags, vk};
+
+    #[test]
+    fn queue_flags_preserve_combined_operations_and_implied_transfer() {
+        for (native, expected) in [
+            (
+                vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
+                QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER,
+            ),
+            (
+                vk::QueueFlags::GRAPHICS,
+                QueueFlags::GRAPHICS | QueueFlags::TRANSFER,
+            ),
+            (
+                vk::QueueFlags::COMPUTE,
+                QueueFlags::COMPUTE | QueueFlags::TRANSFER,
+            ),
+            (vk::QueueFlags::TRANSFER, QueueFlags::TRANSFER),
+            (vk::QueueFlags::empty(), QueueFlags::empty()),
+        ] {
+            assert_eq!(QueueFlags::from_ash(native), expected);
         }
     }
 }

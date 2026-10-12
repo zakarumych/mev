@@ -5,7 +5,7 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use crate::generic::{
     Arguments, AsBufferSlice, BlasBuildDesc, BlasDesc, BufferDesc, BufferInit, BufferInitDesc,
-    BufferMappedRange, BufferMappedRangeMut, BufferUsage, Capabilities, ColorSpace,
+    BufferUsage, Capabilities, ColorSpace,
     ComputePipelineDesc, DeviceDesc, DeviceError, DeviceRepr, Extent2, Extent3, Image2D, ImageDesc,
     ImageDims, ImageExtent, ImageRegion, ImageSlice, ImageUsage, LibraryDesc, Offset2, Offset3,
     PipelineError, PipelineStages, PixelFormat, PresentMode, RenderPassDesc, RenderPipelineDesc,
@@ -13,31 +13,11 @@ use crate::generic::{
     TlasBuildDesc, TlasDesc, ViewDesc,
 };
 
-// match_backend! {
-//     metal => {
-//         pub trait Resource: Send + Sync + 'static {}
-//     }
-//     vulkan => {
-//         pub trait Resource: Send + Sync + 'static {}
-//     }
-//     webgpu => {
-//         pub trait Resource: 'static {}
-//     }
-// }
-
-with_metal! {
-    pub trait Resource: Send + Sync + Sized + 'static {}
-}
-
-with_vulkan! {
-    pub trait Resource: Send + Sync + Sized + 'static {}
-}
-
-with_webgpu! {
-    pub trait Resource: Sized + 'static {}
-}
+pub(crate) use crate::backend::Resource;
 
 pub(crate) trait Instance: Debug + Resource {
+    fn load() -> Result<Self, DeviceError> where Self: Sized;
+    async fn load_async() -> Result<Self, DeviceError> where Self: Sized;
     fn capabilities(&self) -> &Capabilities;
 
     /// Returns capabilities for specific Surface
@@ -87,6 +67,10 @@ pub(crate) trait Instance: Debug + Resource {
 }
 
 pub(crate) trait Device: Clone + Debug + Eq + Resource {
+    /// Create an independently recorded file I/O batch.
+    /// Panics unless `Features::IO_COMMANDS` was enabled when creating this device.
+    fn new_io_batch(&self) -> crate::IoBatch;
+
     /// Create a new shader library.
     fn new_shader_library(
         &self,
@@ -108,28 +92,16 @@ pub(crate) trait Device: Clone + Debug + Eq + Resource {
     /// Create a new buffer with uninitialized contents.
     fn new_buffer(&self, desc: BufferDesc) -> crate::backend::Buffer;
 
-    /// Create a new buffer and initialize it with the given data.
-    fn new_buffer_init<D: BufferInit>(
-        &self,
-        desc: BufferInitDesc<'_, D>,
-    ) -> crate::backend::Buffer {
-        let size = desc.data.size();
+    /// Create a buffer with its full range mapped for writing.
+    /// Requires support for `Features::BUFFER_MAP_AT_CREATION`.
+    /// Initial writes do not require `BufferUsage::HOST_WRITE`.
+    /// Drop all mapped ranges and call `Buffer::unmap` before GPU use.
+    fn new_buffer_mapped(&self, desc: BufferDesc) -> crate::backend::Buffer;
 
-        let mut buffer = self.new_buffer(BufferDesc {
-            size,
-            usage: desc.usage | BufferUsage::HOST_WRITE,
-            name: desc.name,
-        });
-
-        if size > 0 && buffer.map(..).is_ok() {
-            if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                desc.data.write(mapped.as_mut());
-            }
-            buffer.unmap();
-        }
-
-        buffer
-    }
+    /// Create a new buffer and initialize it through its initial mapping.
+    /// Requires support for `Features::BUFFER_MAP_AT_CREATION`.
+    fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>)
+    -> crate::backend::Buffer;
 
     /// Create a new image.
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image;
@@ -160,6 +132,19 @@ pub(crate) trait Device: Clone + Debug + Eq + Resource {
 pub(crate) trait Queue: Deref<Target = crate::backend::Device> + Debug + Resource {
     /// Get the device associated with this queue.
     fn device(&self) -> &crate::backend::Device;
+
+    /// Upload bytes using a native queue operation.
+    /// Requires `Features::BUFFER_WRITE_QUEUE` and `BufferUsage::TRANSFER_DST`.
+    /// Data is copied before return and uploaded before the next submission.
+    /// Writes follow already-submitted work and precede the next submission;
+    /// they cannot be inserted between commands within a submission.
+    fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]);
+
+    /// Upload one value using a native queue operation.
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit);
+
+    /// Upload a slice using a native queue operation.
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]);
 
     /// Get the queue family index.
     fn family(&self) -> u32;
@@ -330,7 +315,7 @@ pub(crate) trait CopyCommandEncoder: SyncCommandEncoder {
     /// any individual axis's stride may still be left unset for a tightly-packed default.
     ///
     /// `src_shape`'s element (axis 0 / X) stride is NOT actually configurable here:
-    /// native buffer<->image copy commands (Vulkan/Metal/wgpu) always read a row's elements tightly packed -
+    /// native buffer<->image copy commands always read a row's elements tightly packed -
     /// if set, it must equal `dst`'s pixel format's own tightly-packed element size
     /// (asserted; panics otherwise, in all build profiles).
     ///
@@ -486,6 +471,12 @@ pub(crate) trait Image: Clone + Debug + Eq + Hash + Resource {
 }
 
 pub(crate) trait Buffer: Clone + Debug + Eq + Hash + Resource {
+    /// Select a byte range of this buffer.
+    fn slice<R: crate::BufferRange>(&self, range: R) -> crate::BufferSlice<'_>;
+
+    /// Split this buffer at a byte offset.
+    fn split_at(&self, at: usize) -> (crate::BufferSlice<'_>, crate::BufferSlice<'_>);
+
     /// Returns the buffer size in bytes.
     fn size(&self) -> usize;
 
@@ -517,14 +508,14 @@ pub(crate) trait Buffer: Clone + Debug + Eq + Hash + Resource {
     /// Return an inmutable slice of the mapped buffer region.
     ///
     /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
-    fn read_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRange<'_>, DeviceError>
+    fn read_mapped_range<R>(&mut self, range: R) -> Result<crate::backend::BufferMappedRange<'_>, DeviceError>
     where
         R: crate::generic::BufferRange;
 
     /// Return a mutable slice of the mapped buffer region.
     ///
     /// This function should be called only between [`map`](Buffer::map) and [`unmap`](Buffer::unmap).
-    fn write_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
+    fn write_mapped_range<R>(&mut self, range: R) -> Result<crate::backend::BufferMappedRangeMut<'_>, DeviceError>
     where
         R: crate::generic::BufferRange;
 
@@ -545,3 +536,70 @@ pub(crate) trait Library: Clone + Debug + Resource {
     /// Returns shader entry point.
     fn entry<'a>(&self, entry: &'a str) -> Shader<'a>;
 }
+
+#[path = "traits/mapped.rs"]
+mod mapped;
+pub(crate) use mapped::{BufferMappedRange, BufferMappedRangeMut, BufferMappedRangeMutRead};
+
+mod io {
+    use crate::{
+        AsBufferSlice, AsImageSlice, Event as NativeEvent, IoError, SubmissionSync, SyncError,
+        TexelShape,
+    };
+
+    pub(crate) trait DeviceEvent {
+        /// Create a shared timeline initialized to `initial_value`.
+        fn new_event(&self, initial_value: u64, name: &str) -> Result<NativeEvent, SyncError>;
+    }
+
+    pub(crate) trait Event {
+        /// Read the completed timeline value.
+        fn value(&self) -> Result<u64, SyncError>;
+        /// Signal from the CPU; order this against all pending signals.
+        fn set_value(&self, value: u64) -> Result<(), SyncError>;
+    }
+
+    pub(crate) trait QueueSync {
+        /// Submit commands with timeline waits before and signals after all commands.
+        fn submit_with_sync<I>(&mut self, command_buffers: I, sync: SubmissionSync<'_>)
+            -> Result<u64, SyncError>
+        where I: IntoIterator<Item = crate::CommandBuffer>;
+        /// Submit synchronized commands and close their completion epoch.
+        fn submit_checkpoint_with_sync<I>(&mut self, command_buffers: I, sync: SubmissionSync<'_>)
+            -> Result<u64, SyncError>
+        where I: IntoIterator<Item = crate::CommandBuffer>;
+    }
+
+    pub(crate) trait IoBatch {
+        /// Record a file byte range into the destination buffer slice.
+        /// The range length must equal the slice size. Errors appear in the submitted status.
+        fn load_buffer(
+            &mut self,
+            path: impl AsRef<std::path::Path>,
+            source: std::ops::Range<u64>,
+            dst: impl AsBufferSlice,
+        );
+        /// Record a file byte range into one image layer using the supplied layout.
+        /// The range must contain the layout's byte span. Errors appear in the submitted status.
+        fn load_image<const N: usize>(
+            &mut self,
+            path: impl AsRef<std::path::Path>,
+            source: std::ops::Range<u64>,
+            shape: TexelShape<N>,
+            dst: &impl AsImageSlice<N>,
+        );
+        /// Submit this batch and return its aggregate completion handle.
+        /// Operations may execute concurrently; recording order does not establish dependencies.
+        fn submit(self) -> crate::IoStatus;
+    }
+
+    pub(crate) trait IoStatus {
+        /// Return `None` while pending, or all operation results in recording order when complete.
+        /// Every attempted load has one result, including validation and file-opening failures.
+        fn poll(&self) -> Option<&[Result<(), IoError>]>;
+        /// Block until all operations complete and return their results in recording order.
+        fn wait(&self) -> &[Result<(), IoError>];
+    }
+}
+
+pub(crate) use io::{DeviceEvent, Event, IoBatch, IoStatus, QueueSync};

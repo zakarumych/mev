@@ -1,4 +1,5 @@
-use std::{fmt, hash, num::NonZero, rc::Rc};
+use super::mapped::{BufferMappedRange, BufferMappedRangeMut};
+use std::{cell::Cell, fmt, hash, num::NonZero, rc::Rc};
 
 use mev_proc::hidden_trait;
 
@@ -6,7 +7,7 @@ use crate::{
     ArgumentKind, ArgumentsSealed, Automatic, Storage, Uniform,
     backend::{arguments::ArgumentsField, from::WgpuInto},
     generic::{
-        BufferDesc, BufferInitDesc, BufferMappedRange, BufferMappedRangeMut, BufferRange,
+        BufferDesc, BufferInitDesc, BufferRange,
         BufferUsage, DeviceError,
     },
 };
@@ -14,11 +15,19 @@ use crate::{
 #[derive(Clone)]
 pub struct Buffer {
     inner: wgpu::Buffer,
+    size: usize,
+    usage: BufferUsage,
+    mapped: Rc<Cell<bool>>,
 }
 
 impl Buffer {
-    pub(super) fn new(buffer: wgpu::Buffer) -> Self {
-        Buffer { inner: buffer }
+    pub(super) fn new(buffer: wgpu::Buffer, size: usize, usage: BufferUsage, mapped: bool) -> Self {
+        Buffer {
+            inner: buffer,
+            size,
+            usage,
+            mapped: Rc::new(Cell::new(mapped)),
+        }
     }
 
     pub(super) fn wgpu(&self) -> &wgpu::Buffer {
@@ -57,12 +66,21 @@ impl crate::traits::Resource for Buffer {}
 
 #[hidden_trait]
 impl crate::traits::Buffer for Buffer {
+    /// Returns buffer slice with given range.
+    fn slice<R: crate::BufferRange>(&self, range: R) -> crate::BufferSlice<'_> {
+        crate::BufferSlice::from(self).slice(range)
+    }
+
+    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
+    fn split_at(&self, at: usize) -> (crate::BufferSlice<'_>, crate::BufferSlice<'_>) {
+        crate::BufferSlice::from(self).split_at(at)
+    }
     fn size(&self) -> usize {
-        self.inner.size() as usize
+        self.size
     }
 
     fn usage(&self) -> BufferUsage {
-        self.inner.usage().wgpu_into()
+        self.usage
     }
 
     fn detached(&self) -> bool {
@@ -77,7 +95,9 @@ impl crate::traits::Buffer for Buffer {
     }
 
     fn unmap(&mut self) {
-        panic!("buffer mapping is not supported in the WebGPU backend")
+        assert!(self.mapped.get(), "Buffer is not mapped");
+        self.inner.unmap();
+        self.mapped.set(false);
     }
 
     fn read_mapped_range<R>(&mut self, _range: R) -> Result<BufferMappedRange<'_>, DeviceError>
@@ -87,16 +107,49 @@ impl crate::traits::Buffer for Buffer {
         panic!("buffer mapping is not supported in the WebGPU backend")
     }
 
-    fn write_mapped_range<R>(&mut self, _range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
+    fn write_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRangeMut<'_>, DeviceError>
     where
         R: BufferRange,
     {
-        panic!("buffer mapping is not supported in the WebGPU backend")
+        assert!(self.mapped.get(), "Buffer is not mapped");
+        let range = range.range(self.size);
+        assert!(
+            range.start <= range.end && range.end <= self.size,
+            "Buffer range out of bounds"
+        );
+        let size = range.end - range.start;
+        if size == 0 {
+            return Ok(BufferMappedRangeMut::new(
+                self,
+                None,
+                0,
+                range.start,
+                0,
+            ));
+        }
+        // WebGPU views require aligned bounds; logical writes can address any byte.
+        let view_start = range.start & !(wgpu::MAP_ALIGNMENT as usize - 1);
+        let view_end = range
+            .end
+            .checked_add(wgpu::COPY_BUFFER_ALIGNMENT as usize - 1)
+            .expect("Buffer range exceeds address space")
+            & !(wgpu::COPY_BUFFER_ALIGNMENT as usize - 1);
+        let view = self
+            .inner
+            .get_mapped_range_mut(view_start as u64..view_end as u64)
+            .expect("Failed to access buffer initial mapping");
+        Ok(BufferMappedRangeMut::new(
+            self,
+            Some(view),
+            range.start - view_start,
+            range.start,
+            size,
+        ))
     }
 
     fn write(&mut self, _offset: usize, _data: &[u8]) -> Result<(), DeviceError> {
         panic!(
-            "buffer host-write is not supported in the WebGPU backend; use CopyCommandEncoder::write_buffer instead"
+            "buffer host-write is not supported in the WebGPU backend; use Queue::write_buffer instead"
         )
     }
 

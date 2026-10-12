@@ -17,10 +17,11 @@ impl Refs {
     }
 
     pub fn clear(&mut self) {
-        // FIXME: Clear buffers // self.buffers.clear();
+        self.buffers.clear();
         self.images.clear();
         self.samplers.clear();
         self.render_pipelines.clear();
+        self.compute_pipelines.clear();
     }
 
     pub fn add_buffer(&mut self, buffer: Buffer) {
@@ -53,6 +54,24 @@ impl Refs {
 
     pub fn add_compute_pipeline(&mut self, pipeline: ComputePipeline) {
         self.compute_pipelines.push(pipeline);
+    }
+
+    pub fn __print(&self) {
+        for buffer in &self.buffers {
+            eprintln!("{:?}", buffer);
+        }
+        for image in &self.images {
+            eprintln!("{:?}", image);
+        }
+        for sampler in &self.samplers {
+            eprintln!("{:?}", sampler);
+        }
+        for render_pipeline in &self.render_pipelines {
+            eprintln!("{:?}", render_pipeline);
+        }
+        for compute_pipeline in &self.compute_pipelines {
+            eprintln!("{:?}", compute_pipeline);
+        }
     }
 
     // pub fn add_cbuf(&mut self, cbuf: CommandBuffer) {

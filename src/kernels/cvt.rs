@@ -15,7 +15,7 @@ use crate::{
     AddressMode, Arguments, AsBufferSlice, AsImageSlice, AttachmentDesc, Buffer, BufferSlice,
     ColorTargetDesc, CommandEncoder, ComputePipeline, ComputePipelineDesc, Culling, Device,
     DeviceRepr, Extent, Extent1, Extent2, Extent3, Filter, FrontFace, Image, ImageSlice,
-    LibraryDesc, LibraryInput, MipMapMode, Offset, Offset2, Offset3, PixelFormat,
+    ImageUsage, LibraryDesc, LibraryInput, MipMapMode, Offset, Offset2, Offset3, PixelFormat,
     PrimitiveTopology, RasterDesc, RenderPassDesc, RenderPipeline, RenderPipelineDesc, Sampler,
     SamplerDesc, Swizzle, TexelShape, VertexFormat, ViewDesc,
 };
@@ -1203,6 +1203,46 @@ fn dst_image_storage_format(dst_layout: &FormatLayout, format: PixelFormat) -> &
     match dst_layout.kind {
         CanonicalKind::Float => wgsl_storage_format(format),
         CanonicalKind::Uint | CanonicalKind::Sint => wgsl_int_storage_format(format),
+    }
+}
+
+/// Whether `Cvt` must route the write to `dst` through the render pipeline
+/// instead of the compute pipeline, given the destination Image's actual
+/// allowed usage - not just its format.
+///
+/// sRGB destinations always require the render path: WGSL's storage-texture
+/// format keyword set has no sRGB entries, so a compute pipeline cannot
+/// write to it regardless of `usage`.
+///
+/// Otherwise the choice follows `dst`'s `ImageUsage`: `STORAGE` (even
+/// alongside `TARGET`) prefers the compute/dispatch path; lacking
+/// `STORAGE`, `TARGET` falls back to the render path; lacking both, `dst`
+/// cannot be written by `Cvt` at all.
+fn cvt_use_render_pipeline(
+    dst_layout: &FormatLayout,
+    dst_format: PixelFormat,
+    dst_usage: ImageUsage,
+) -> bool {
+    if dst_layout.srgb {
+        assert!(
+            dst_usage.contains(ImageUsage::TARGET),
+            "Cvt: dst format {:?} is sRGB, which WGSL storage-texture formats cannot express; dst Image needs ImageUsage::TARGET (usage: {:?})",
+            dst_format,
+            dst_usage
+        );
+        return true;
+    }
+
+    if dst_usage.contains(ImageUsage::STORAGE) {
+        false
+    } else if dst_usage.contains(ImageUsage::TARGET) {
+        true
+    } else {
+        panic!(
+            "Cvt: dst Image usage {:?} allows neither STORAGE (compute dispatch) nor TARGET (render); dst format {:?} cannot be written by Cvt",
+            dst_usage,
+            dst_format
+        );
     }
 }
 
@@ -3088,7 +3128,7 @@ impl Cvt {
             address_mode: pad4_addr_mode(address_mode),
         };
 
-        if dst_layout.srgb {
+        if cvt_use_render_pipeline(&dst_layout, dst_format, dst_view.usage()) {
             let pipeline = {
                 let mut pipelines = self.render_pipelines.lock();
                 pipelines
@@ -3629,7 +3669,7 @@ impl Cvt {
             address_mode: pad4_addr_mode(address_mode),
         };
 
-        if dst_layout.srgb {
+        if cvt_use_render_pipeline(&dst_layout, dst_format, dst_view.usage()) {
             let pipeline = {
                 let mut pipelines = self.render_pipelines.lock();
                 pipelines

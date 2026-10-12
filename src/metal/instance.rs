@@ -17,8 +17,17 @@ pub struct Instance {
     capabilities: Capabilities,
 }
 
-impl Instance {
-    pub fn load() -> Result<Self, DeviceError>
+impl fmt::Debug for Instance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Instance").finish()
+    }
+}
+
+impl crate::traits::Resource for Instance {}
+
+#[hidden_trait]
+impl crate::traits::Instance for Instance {
+    fn load() -> Result<Self, DeviceError>
     where
         Self: Sized,
     {
@@ -28,10 +37,20 @@ impl Instance {
             devices: devices
                 .iter()
                 .map(|device| {
-                    let mut features = Features::empty();
+                    let mut features = Features::BUFFER_MAP
+                        | Features::BUFFER_MAP_AT_CREATION
+                        | Features::BUFFER_WRITE_COMMAND;
 
                     if !device.isHeadless() {
                         features |= Features::SURFACE;
+                    }
+
+                    if super::event::supports_events(&device) {
+                        features |= Features::TIMELINE_EVENTS;
+                    }
+
+                    if super::io::supports_io(&device) {
+                        features |= Features::IO_COMMANDS;
                     }
 
                     if device.supportsBCTextureCompression() {
@@ -68,18 +87,11 @@ impl Instance {
             capabilities,
         })
     }
-}
 
-impl fmt::Debug for Instance {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Instance").finish()
+    async fn load_async() -> Result<Self, DeviceError> {
+        Self::load()
     }
-}
 
-impl crate::traits::Resource for Instance {}
-
-#[hidden_trait]
-impl crate::traits::Instance for Instance {
     #[inline(always)]
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
@@ -117,13 +129,20 @@ impl crate::traits::Instance for Instance {
             "Device index out of bounds"
         );
 
-        let device = Device::new(self.devices[info.idx].clone(), info.queues.len());
+        assert!(
+            self.capabilities.devices[info.idx]
+                .features
+                .contains(info.features),
+            "Requested device features are unsupported"
+        );
+
+        let device = Device::new(self.devices[info.idx].clone(), info.features)?;
 
         let queues = (0..info.queues.len())
             .map(|_| {
                 let queue = device
                     .metal()
-                    .newCommandQueue()
+                    .newCommandQueueWithMaxCommandBufferCount(super::queue::MAX_COMMAND_BUFFERS)
                     .expect("Failed to create command queue");
                 Queue::new(device.clone(), queue)
             })

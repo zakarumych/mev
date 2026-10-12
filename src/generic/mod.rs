@@ -8,6 +8,7 @@ mod feature;
 mod format;
 mod image;
 mod indirect;
+mod io;
 mod instance;
 mod queue;
 mod render;
@@ -15,6 +16,7 @@ mod sampler;
 mod shader;
 mod stages;
 mod surface;
+mod sync;
 
 use std::{
     error::Error,
@@ -35,8 +37,7 @@ pub use self::{
         /*Constant,*/ Sampled, Storage, Uniform,
     },
     buffer::{
-        AsBufferSlice, BufferDesc, BufferInit, BufferInitDesc, BufferMappedRange,
-        BufferMappedRangeMut, BufferRange, BufferSlice, BufferUsage, InitMapped, TexelShape,
+        AsBufferSlice, BufferDesc, BufferInit, BufferInitDesc, BufferRange, BufferSlice, BufferUsage, InitMapped, TexelShape,
     },
     compute::ComputePipelineDesc,
     data::*,
@@ -49,6 +50,7 @@ pub use self::{
         Swizzle, ViewDesc,
     },
     indirect::{DispatchIndirectCommand, DrawIndexedIndirectCommand, DrawIndirectCommand},
+    io::IoError,
     instance::{
         Capabilities, DeviceCapabilities, DeviceDesc, DeviceSurfaceCapabilities, DeviceType,
         FamilyCapabilities, SurfaceCapabilities,
@@ -67,9 +69,13 @@ pub use self::{
     },
     stages::{PipelineStage, PipelineStages},
     surface::{PresentMode, SurfaceError},
+    sync::{EventPoint, SubmissionSync, SyncError},
 };
 
-pub(crate) use self::{arguments::ArgumentsSealed, shader::parse_shader};
+pub(crate) use self::{
+    arguments::ArgumentsSealed, compute::ComputeKernelLimits, shader::parse_shader,
+    sync::validate_submission_sync,
+};
 
 /// Error that can happen when device's memory is exhausted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

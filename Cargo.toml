@@ -20,6 +20,7 @@ bitflags.workspace = true
 bytemuck.workspace = true
 codespan-reporting.workspace = true
 hashbrown.workspace = true
+half = "2.7"
 parking_lot.workspace = true
 raw-window-handle.workspace = true
 slab.workspace = true

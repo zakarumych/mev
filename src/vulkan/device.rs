@@ -637,6 +637,163 @@ impl fmt::Debug for Device {
 }
 
 impl Device {
+    pub(super) fn timeline_events_enabled(&self) -> bool {
+        self.inner.features.contains(Features::TIMELINE_EVENTS)
+    }
+
+    pub(super) fn max_timeline_value_difference(&self) -> u64 {
+        self.inner.vk_properties.properties12.max_timeline_semaphore_value_difference
+    }
+
+    pub(super) fn name_event(&self, handle: vk::Semaphore, name: &str) {
+        #[cfg(any(debug_assertions, feature = "debug"))]
+        self.set_object_name(handle, name);
+    }
+
+    fn allocate_buffer(&self, desc: BufferDesc, initially_mapped: bool) -> Buffer {
+        if self.inner.error_state.is_some() {
+            return Buffer::null(desc.size, desc.usage);
+        }
+
+        let Ok(size) = u64::try_from(if initially_mapped {
+            desc.size.max(1)
+        } else {
+            desc.size
+        }) else {
+            self.set_oom();
+            return Buffer::null(desc.size, desc.usage);
+        };
+
+        let result = unsafe {
+            self.ash().create_buffer(
+                &vk::BufferCreateInfo::default()
+                    .size(size)
+                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                    .usage(desc.usage.into_ash()),
+                None,
+            )
+        };
+
+        let buffer = match result {
+            Ok(buffer) => buffer,
+            Err(err) => match err {
+                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                    self.set_oom();
+                    return Buffer::null(desc.size, desc.usage);
+                }
+                _ => unexpected_error(err),
+            },
+        };
+
+        let requirements = unsafe { self.ash().get_buffer_memory_requirements(buffer) };
+        let align_mask = requirements.alignment - 1;
+
+        let result = unsafe {
+            self.inner.allocator.lock().alloc(
+                &*self.inner,
+                gpu_alloc::Request {
+                    size: requirements.size,
+                    align_mask,
+                    usage: map_usage_flags(if initially_mapped {
+                        desc.usage | BufferUsage::HOST_WRITE
+                    } else {
+                        desc.usage
+                    }),
+                    memory_types: requirements.memory_type_bits,
+                },
+            )
+        };
+
+        let block = match result {
+            Ok(block) => block,
+            Err(gpu_alloc::AllocationError::OutOfHostMemory) => handle_host_oom(),
+            _ => {
+                self.set_oom();
+                unsafe {
+                    self.ash().destroy_buffer(buffer, None);
+                }
+                return Buffer::null(desc.size, desc.usage);
+            }
+        };
+
+        let result = unsafe {
+            self.ash()
+                .bind_buffer_memory(buffer, block.memory().handle, block.offset())
+        };
+
+        match result {
+            Ok(()) => {
+                #[cfg(any(debug_assertions, feature = "debug"))]
+                self.set_object_name(buffer, desc.name);
+
+                let idx = self.inner.buffers.lock().insert(buffer);
+
+                Buffer::new(self.weak(), buffer, desc.size, desc.usage, block, idx)
+            }
+            Err(err) => {
+                unsafe {
+                    self.inner.allocator.lock().dealloc(&*self.inner, block);
+
+                    self.ash().destroy_buffer(buffer, None);
+                }
+
+                match err {
+                    vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
+                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+                        self.set_oom();
+                        Buffer::null(desc.size, desc.usage)
+                    }
+                    _ => unexpected_error(err),
+                }
+            }
+        }
+    }
+
+    pub(crate) fn compute_kernel_limits(&self) -> crate::generic::ComputeKernelLimits {
+        let properties = &self.inner.vk_properties;
+        let features = &self.inner.vk_features;
+        let limits = &properties.properties.limits;
+        let subgroup = &properties.properties11;
+        let subgroup_arithmetic = subgroup
+            .subgroup_supported_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && subgroup
+                .subgroup_supported_operations
+                .contains(vk::SubgroupFeatureFlags::ARITHMETIC);
+        let max_subgroups_per_workgroup = (properties.properties13.max_compute_workgroup_subgroups
+            != 0)
+            .then_some(properties.properties13.max_compute_workgroup_subgroups);
+
+        crate::generic::ComputeKernelLimits {
+            max_workgroup_size: limits.max_compute_work_group_size[0]
+                .min(limits.max_compute_work_group_invocations),
+            max_workgroup_memory: limits.max_compute_shared_memory_size as usize,
+            max_storage_buffers: limits
+                .max_per_stage_descriptor_storage_buffers
+                .min(limits.max_descriptor_set_storage_buffers)
+                .min(properties.properties_pd.max_push_descriptors),
+            max_uniform_buffers: limits
+                .max_per_stage_descriptor_uniform_buffers
+                .min(limits.max_descriptor_set_uniform_buffers),
+            max_buffer_bindings: properties
+                .properties_pd
+                .max_push_descriptors
+                .min(limits.max_per_stage_resources),
+            max_storage_buffer_range: limits.max_storage_buffer_range as usize,
+            max_uniform_buffer_range: limits.max_uniform_buffer_range as usize,
+            storage_offset_alignment: limits.min_storage_buffer_offset_alignment as usize,
+            uniform_offset_alignment: limits.min_uniform_buffer_offset_alignment as usize,
+            max_dispatch_count: limits.max_compute_work_group_count[0],
+            max_subgroups_per_workgroup,
+            subgroup_arithmetic,
+            shader_f16: features.features12.shader_float16 != 0
+                && features.features11.storage_buffer16_bit_access != 0
+                && features.features11.uniform_and_storage_buffer16_bit_access != 0
+                && features.features11.storage_input_output16 != 0,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[rustfmt::skip]
     pub(super) fn new(
@@ -758,7 +915,7 @@ impl Device {
     }
 
     #[inline]
-    pub fn push_descriptor(&self) -> &ash::khr::push_descriptor::Device {
+    pub(crate) fn push_descriptor(&self) -> &ash::khr::push_descriptor::Device {
         &self.inner.push_descriptor
     }
 
@@ -1126,6 +1283,15 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait]
 impl crate::traits::Device for Device {
+    /// Create an independently recorded file I/O batch.
+    ///
+    /// # Panics
+    /// Panics unless `Features::IO_COMMANDS` was enabled when creating this device.
+    /// This backend does not support that feature.
+    fn new_io_batch(&self) -> super::IoBatch {
+        panic!("Features::IO_COMMANDS must be enabled to create an I/O batch")
+    }
+
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         let me = &*self.inner;
         match desc.input {
@@ -1490,113 +1656,38 @@ impl crate::traits::Device for Device {
     }
 
     fn new_buffer(&self, desc: BufferDesc) -> Buffer {
-        if self.inner.error_state.is_some() {
+        self.allocate_buffer(desc, false)
+    }
+
+    /// Creates a buffer with its full logical range mapped for writing.
+    /// Requires `Features::BUFFER_MAP_AT_CREATION`; initial writes do not
+    /// require `HOST_WRITE`. Drop mapped views and unmap before GPU use.
+    fn new_buffer_mapped(&self, desc: BufferDesc) -> Buffer {
+        let mut buffer = self.allocate_buffer(desc, true);
+        if buffer.map_initial().is_err() {
             return Buffer::null(desc.size, desc.usage);
         }
-
-        let Ok(size) = u64::try_from(desc.size) else {
-            self.set_oom();
-            return Buffer::null(desc.size, desc.usage);
-        };
-
-        let result = unsafe {
-            self.ash().create_buffer(
-                &vk::BufferCreateInfo::default()
-                    .size(size)
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .usage(desc.usage.into_ash()),
-                None,
-            )
-        };
-
-        let buffer = match result {
-            Ok(buffer) => buffer,
-            Err(err) => match err {
-                vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
-                    self.set_oom();
-                    return Buffer::null(desc.size, desc.usage);
-                }
-                _ => unexpected_error(err),
-            },
-        };
-
-        let requirements = unsafe { self.ash().get_buffer_memory_requirements(buffer) };
-        let align_mask = requirements.alignment - 1;
-
-        let result = unsafe {
-            self.inner.allocator.lock().alloc(
-                &*self.inner,
-                gpu_alloc::Request {
-                    size: requirements.size,
-                    align_mask,
-                    usage: map_usage_flags(desc.usage),
-                    memory_types: requirements.memory_type_bits,
-                },
-            )
-        };
-
-        let block = match result {
-            Ok(block) => block,
-            Err(gpu_alloc::AllocationError::OutOfHostMemory) => handle_host_oom(),
-            _ => {
-                self.set_oom();
-                unsafe {
-                    self.ash().destroy_buffer(buffer, None);
-                }
-                return Buffer::null(desc.size, desc.usage);
-            }
-        };
-
-        let result = unsafe {
-            self.ash()
-                .bind_buffer_memory(buffer, block.memory().handle, block.offset())
-        };
-
-        match result {
-            Ok(()) => {
-                #[cfg(any(debug_assertions, feature = "debug"))]
-                self.set_object_name(buffer, desc.name);
-
-                let idx = self.inner.buffers.lock().insert(buffer);
-
-                Buffer::new(self.weak(), buffer, desc.size, desc.usage, block, idx)
-            }
-            Err(err) => {
-                unsafe {
-                    self.inner.allocator.lock().dealloc(&*self.inner, block);
-
-                    self.ash().destroy_buffer(buffer, None);
-                }
-
-                match err {
-                    vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
-                    vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
-                        self.set_oom();
-                        Buffer::null(desc.size, desc.usage)
-                    }
-                    _ => unexpected_error(err),
-                }
-            }
-        }
+        buffer
     }
 
     fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
         let size = desc.data.size();
-
-        let mut buffer = self.new_buffer(BufferDesc {
+        let mut buffer = self.new_buffer_mapped(BufferDesc {
             size,
-            usage: desc.usage | BufferUsage::HOST_WRITE,
+            usage: desc.usage,
             name: desc.name,
         });
-
-        if size > 0 && buffer.map(..).is_ok() {
-            if let Ok(mut mapped) = buffer.write_mapped_range(..) {
+        let initialized = match buffer.write_mapped_range(..) {
+            Ok(mut mapped) => {
                 desc.data.write(mapped.as_mut());
+                mapped.flush().is_ok()
             }
-            buffer.unmap();
+            Err(_) => false,
+        };
+        if !initialized {
+            return Buffer::null(size, desc.usage);
         }
-
+        buffer.unmap();
         buffer
     }
 

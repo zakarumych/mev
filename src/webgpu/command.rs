@@ -59,16 +59,14 @@ pub struct CommandBuffer {
 pub struct CommandEncoder {
     encoder: wgpu::CommandEncoder,
     device: Device,
-    queue: wgpu::Queue,
     pending_presents: Vec<wgpu::SurfaceTexture>,
 }
 
 impl CommandEncoder {
-    pub(super) fn new(encoder: wgpu::CommandEncoder, device: Device, queue: wgpu::Queue) -> Self {
+    pub(super) fn new(encoder: wgpu::CommandEncoder, device: Device) -> Self {
         CommandEncoder {
             encoder,
             device,
-            queue,
             pending_presents: Vec::new(),
         }
     }
@@ -93,7 +91,6 @@ impl crate::traits::CommandEncoder for CommandEncoder {
         CopyCommandEncoder {
             encoder: &mut self.encoder,
             device: self.device.clone(),
-            queue: self.queue.clone(),
             _marker: PhantomData,
         }
     }
@@ -224,7 +221,6 @@ impl crate::traits::CommandEncoder for CommandEncoder {
 pub struct CopyCommandEncoder<'enc> {
     encoder: &'enc mut wgpu::CommandEncoder,
     device: Device,
-    queue: wgpu::Queue,
     _marker: PhantomData<&'enc mut CommandEncoder>,
 }
 
@@ -260,13 +256,17 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
             // Create a staging buffer filled with the byte
             let data: Vec<u8> = vec![byte; slice.size()];
 
-            let (buffer, offset) = self.device.allocate_scratch(data.len() as u64);
-
-            self.queue.write_buffer(&buffer, offset, &data[..]);
+            let buffer = self.device.wgpu().create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: &data,
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                },
+            );
 
             self.encoder.copy_buffer_to_buffer(
                 &buffer,
-                offset,
+                0,
                 slice.buffer().wgpu(),
                 slice.offset() as u64,
                 slice.size() as u64,
@@ -274,30 +274,9 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
         }
     }
 
-    fn write_buffer_raw(&mut self, slice: impl AsBufferSlice, data: &[u8]) {
-        if data.is_empty() {
-            return;
-        }
-
-        let slice = slice.as_buffer_slice();
-
-        assert_eq!(
-            data.len(),
-            slice.size(),
-            "data length does not match buffer slice size"
-        );
-
-        let (buffer, offset) = self.device.allocate_scratch(data.len() as u64);
-
-        self.queue.write_buffer(&buffer, offset, data);
-
-        self.encoder.copy_buffer_to_buffer(
-            &buffer,
-            offset,
-            slice.buffer().wgpu(),
-            slice.offset() as u64,
-            slice.size() as u64,
-        );
+    /// Requires `BUFFER_WRITE_COMMAND`, which WebGPU does not support. Panics.
+    fn write_buffer_raw(&mut self, _slice: impl AsBufferSlice, _data: &[u8]) {
+        panic!("BUFFER_WRITE_COMMAND is not supported in the WebGPU backend; use Queue::write_buffer instead");
     }
 
     fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit) {
@@ -519,25 +498,34 @@ impl crate::traits::CopyCommandEncoder for CopyCommandEncoder<'_> {
     }
 }
 
+pub(crate) trait NativeArgumentsEncoder {
+    fn wgpu_device(&self) -> &wgpu::Device;
+
+    fn set_bind_group(&mut self, group: u32, bind_group: &wgpu::BindGroup);
+
+    fn bind_group_layout(&self, group: u32) -> &wgpu::BindGroupLayout;
+}
+
 pub struct ComputeCommandEncoder<'enc> {
     pass: wgpu::ComputePass<'enc>,
     current_pipeline: Option<ComputePipeline>,
     device: Device,
 }
 
-impl ComputeCommandEncoder<'_> {
+#[hidden_trait]
+impl NativeArgumentsEncoder for ComputeCommandEncoder<'_> {
     #[doc(hidden)]
-    pub fn wgpu_device(&self) -> &wgpu::Device {
+    fn wgpu_device(&self) -> &wgpu::Device {
         self.device.wgpu()
     }
 
     #[doc(hidden)]
-    pub fn set_bind_group(&mut self, group: u32, bind_group: &wgpu::BindGroup) {
+    fn set_bind_group(&mut self, group: u32, bind_group: &wgpu::BindGroup) {
         self.pass.set_bind_group(group, bind_group, &[]);
     }
 
     #[doc(hidden)]
-    pub fn bind_group_layout(&self, group: u32) -> &wgpu::BindGroupLayout {
+    fn bind_group_layout(&self, group: u32) -> &wgpu::BindGroupLayout {
         self.current_pipeline
             .as_ref()
             .expect("No pipeline set")
@@ -596,19 +584,20 @@ pub struct RenderCommandEncoder<'enc> {
     device: Device,
 }
 
-impl RenderCommandEncoder<'_> {
+#[hidden_trait]
+impl NativeArgumentsEncoder for RenderCommandEncoder<'_> {
     #[doc(hidden)]
-    pub fn wgpu_device(&self) -> &wgpu::Device {
+    fn wgpu_device(&self) -> &wgpu::Device {
         self.device.wgpu()
     }
 
     #[doc(hidden)]
-    pub fn set_bind_group(&mut self, group: u32, bind_group: &wgpu::BindGroup) {
+    fn set_bind_group(&mut self, group: u32, bind_group: &wgpu::BindGroup) {
         self.pass.set_bind_group(group, bind_group, &[]);
     }
 
     #[doc(hidden)]
-    pub fn bind_group_layout(&self, group: u32) -> &wgpu::BindGroupLayout {
+    fn bind_group_layout(&self, group: u32) -> &wgpu::BindGroupLayout {
         self.current_pipeline
             .as_ref()
             .expect("No pipeline set")

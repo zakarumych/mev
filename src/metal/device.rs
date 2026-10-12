@@ -1,4 +1,7 @@
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use hashbrown::HashMap;
 use mev_proc::hidden_trait;
@@ -10,8 +13,8 @@ use objc2::{
 use objc2_core_foundation::{CGFloat, CGRect};
 use objc2_foundation::{NSObject, NSString, NSUInteger};
 use objc2_metal::{
-    MTLCompileOptions, MTLComputePipelineDescriptor, MTLDevice, MTLLanguageVersion, MTLLibrary,
-    MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions,
+    MTLCompileOptions, MTLComputePipelineDescriptor, MTLDevice, MTLGPUFamily, MTLLanguageVersion,
+    MTLLibrary, MTLPipelineOption, MTLRenderPipelineDescriptor, MTLResource, MTLResourceOptions,
     MTLSamplerDescriptor, MTLStorageMode, MTLTextureDescriptor, MTLTextureType,
     MTLVertexAttributeDescriptor, MTLVertexBufferLayoutDescriptor, MTLVertexDescriptor,
     MTLVertexStepFunction,
@@ -37,6 +40,7 @@ use super::{
 #[derive(Clone)]
 pub struct Device {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
+    io: Option<Arc<Mutex<super::io::QueueState>>>,
 }
 
 unsafe impl Sync for Device {}
@@ -59,15 +63,46 @@ impl PartialEq for Device {
 impl Eq for Device {}
 
 impl Device {
-    pub(super) fn new(device: Retained<ProtocolObject<dyn MTLDevice>>, queues: usize) -> Self {
-        Device { device }
+    pub(crate) fn compute_kernel_limits(&self) -> crate::generic::ComputeKernelLimits {
+        let max_threads = self.device.maxThreadsPerThreadgroup();
+        let max_buffer_range = self.device.maxBufferLength();
+        let subgroup_arithmetic = self.device.supportsFamily(MTLGPUFamily::Apple7)
+            || self.device.supportsFamily(MTLGPUFamily::Mac2);
+
+        crate::generic::ComputeKernelLimits {
+            max_workgroup_size: max_threads.width.min(u32::MAX as usize) as u32,
+            max_workgroup_memory: self.device.maxThreadgroupMemoryLength(),
+            max_storage_buffers: 29,
+            max_uniform_buffers: 29,
+            max_buffer_bindings: 29,
+            max_storage_buffer_range: max_buffer_range,
+            max_uniform_buffer_range: max_buffer_range,
+            storage_offset_alignment: 256,
+            uniform_offset_alignment: 256,
+            max_dispatch_count: u32::MAX,
+            max_subgroups_per_workgroup: None,
+            subgroup_arithmetic,
+            shader_f16: true,
+        }
     }
 
-    pub(super) fn set_last_cbuf(
+    pub(super) fn new(
         device: Retained<ProtocolObject<dyn MTLDevice>>,
-        queues: usize,
-    ) -> Self {
-        Device { device }
+        features: crate::Features,
+    ) -> Result<Self, crate::DeviceError> {
+        let io = if features.contains(crate::Features::IO_COMMANDS) {
+            Some(Arc::new(Mutex::new(super::io::QueueState::new(&device)?)))
+        } else {
+            None
+        };
+        Ok(Device { device, io })
+    }
+
+    pub(super) fn io_queue(&self) -> Arc<Mutex<super::io::QueueState>> {
+        self.io
+            .as_ref()
+            .expect("IO_COMMANDS feature is not enabled")
+            .clone()
     }
 }
 
@@ -82,6 +117,11 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait]
 impl crate::traits::Device for Device {
+    /// Creates an independent batch of file loads. Panics unless `IO_COMMANDS` is enabled.
+    fn new_io_batch(&self) -> super::IoBatch {
+        super::IoBatch::new(self.clone(), self.io_queue())
+    }
+
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
             LibraryInput::Source(source) => {
@@ -335,59 +375,39 @@ impl crate::traits::Device for Device {
         Buffer::new(buffer, desc.usage)
     }
 
+    /// Creates a buffer with its full logical range mapped for writing.
+    /// Requires `Features::BUFFER_MAP_AT_CREATION`; initial writes do not
+    /// require `HOST_WRITE`. Drop mapped views and unmap before GPU use.
+    fn new_buffer_mapped(&self, desc: BufferDesc) -> Buffer {
+        let buffer = self
+            .device
+            .newBufferWithLength_options(
+                desc.size as NSUInteger,
+                MTLResourceOptions::StorageModeShared,
+            )
+            .expect("Failed to create buffer");
+        buffer.setLabel(Some(&NSString::from_str(desc.name)));
+        Buffer::initially_mapped(buffer, desc.usage)
+    }
+
     fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
-        match desc.data.as_bytes() {
-            Some(bytes) => {
-                let Ok(len) = u64::try_from(bytes.len()) else {
-                    size_exceeds_u64();
-                };
-
-                let mut options = MTLResourceOptions::empty();
-
-                if desc
-                    .usage
-                    .intersects(crate::BufferUsage::HOST_READ | crate::BufferUsage::HOST_WRITE)
-                {
-                    if desc.usage.contains(crate::BufferUsage::HOST_WRITE) {
-                        options |= MTLResourceOptions::CPUCacheModeWriteCombined;
-                    }
-                    options |= MTLResourceOptions::StorageModeShared;
-                } else {
-                    options |= MTLResourceOptions::StorageModePrivate;
-                }
-
-                let buffer = unsafe {
-                    self.device.newBufferWithBytes_length_options(
-                        std::ptr::NonNull::from(bytes).cast(),
-                        len as NSUInteger,
-                        options,
-                    )
-                }
-                .expect("Failed to create buffer");
-                buffer.setLabel(Some(&NSString::from_str(desc.name)));
-                Buffer::new(buffer, desc.usage)
-            }
-            None => {
-                let size = desc.data.size();
-
-                let mut buffer = self.new_buffer(BufferDesc {
-                    size,
-                    usage: desc.usage | crate::BufferUsage::HOST_WRITE,
-                    name: desc.name,
-                });
-
-                if size > 0 {
-                    if buffer.map(..).is_ok() {
-                        if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                            desc.data.write(mapped.as_mut());
-                        }
-                        buffer.unmap();
-                    }
-                }
-
-                buffer
-            }
+        let size = desc.data.size();
+        let mut buffer = self.new_buffer_mapped(BufferDesc {
+            size,
+            usage: desc.usage,
+            name: desc.name,
+        });
+        {
+            let mut mapped = buffer
+                .write_mapped_range(..)
+                .expect("Failed to access initial buffer mapping");
+            desc.data.write(mapped.as_mut());
+            mapped
+                .flush()
+                .expect("Failed to flush initial buffer mapping");
         }
+        buffer.unmap();
+        buffer
     }
 
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {

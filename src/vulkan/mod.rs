@@ -6,12 +6,16 @@ mod access;
 mod acst;
 mod arguments;
 mod buffer;
+mod mapped;
 mod command;
 mod compute;
 mod device;
+mod event;
 mod from;
 mod image;
 mod instance;
+#[path = "../unsupported_io.rs"]
+mod io;
 mod layout;
 mod queue;
 mod refs;
@@ -25,14 +29,17 @@ use crate::generic::{DeviceError, OutOfMemory, PixelFormat};
 pub use self::{
     acst::{Blas, Tlas},
     buffer::Buffer,
+    mapped::{BufferMappedRange, BufferMappedRangeMut},
     command::{
         AccelerationStructureCommandEncoder, CommandBuffer, CommandEncoder, ComputeCommandEncoder,
         CopyCommandEncoder, RenderCommandEncoder,
     },
     compute::ComputePipeline,
     device::Device,
+    event::Event,
     image::Image,
     instance::Instance,
+    io::{IoBatch, IoStatus},
     queue::Queue,
     render::RenderPipeline,
     sampler::Sampler,
@@ -150,3 +157,5 @@ pub mod for_macro {
     };
     pub use ash::vk::DescriptorUpdateTemplateEntry;
 }
+
+pub(crate) trait Resource: Send + Sync + Sized + 'static {}

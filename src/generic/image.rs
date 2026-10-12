@@ -508,6 +508,7 @@ fn array_layers_unfit() -> ! {
 }
 
 /// Description used for image creation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageDesc<'a, T: ImageDims = ImageExtent> {
     /// Image dims: encodes extent, layer count, and which typed image
     /// handle [`Device::new_image`](crate::backend::Device::new_image)

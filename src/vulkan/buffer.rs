@@ -1,3 +1,4 @@
+use super::mapped::{BufferMappedRange, BufferMappedRangeMut};
 use core::fmt;
 use std::{
     hash::{Hash, Hasher},
@@ -13,7 +14,7 @@ use gpu_alloc::MemoryBlock;
 use mev_proc::hidden_trait;
 
 use crate::{
-    BufferMappedRange, BufferMappedRangeMut, DeviceError,
+    DeviceError,
     backend::handle_host_oom,
     generic::{ArgumentKind, Automatic, BufferUsage, Storage, Uniform},
 };
@@ -25,6 +26,7 @@ use super::{
 };
 
 struct Mapped {
+    initial: bool,
     ptr: NonNull<u8>,
     offset: usize,
     size: usize,
@@ -94,6 +96,84 @@ impl DeviceOwned for Buffer {
 }
 
 impl Buffer {
+    pub(super) fn map_initial(&mut self) -> Result<(), DeviceError> {
+        self.map_impl(.., true)
+    }
+
+    fn map_impl<R>(&mut self, range: R, initial: bool) -> Result<(), DeviceError>
+    where
+        R: crate::generic::BufferRange,
+    {
+        assert!(
+            initial
+                || self
+                    .usage()
+                    .intersects(BufferUsage::HOST_READ | BufferUsage::HOST_WRITE),
+            "Buffer requires host usage for mapping"
+        );
+        let range = range.range(self.size());
+        assert!(
+            range.start <= range.end && range.end <= self.size(),
+            "Buffer range out of bounds"
+        );
+        assert!(
+            initial || range.start != range.end,
+            "Cannot map an empty range after creation"
+        );
+
+        let inner = self.detatched_inner();
+
+        let Some(block) = &mut inner.block else {
+            return Err(DeviceError::OutOfMemory);
+        };
+
+        let Some(device) = inner.owner.upgrade() else {
+            return Err(DeviceError::DeviceLost);
+        };
+
+        assert!(
+            inner.mapped.is_none(),
+            "Buffer is already mapped, cannot map it again"
+        );
+
+        let result = unsafe {
+            block.map(
+                device.inner(),
+                range.start as u64,
+                (range.end - range.start).max(1),
+            )
+        };
+
+        let ptr = match result {
+            Ok(ptr) => ptr,
+            Err(gpu_alloc::MapError::AlreadyMapped) => {
+                panic!("Buffer is already mapped, cannot map it again");
+            }
+            Err(gpu_alloc::MapError::NonHostVisible) => {
+                panic!("Buffer is not host visible, cannot map it");
+            }
+            Err(gpu_alloc::MapError::MapFailed) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfHostMemory) => {
+                handle_host_oom();
+            }
+            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
+                device.set_oom();
+                return Err(DeviceError::OutOfMemory);
+            }
+        };
+
+        inner.mapped = Some(Mapped {
+            initial,
+            ptr,
+            offset: range.start,
+            size: range.end - range.start,
+        });
+
+        Ok(())
+    }
+
     #[inline]
     pub(super) fn new(
         owner: WeakDevice,
@@ -136,7 +216,7 @@ impl Buffer {
     }
 
     #[inline(always)]
-    pub fn handle(&self) -> vk::Buffer {
+    pub(super) fn handle(&self) -> vk::Buffer {
         self.handle
     }
 
@@ -170,6 +250,9 @@ impl Buffer {
     }
 
     pub(crate) fn flush_range(&mut self, offset: usize, size: usize) -> Result<(), DeviceError> {
+        if size == 0 {
+            return Ok(());
+        }
         let inner = self.detatched_inner();
 
         let Some(block) = &mut inner.block else {
@@ -203,6 +286,15 @@ impl crate::traits::Resource for Buffer {}
 
 #[hidden_trait]
 impl crate::traits::Buffer for Buffer {
+    /// Returns buffer slice with given range.
+    fn slice<R: crate::BufferRange>(&self, range: R) -> crate::BufferSlice<'_> {
+        crate::BufferSlice::from(self).slice(range)
+    }
+
+    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
+    fn split_at(&self, at: usize) -> (crate::BufferSlice<'_>, crate::BufferSlice<'_>) {
+        crate::BufferSlice::from(self).split_at(at)
+    }
     /// Returns the buffer size in bytes.
     #[inline(always)]
     fn size(&self) -> usize {
@@ -234,53 +326,7 @@ impl crate::traits::Buffer for Buffer {
     where
         R: crate::generic::BufferRange,
     {
-        let range = range.range(self.size());
-
-        let inner = self.detatched_inner();
-
-        let Some(block) = &mut inner.block else {
-            return Err(DeviceError::OutOfMemory);
-        };
-
-        let Some(device) = inner.owner.upgrade() else {
-            return Err(DeviceError::DeviceLost);
-        };
-
-        assert!(
-            inner.mapped.is_none(),
-            "Buffer is already mapped, cannot map it again"
-        );
-
-        let result =
-            unsafe { block.map(device.inner(), range.start as u64, range.end - range.start) };
-
-        let ptr = match result {
-            Ok(ptr) => ptr,
-            Err(gpu_alloc::MapError::AlreadyMapped) => {
-                panic!("Buffer is already mapped, cannot map it again");
-            }
-            Err(gpu_alloc::MapError::NonHostVisible) => {
-                panic!("Buffer is not host visible, cannot map it");
-            }
-            Err(gpu_alloc::MapError::MapFailed) => {
-                handle_host_oom();
-            }
-            Err(gpu_alloc::MapError::OutOfHostMemory) => {
-                handle_host_oom();
-            }
-            Err(gpu_alloc::MapError::OutOfDeviceMemory) => {
-                device.set_oom();
-                return Err(DeviceError::OutOfMemory);
-            }
-        };
-
-        inner.mapped = Some(Mapped {
-            ptr,
-            offset: range.start,
-            size: range.end - range.start,
-        });
-
-        Ok(())
+        self.map_impl(range, false)
     }
 
     fn unmap(&mut self) {
@@ -308,6 +354,10 @@ impl crate::traits::Buffer for Buffer {
     where
         R: crate::generic::BufferRange,
     {
+        assert!(
+            self.usage().contains(BufferUsage::HOST_READ),
+            "Buffer requires HOST_READ"
+        );
         let range = range.range(self.size());
 
         assert!(range.start <= range.end, "Invalid range");
@@ -337,11 +387,15 @@ impl crate::traits::Buffer for Buffer {
         );
 
         let result = unsafe {
-            block.invalidate_range(
-                device.inner(),
-                range.start as u64,
-                (range.end - range.start) as u64,
-            )
+            if range.start == range.end {
+                Ok(())
+            } else {
+                block.invalidate_range(
+                    device.inner(),
+                    range.start as u64,
+                    (range.end - range.start) as u64,
+                )
+            }
         };
 
         match result {
@@ -392,6 +446,11 @@ impl crate::traits::Buffer for Buffer {
         };
 
         assert!(
+            mapped.initial || inner.usage.contains(BufferUsage::HOST_WRITE),
+            "Buffer requires HOST_WRITE after its initial mapping"
+        );
+
+        assert!(
             mapped.offset <= range.start,
             "Range start is out of mapped region"
         );
@@ -402,11 +461,15 @@ impl crate::traits::Buffer for Buffer {
         );
 
         let result = unsafe {
-            block.invalidate_range(
-                device.inner(),
-                range.start as u64,
-                (range.end - range.start) as u64,
-            )
+            if range.start == range.end {
+                Ok(())
+            } else {
+                block.invalidate_range(
+                    device.inner(),
+                    range.start as u64,
+                    (range.end - range.start) as u64,
+                )
+            }
         };
 
         match result {
@@ -436,6 +499,10 @@ impl crate::traits::Buffer for Buffer {
 
     #[inline]
     fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), DeviceError> {
+        assert!(
+            self.usage().contains(BufferUsage::HOST_WRITE),
+            "Buffer requires HOST_WRITE"
+        );
         let inner = self.detatched_inner();
 
         let Some(device) = inner.owner.upgrade() else {
@@ -501,6 +568,10 @@ impl crate::traits::Buffer for Buffer {
 
     #[inline]
     fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError> {
+        assert!(
+            self.usage().contains(BufferUsage::HOST_READ),
+            "Buffer requires HOST_READ"
+        );
         let inner = self.detatched_inner();
 
         let Some(device) = inner.owner.upgrade() else {
@@ -630,5 +701,114 @@ impl ArgumentsField<Storage> for Buffer {
     #[inline(always)]
     fn add_refs(&self, refs: &mut Refs) {
         refs.add_buffer(self.clone());
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use crate::{
+        BufferDesc, BufferInitDesc, BufferUsage, DeviceDesc, Features, InitMapped, Instance,
+        PipelineStages, QueueFlags,
+    };
+
+    #[test]
+    #[ignore = "requires a Vulkan device"]
+    fn mapped_creation_preserves_usage_and_initializes_contents() {
+        let instance = Instance::load().expect("Vulkan instance");
+        let (idx, family) = instance
+            .capabilities()
+            .devices
+            .iter()
+            .enumerate()
+            .find_map(|(idx, caps)| {
+                caps.families
+                    .iter()
+                    .position(|family| family.queue_flags.contains(QueueFlags::TRANSFER))
+                    .map(|family| (idx, family as u32))
+            })
+            .expect("Vulkan transfer queue");
+        let features = instance.capabilities().devices[idx].features;
+        assert!(features.contains(
+            Features::BUFFER_MAP
+                | Features::BUFFER_MAP_AT_CREATION
+                | Features::BUFFER_WRITE_COMMAND
+        ));
+        assert!(!features.contains(Features::BUFFER_WRITE_QUEUE));
+        let (device, mut queues) = instance
+            .new_device(DeviceDesc {
+                idx,
+                queues: &[family],
+                features: Features::BUFFER_MAP | Features::BUFFER_MAP_AT_CREATION,
+            })
+            .expect("Vulkan device");
+        let mut queue = queues.pop().expect("requested queue");
+        let usage = BufferUsage::TRANSFER_SRC;
+        let mut mapped = device.new_buffer_mapped(BufferDesc {
+            size: 4,
+            usage,
+            name: "mapped source",
+        });
+        assert_eq!(mapped.usage(), usage);
+        {
+            let mut view = mapped.write_mapped_range(..).expect("initial mapping");
+            view.write(0, &[1, 2, 3, 4]);
+            view.flush().expect("flush initial writes");
+        }
+        mapped.unmap();
+        assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| mapped.map(..))).is_err());
+        let mut readback = device.new_buffer(BufferDesc {
+            size: 4,
+            usage: BufferUsage::TRANSFER_DST | BufferUsage::HOST_READ,
+            name: "readback",
+        });
+        let mut encoder = queue.new_command_encoder();
+        encoder.copy().copy_buffer_to_buffer(&mapped, &readback);
+        queue
+            .submit_checkpoint([encoder.finish()])
+            .expect("submit copy");
+        queue.wait_idle().expect("wait for copy");
+        drop(queue);
+        let mut bytes = [0; 4];
+        readback.read(0, &mut bytes).expect("readback contents");
+        assert_eq!(bytes, [1, 2, 3, 4]);
+        for size in [0, 3, 4, 17] {
+            let expected = vec![0x39u8; size];
+            let mut buffer = device.new_buffer_init(BufferInitDesc {
+                data: expected.as_slice(),
+                usage: BufferUsage::HOST_READ | BufferUsage::TRANSFER_SRC,
+                name: "byte initializer",
+            });
+            assert_eq!(
+                buffer.usage(),
+                BufferUsage::HOST_READ | BufferUsage::TRANSFER_SRC
+            );
+            assert_eq!(buffer.size(), size);
+            if size != 0 {
+                let mut actual = vec![0; size];
+                buffer
+                    .read(0, &mut actual)
+                    .expect("read byte initialization");
+                assert_eq!(actual, expected);
+            }
+            let mut buffer = device.new_buffer_init(BufferInitDesc {
+                data: InitMapped {
+                    size,
+                    write: |bytes: &mut [u8]| bytes.fill(0x57),
+                },
+                usage: BufferUsage::HOST_READ | BufferUsage::TRANSFER_SRC,
+                name: "closure initializer",
+            });
+            assert_eq!(
+                buffer.usage(),
+                BufferUsage::HOST_READ | BufferUsage::TRANSFER_SRC
+            );
+            if size != 0 {
+                buffer.map(..).expect("later read mapping");
+                let mapped = buffer.read_mapped_range(..).expect("read mapped contents");
+                assert_eq!(mapped.as_ref(), vec![0x57; size]);
+                drop(mapped);
+                buffer.unmap();
+            }
+        }
     }
 }

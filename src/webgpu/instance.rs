@@ -18,7 +18,26 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub async fn load_async() -> Result<Self, DeviceError> {
+    pub(super) fn wgpu_instance(&self) -> Rc<wgpu::Instance> {
+        self.instance.clone()
+    }
+
+    pub(super) fn wgpu_adapters(&self) -> &[wgpu::Adapter] {
+        &self.adapters
+    }
+}
+
+impl fmt::Debug for Instance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Instance").finish()
+    }
+}
+
+impl crate::traits::Resource for Instance {}
+
+#[hidden_trait]
+impl crate::traits::Instance for Instance {
+    async fn load_async() -> Result<Self, DeviceError> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             flags: wgpu::InstanceFlags::default(),
@@ -33,7 +52,9 @@ impl Instance {
             devices: adapters
                 .iter()
                 .map(|adapter| {
-                    let mut features = Features::SURFACE;
+                    let mut features = Features::SURFACE
+                        | Features::BUFFER_MAP_AT_CREATION
+                        | Features::BUFFER_WRITE_QUEUE;
 
                     if adapter
                         .features()
@@ -72,7 +93,7 @@ impl Instance {
         })
     }
 
-    pub fn load() -> Result<Self, DeviceError> {
+    fn load() -> Result<Self, DeviceError> {
         #[cfg(target_arch = "wasm32")]
         {
             panic!("Synchronous loading is not supported on wasm32. Use `load_async` instead.");
@@ -84,25 +105,6 @@ impl Instance {
         }
     }
 
-    pub(super) fn wgpu_instance(&self) -> Rc<wgpu::Instance> {
-        self.instance.clone()
-    }
-
-    pub(super) fn wgpu_adapters(&self) -> &[wgpu::Adapter] {
-        &self.adapters
-    }
-}
-
-impl fmt::Debug for Instance {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_tuple("Instance").finish()
-    }
-}
-
-impl crate::traits::Resource for Instance {}
-
-// #[hidden_trait]
-impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }
@@ -142,6 +144,13 @@ impl crate::traits::Instance for Instance {
             "Device index out of bounds"
         );
 
+        assert!(
+            self.capabilities.devices[info.idx]
+                .features
+                .contains(info.features),
+            "Requested device features are unsupported"
+        );
+
         let adapter = &self.adapters[info.idx];
 
         let available_features = adapter.features();
@@ -151,6 +160,14 @@ impl crate::traits::Instance for Instance {
 
         if available_features.contains(wgpu::Features::IMMEDIATES) {
             required_features |= wgpu::Features::IMMEDIATES;
+        }
+
+        if available_features.contains(wgpu::Features::SUBGROUP) {
+            required_features |= wgpu::Features::SUBGROUP;
+        }
+
+        if available_features.contains(wgpu::Features::SHADER_F16) {
+            required_features |= wgpu::Features::SHADER_F16;
         }
 
         if info.features.contains(Features::TEXTURE_COMPRESSION_BC) {

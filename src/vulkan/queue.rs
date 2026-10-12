@@ -4,10 +4,13 @@ use ash::vk;
 use mev_proc::hidden_trait;
 use parking_lot::Mutex;
 
-use crate::generic::{DeviceError, OutOfMemory, PipelineStages, QueueFlags};
+use crate::generic::{
+    AsBufferSlice, DeviceError, OutOfMemory, PipelineStages, QueueFlags, SubmissionSync, SyncError,
+    validate_submission_sync,
+};
 
 use super::{
-    CommandBuffer, CommandEncoder, device::Device, from::IntoAsh, handle_host_oom,
+    CommandBuffer, CommandEncoder, Event, device::Device, from::IntoAsh, handle_host_oom,
     map_device_error, map_oom, refs::Refs, surface::Frame, unexpected_error,
 };
 
@@ -105,6 +108,7 @@ struct Epoch {
     fence: vk::Fence,
     id: NonZero<u64>,
     refs: Vec<Refs>,
+    events: Vec<Event>,
 
     /// Contains owning command pool handle for each command buffer in the epoch.
     cbufs: Vec<(vk::CommandBuffer, vk::CommandPool)>,
@@ -146,8 +150,11 @@ impl Epoch {
         &mut self,
         device: &ash::Device,
         pools: &mut VecDeque<Pool>,
+        free_refs: &mut Vec<Refs>,
     ) -> Result<(), OutOfMemory> {
         self.refs.iter_mut().for_each(|r| r.clear());
+        free_refs.append(&mut self.refs);
+        self.events.clear();
 
         for (cbuf, pool) in self.cbufs.drain(..) {
             // Safety: caller must ensure pool exists.
@@ -189,6 +196,7 @@ impl PendingEpochs {
         &mut self,
         device: &Device,
         pools: &mut VecDeque<Pool>,
+        free_refs: &mut Vec<Refs>,
     ) -> Result<Epoch, DeviceError> {
         let array = self.array.get_mut();
         if array.len() < MAX_EPOCHS {
@@ -200,6 +208,7 @@ impl PendingEpochs {
                 fence,
                 id: NonZero::new(array.len() as u64 + 1).unwrap(),
                 refs: Vec::new(),
+                events: Vec::new(),
                 cbufs: Vec::new(),
             });
         }
@@ -214,7 +223,7 @@ impl PendingEpochs {
                 .map_err(map_device_error)?;
 
             self.last_finished_epoch = front_epoch.id.get();
-            front_epoch.reset(device.ash(), pools)?;
+            front_epoch.reset(device.ash(), pools, free_refs)?;
         }
 
         // Epoch is properly reset and ready to be reused.
@@ -237,6 +246,7 @@ impl PendingEpochs {
         let mut array = self.array.lock();
         for epoch in array.iter_mut() {
             epoch.refs.clear();
+            epoch.events.clear();
         }
     }
 }
@@ -269,6 +279,13 @@ pub struct Queue {
 
     // Signals to add into next submission
     signal_semaphores: Vec<vk::Semaphore>,
+
+    // Reused arrays combining timeline events and frame binary semaphores.
+    timeline_waits: Vec<vk::Semaphore>,
+    timeline_wait_stages: Vec<vk::PipelineStageFlags>,
+    timeline_signals: Vec<vk::Semaphore>,
+    timeline_wait_values: Vec<u64>,
+    timeline_signal_values: Vec<u64>,
 
     /// Current epoch that is being filled with resources from command buffers.
     this_epoch: Option<Epoch>,
@@ -319,6 +336,10 @@ impl fmt::Debug for Queue {
 }
 
 impl Queue {
+    #[cfg(test)]
+    pub(super) fn handle_for_test(&self) -> vk::Queue {
+        self.handle
+    }
     pub(super) fn new(device: Device, handle: vk::Queue, flags: QueueFlags, family: u32) -> Self {
         Queue {
             device,
@@ -328,6 +349,11 @@ impl Queue {
             wait_semaphores: Vec::new(),
             wait_stages: Vec::new(),
             signal_semaphores: Vec::new(),
+            timeline_waits: Vec::new(),
+            timeline_wait_stages: Vec::new(),
+            timeline_signals: Vec::new(),
+            timeline_wait_values: Vec::new(),
+            timeline_signal_values: Vec::new(),
             pools: VecDeque::new(),
             free_refs: Vec::new(),
             this_epoch: None,
@@ -376,6 +402,7 @@ impl Queue {
     fn get_pool<'a>(
         pools: &'a mut VecDeque<Pool>,
         device: &ash::Device,
+        family: u32,
     ) -> Result<&'a mut Pool, OutOfMemory> {
         let more_pools = pools.len() < MAX_POOLS;
         match pools.back() {
@@ -389,11 +416,13 @@ impl Queue {
                 fn create_pool(
                     device: &ash::Device,
                     pools: &mut VecDeque<Pool>,
+                    family: u32,
                 ) -> Result<(), OutOfMemory> {
                     let pool = unsafe {
                         device.create_command_pool(
                             &vk::CommandPoolCreateInfo::default()
-                                .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                                .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+                                .queue_family_index(family),
                             None,
                         )
                     }
@@ -409,7 +438,7 @@ impl Queue {
                     Ok(())
                 }
 
-                create_pool(device, pools)?;
+                create_pool(device, pools, family)?;
             }
         }
         Ok(unsafe { pools.back_mut().unwrap_unchecked() })
@@ -433,16 +462,62 @@ impl Queue {
         this_epoch: &'a mut Option<Epoch>,
         pending_epochs: &mut PendingEpochs,
         pools: &mut VecDeque<Pool>,
+        free_refs: &mut Vec<Refs>,
         device: &Device,
     ) -> Result<&'a mut Epoch, DeviceError> {
         if let Some(epoch) = this_epoch {
             return Ok(epoch);
         }
 
-        Ok(this_epoch.get_or_insert(pending_epochs.get_epoch(device, pools)?))
+        Ok(this_epoch.get_or_insert(pending_epochs.get_epoch(device, pools, free_refs)?))
     }
 
-    fn submit_impl<I>(&mut self, command_buffers: I, checkpoint: bool) -> Result<u64, DeviceError>
+    fn submit_sync_impl<I>(
+        &mut self,
+        command_buffers: I,
+        checkpoint: bool,
+        sync: SubmissionSync<'_>,
+    ) -> Result<u64, SyncError>
+    where
+        I: IntoIterator<Item = CommandBuffer>,
+    {
+        validate_submission_sync(sync)?;
+        if (!sync.waits.is_empty() || !sync.signals.is_empty())
+            && !self.device.timeline_events_enabled()
+        {
+            return Err(SyncError::Unsupported);
+        }
+        for point in sync.waits.iter().chain(sync.signals) {
+            if point.event.device() != &self.device {
+                return Err(SyncError::InvalidInput(
+                    "event belongs to another device".into(),
+                ));
+            }
+            if point.value.abs_diff(point.event.value()?)
+                > self.device.max_timeline_value_difference()
+            {
+                return Err(SyncError::InvalidInput(
+                    "event value exceeds the device timeline difference limit".into(),
+                ));
+            }
+        }
+        for point in sync.signals {
+            if point.value <= point.event.value()? {
+                return Err(SyncError::InvalidInput(
+                    "signal value must exceed completed value".into(),
+                ));
+            }
+        }
+        self.submit_impl(command_buffers, checkpoint, sync)
+            .map_err(Into::into)
+    }
+
+    fn submit_impl<I>(
+        &mut self,
+        command_buffers: I,
+        checkpoint: bool,
+        sync: SubmissionSync<'_>,
+    ) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = CommandBuffer>,
     {
@@ -456,6 +531,7 @@ impl Queue {
         let present_semaphores_len = self.present_semaphores.len();
         let present_swapchains_len = self.present_swapchains.len();
         let present_indices_len = self.present_indices.len();
+        let present_fences_len = self.present_fences.len();
 
         // Add handle to list of command buffers to submit.
         // Collect frames to present and command buffers into the cache array.
@@ -482,6 +558,7 @@ impl Queue {
                 &mut self.this_epoch,
                 &mut self.pending_epochs,
                 &mut self.pools,
+                &mut self.free_refs,
                 &self.device,
             ) {
                 Ok(epoch) => {
@@ -493,22 +570,61 @@ impl Queue {
                         ash::vk::Fence::null()
                     };
 
-                    let result = unsafe {
-                        self.device.ash().queue_submit(
-                            self.handle,
-                            &[vk::SubmitInfo::default()
-                                .wait_semaphores(&self.wait_semaphores)
-                                .wait_dst_stage_mask(&self.wait_stages)
-                                .signal_semaphores(&self.signal_semaphores)
-                                .command_buffers(&self.command_buffer_submit)],
-                            fence,
-                        )
-                    };
+                    let uses_timeline = !sync.waits.is_empty() || !sync.signals.is_empty();
+                    if uses_timeline {
+                        self.timeline_waits.clear();
+                        self.timeline_wait_stages.clear();
+                        self.timeline_signals.clear();
+                        self.timeline_wait_values.clear();
+                        self.timeline_signal_values.clear();
+                        self.timeline_waits.extend_from_slice(&self.wait_semaphores);
+                        self.timeline_wait_stages
+                            .extend_from_slice(&self.wait_stages);
+                        self.timeline_signals
+                            .extend_from_slice(&self.signal_semaphores);
+                        self.timeline_wait_values
+                            .resize(self.wait_semaphores.len(), 0);
+                        self.timeline_signal_values
+                            .resize(self.signal_semaphores.len(), 0);
+                        for point in sync.waits {
+                            self.timeline_waits.push(point.event.handle());
+                            self.timeline_wait_stages
+                                .push(vk::PipelineStageFlags::ALL_COMMANDS);
+                            self.timeline_wait_values.push(point.value);
+                        }
+                        for point in sync.signals {
+                            self.timeline_signals.push(point.event.handle());
+                            self.timeline_signal_values.push(point.value);
+                        }
+                    }
+                    let mut timeline = vk::TimelineSemaphoreSubmitInfo::default()
+                        .wait_semaphore_values(&self.timeline_wait_values)
+                        .signal_semaphore_values(&self.timeline_signal_values);
+                    let mut info = vk::SubmitInfo::default()
+                        .wait_semaphores(&self.wait_semaphores)
+                        .wait_dst_stage_mask(&self.wait_stages)
+                        .signal_semaphores(&self.signal_semaphores)
+                        .command_buffers(&self.command_buffer_submit);
+                    if uses_timeline {
+                        info = info
+                            .wait_semaphores(&self.timeline_waits)
+                            .wait_dst_stage_mask(&self.timeline_wait_stages)
+                            .signal_semaphores(&self.timeline_signals)
+                            .push_next(&mut timeline);
+                    }
+                    let result =
+                        unsafe { self.device.ash().queue_submit(self.handle, &[info], fence) };
 
                     self.command_buffer_submit.clear();
 
                     match result {
                         Ok(()) => {
+                            epoch.events.extend(
+                                sync.waits
+                                    .iter()
+                                    .chain(sync.signals)
+                                    .map(|point| point.event.clone()),
+                            );
                             // Drain refs from command buffers and add them to the epoch
                             // when submitting was successful.
                             for cbuf in self.command_buffers.drain(..) {
@@ -525,6 +641,7 @@ impl Queue {
                             self.present_semaphores.truncate(present_semaphores_len);
                             self.present_swapchains.truncate(present_swapchains_len);
                             self.present_indices.truncate(present_indices_len);
+                            self.present_fences.truncate(present_fences_len);
 
                             match err {
                                 vk::Result::ERROR_OUT_OF_HOST_MEMORY => handle_host_oom(),
@@ -549,18 +666,17 @@ impl Queue {
                                 vk::Result::ERROR_DEVICE_LOST => {
                                     self.device.set_lost();
                                     submit_result = Err(DeviceError::DeviceLost);
-
-                                    // Nothing can be done now.
-                                    self.command_buffers.clear();
                                 }
                                 _ => unexpected_error(err),
                             }
                         }
                     }
 
-                    self.wait_semaphores.clear();
-                    self.wait_stages.clear();
-                    self.signal_semaphores.clear();
+                    if result.is_ok() {
+                        self.wait_semaphores.clear();
+                        self.wait_stages.clear();
+                        self.signal_semaphores.clear();
+                    }
                 }
                 Err(DeviceError::OutOfMemory) => {
                     self.device.set_oom();
@@ -569,6 +685,24 @@ impl Queue {
                 Err(DeviceError::DeviceLost) => {
                     self.device.set_lost();
                     submit_result = Err(DeviceError::DeviceLost);
+                }
+            }
+        }
+
+        if submit_result.is_err() {
+            self.command_buffer_submit.clear();
+            self.signal_semaphores.truncate(signal_semaphores_len);
+            self.present_semaphores.truncate(present_semaphores_len);
+            self.present_swapchains.truncate(present_swapchains_len);
+            self.present_indices.truncate(present_indices_len);
+            self.present_fences.truncate(present_fences_len);
+            for mut cbuf in self.command_buffers.drain(..) {
+                cbuf.refs.clear();
+                self.free_refs.push(cbuf.refs);
+                if cbuf.handle != vk::CommandBuffer::null() {
+                    unsafe {
+                        deallocate_cbuf(cbuf.handle, cbuf.pool, &mut self.pools);
+                    }
                 }
             }
         }
@@ -631,6 +765,7 @@ impl Queue {
                     self.present_indices.clear();
                     self.present_fences.clear();
                 }
+                Err(vk::Result::ERROR_UNKNOWN) => todo!(),
                 Err(err) => unexpected_error(err),
             };
         }
@@ -639,6 +774,57 @@ impl Queue {
             Ok(_) => Ok(current_epoch_id),
             Err(err) => Err(err),
         }
+    }
+
+    pub(super) fn __print_refs(&self) {
+        eprintln!("Free refs:");
+        for r in &self.free_refs {
+            r.__print();
+        }
+
+        eprintln!("This epoch refs:");
+        if let Some(e) = &self.this_epoch {
+            for r in &e.refs {
+                r.__print();
+            }
+        }
+
+        let epochs = self.pending_epochs.array.lock();
+        for e in epochs.iter() {
+            eprintln!("Epoch refs:");
+
+            for r in &e.refs {
+                r.__print();
+            }
+        }
+    }
+}
+
+#[mev_proc::hidden_trait]
+impl crate::traits::QueueSync for Queue {
+
+    /// Submits commands with waits before and signals after all commands.
+    fn submit_with_sync<I>(
+        &mut self,
+        command_buffers: I,
+        sync: SubmissionSync<'_>,
+    ) -> Result<u64, SyncError>
+    where
+        I: IntoIterator<Item = CommandBuffer>,
+    {
+        self.submit_sync_impl(command_buffers, false, sync)
+    }
+
+    /// Submits timeline dependencies and closes the resource lifetime epoch.
+    fn submit_checkpoint_with_sync<I>(
+        &mut self,
+        command_buffers: I,
+        sync: SubmissionSync<'_>,
+    ) -> Result<u64, SyncError>
+    where
+        I: IntoIterator<Item = CommandBuffer>,
+    {
+        self.submit_sync_impl(command_buffers, true, sync)
     }
 }
 
@@ -655,6 +841,21 @@ impl crate::traits::Resource for Queue {}
 
 #[hidden_trait]
 impl crate::traits::Queue for Queue {
+    /// Requires `BUFFER_WRITE_QUEUE`, which Vulkan does not support. Panics.
+    fn write_buffer_raw(&mut self, _slice: impl AsBufferSlice, _data: &[u8]) {
+        panic!("BUFFER_WRITE_QUEUE is not supported in the Vulkan backend");
+    }
+
+    /// Requires `BUFFER_WRITE_QUEUE`, which Vulkan does not support. Panics.
+    fn write_buffer(&mut self, slice: impl AsBufferSlice, data: &impl bytemuck::NoUninit) {
+        self.write_buffer_raw(slice, bytemuck::bytes_of(data));
+    }
+
+    /// Requires `BUFFER_WRITE_QUEUE`, which Vulkan does not support. Panics.
+    fn write_buffer_slice(&mut self, slice: impl AsBufferSlice, data: &[impl bytemuck::NoUninit]) {
+        self.write_buffer_raw(slice, bytemuck::cast_slice(data));
+    }
+
     /// Get the device associated with this queue.
     #[inline(always)]
     fn device(&self) -> &Device {
@@ -671,8 +872,9 @@ impl crate::traits::Queue for Queue {
     /// The encoder must be submitted to the queue it was created from.
     fn new_command_encoder(&mut self) -> CommandEncoder {
         let device = self.device.ash();
-        let pool_result = Self::refresh_pools(&mut self.pools, device)
-            .and_then(|_| Self::get_pool(&mut self.pools, device).map(|p| p as *mut Pool));
+        let pool_result = Self::refresh_pools(&mut self.pools, device).and_then(|_| {
+            Self::get_pool(&mut self.pools, device, self.family).map(|p| p as *mut Pool)
+        });
 
         let pool = match pool_result {
             Ok(pool) => unsafe { &mut *pool },
@@ -704,14 +906,14 @@ impl crate::traits::Queue for Queue {
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>,
     {
-        self.submit_impl(command_buffers, false)
+        self.submit_impl(command_buffers, false, SubmissionSync::default())
     }
 
     fn submit_checkpoint<I>(&mut self, command_buffers: I) -> Result<u64, DeviceError>
     where
         I: IntoIterator<Item = crate::backend::CommandBuffer>,
     {
-        self.submit_impl(command_buffers, true)
+        self.submit_impl(command_buffers, true, SubmissionSync::default())
     }
 
     /// Synchronize the access to the frame resources.
@@ -749,7 +951,9 @@ impl crate::traits::Queue for Queue {
             Err(err) => unexpected_error(err),
         };
 
-        self.pending_epochs.queue_is_idle();
+        if result.is_ok() {
+            self.pending_epochs.queue_is_idle();
+        }
 
         result.and_then(|_| self.device.get_error())
     }

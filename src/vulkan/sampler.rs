@@ -1,4 +1,6 @@
 use std::{
+    fmt,
+    hash::{Hash, Hasher},
     mem::size_of,
     num::NonZero,
     sync::{Arc, Weak},
@@ -62,6 +64,22 @@ impl DeviceOwned for Sampler {
     #[inline]
     fn owner(&self) -> &WeakDevice {
         &self.inner.owner
+    }
+}
+
+impl Hash for Sampler {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.handle.hash(state);
+        self.inner.desc.hash(state);
+    }
+}
+
+impl fmt::Debug for Sampler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sampler")
+            .field("handle", &self.handle)
+            .field("desc", &self.inner.desc)
+            .finish()
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, num::NonZero, rc::Rc};
+use std::{fmt, num::NonZero, rc::Rc};
 
 use mev_proc::hidden_trait;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -27,54 +27,10 @@ use super::{
     surface::Surface,
 };
 
-const INITIAL_SCRATCH_SIZE: u64 = 1024; // 1 KB
-
-struct ScratchBuffer {
-    buffer: Option<wgpu::Buffer>,
-    used: u64,
-}
-
-impl ScratchBuffer {
-    fn new() -> Self {
-        ScratchBuffer {
-            buffer: None,
-            used: 0,
-        }
-    }
-
-    fn allocate(&mut self, device: &wgpu::Device, size: u64) -> (wgpu::Buffer, u64) {
-        assert_ne!(size, 0, "Cannot allocate a scratch buffer of size 0");
-
-        let mut buffer_size = self.buffer.as_ref().map_or(0, |b| b.size());
-
-        if self.used + size > buffer_size {
-            // If the requested size exceeds the current buffer size, create a new buffer
-            let new_size = (self.used + size).max(buffer_size * 2);
-
-            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("mev_scratch_buffer"),
-                size: new_size,
-                usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }));
-            self.used = 0;
-
-            buffer_size = new_size;
-        }
-
-        let offset = self.used;
-        let buffer = self.buffer.clone().unwrap();
-        self.used += size;
-
-        (buffer, offset)
-    }
-}
-
 struct DeviceInner {
     device: wgpu::Device,
     instance: Rc<wgpu::Instance>,
     adapter: wgpu::Adapter,
-    scratch: RefCell<ScratchBuffer>,
 }
 
 #[derive(Clone)]
@@ -83,6 +39,38 @@ pub struct Device {
 }
 
 impl Device {
+    pub(crate) fn compute_kernel_limits(&self) -> crate::generic::ComputeKernelLimits {
+        let limits = self.inner.device.limits();
+        crate::generic::ComputeKernelLimits {
+            max_workgroup_size: limits
+                .max_compute_workgroup_size_x
+                .min(limits.max_compute_invocations_per_workgroup),
+            max_workgroup_memory: limits.max_compute_workgroup_storage_size as usize,
+            max_storage_buffers: limits.max_storage_buffers_per_shader_stage,
+            max_uniform_buffers: limits.max_uniform_buffers_per_shader_stage,
+            max_buffer_bindings: limits.max_bindings_per_bind_group.min(
+                limits.max_storage_buffers_per_shader_stage
+                    + limits.max_uniform_buffers_per_shader_stage,
+            ),
+            max_storage_buffer_range: limits.max_storage_buffer_binding_size as usize,
+            max_uniform_buffer_range: limits.max_uniform_buffer_binding_size as usize,
+            storage_offset_alignment: limits.min_storage_buffer_offset_alignment as usize,
+            uniform_offset_alignment: limits.min_uniform_buffer_offset_alignment as usize,
+            max_dispatch_count: limits.max_compute_workgroups_per_dimension,
+            max_subgroups_per_workgroup: None,
+            subgroup_arithmetic: self
+                .inner
+                .device
+                .features()
+                .contains(wgpu::Features::SUBGROUP),
+            shader_f16: self
+                .inner
+                .device
+                .features()
+                .contains(wgpu::Features::SHADER_F16),
+        }
+    }
+
     pub(super) fn new(
         device: wgpu::Device,
         instance: Rc<wgpu::Instance>,
@@ -93,7 +81,6 @@ impl Device {
                 device,
                 instance,
                 adapter,
-                scratch: RefCell::new(ScratchBuffer::new()),
             }),
         }
     }
@@ -110,9 +97,45 @@ impl Device {
         &self.inner.adapter
     }
 
-    pub(super) fn allocate_scratch(&self, size: u64) -> (wgpu::Buffer, u64) {
-        let mut scratch = self.inner.scratch.borrow_mut();
-        scratch.allocate(&self.inner.device, size)
+    pub(crate) fn new_compute_pipeline_with_buffer_access(
+        &self,
+        desc: ComputePipelineDesc,
+        storage_read_only: &[bool],
+    ) -> Result<ComputePipeline, PipelineError> {
+        let bind_group_layouts = create_bind_group_layouts_with_buffer_access(
+            &self.inner.device,
+            desc.arguments,
+            storage_read_only,
+        );
+
+        let pipeline = {
+            let bgl_refs = bind_group_layouts
+                .iter()
+                .map(Some)
+                .collect::<SmallVec<[Option<&wgpu::BindGroupLayout>; 4]>>();
+            let push_constant_size = u32::try_from(desc.constants)
+                .map_err(|_| PipelineError::Failure("Invalid push constant size".to_owned()))?;
+            let layout =
+                self.inner
+                    .device
+                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: None,
+                        bind_group_layouts: &bgl_refs,
+                        immediate_size: push_constant_size,
+                    });
+            self.inner
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(desc.name),
+                    layout: Some(&layout),
+                    module: desc.shader.library.wgpu(),
+                    entry_point: Some(&desc.shader.entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+        };
+
+        Ok(ComputePipeline::new(pipeline, bind_group_layouts.into()))
     }
 }
 
@@ -134,6 +157,15 @@ impl crate::traits::Resource for Device {}
 
 #[hidden_trait]
 impl crate::traits::Device for Device {
+    /// Create an independently recorded file I/O batch.
+    ///
+    /// # Panics
+    /// Panics unless `Features::IO_COMMANDS` was enabled when creating this device.
+    /// This backend does not support that feature.
+    fn new_io_batch(&self) -> super::IoBatch {
+        panic!("Features::IO_COMMANDS must be enabled to create an I/O batch")
+    }
+
     fn new_shader_library(&self, desc: LibraryDesc) -> Result<Library, ShaderLibraryError> {
         match desc.input {
             LibraryInput::Source(source) => {
@@ -161,39 +193,7 @@ impl crate::traits::Device for Device {
         &self,
         desc: ComputePipelineDesc,
     ) -> Result<ComputePipeline, PipelineError> {
-        let bind_group_layouts = create_bind_group_layouts(&self.inner.device, desc.arguments);
-
-        let pipeline = {
-            let bgl_refs = bind_group_layouts
-                .iter()
-                .map(Some)
-                .collect::<SmallVec<[Option<&wgpu::BindGroupLayout>; 4]>>();
-
-            let push_constant_size = u32::try_from(desc.constants)
-                .map_err(|_| PipelineError::Failure("Invalid push constant size".to_owned()))?;
-
-            let layout =
-                self.inner
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: None,
-                        bind_group_layouts: &bgl_refs,
-                        immediate_size: push_constant_size,
-                    });
-
-            self.inner
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(desc.name),
-                    layout: Some(&layout),
-                    module: desc.shader.library.wgpu(),
-                    entry_point: Some(&desc.shader.entry),
-                    compilation_options: Default::default(),
-                    cache: None,
-                })
-        };
-
-        Ok(ComputePipeline::new(pipeline, bind_group_layouts.into()))
+        self.new_compute_pipeline_with_buffer_access(desc, &[])
     }
 
     fn new_render_pipeline(
@@ -336,41 +336,51 @@ impl crate::traits::Device for Device {
             usage: desc.usage.into_wgpu(),
             mapped_at_creation: false,
         });
-        Buffer::new(buffer)
+        Buffer::new(buffer, desc.size, desc.usage, false)
+    }
+
+    /// Creates a buffer with its full logical range mapped for writing.
+    /// Requires `Features::BUFFER_MAP_AT_CREATION`; initial writes do not
+    /// require `HOST_WRITE`. Drop mapped views and unmap before GPU use.
+    fn new_buffer_mapped(&self, desc: BufferDesc) -> Buffer {
+        let alignment = wgpu::COPY_BUFFER_ALIGNMENT as usize;
+        let size = desc
+            .size
+            .checked_add(alignment - 1)
+            .expect("Buffer size exceeds address space")
+            & !(alignment - 1);
+        let buffer = self.inner.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(desc.name),
+            size: size as u64,
+            usage: desc.usage.into_wgpu(),
+            mapped_at_creation: true,
+        });
+        Buffer::new(buffer, desc.size, desc.usage, true)
     }
 
     fn new_buffer_init<D: BufferInit>(&self, desc: BufferInitDesc<'_, D>) -> Buffer {
-        match desc.data.as_bytes() {
-            Some(bytes) => {
-                let buffer =
-                    self.inner
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some(desc.name),
-                            contents: bytes,
-                            usage: wgpu::BufferUsages::wgpu_from(desc.usage),
-                        });
-                Buffer::new(buffer)
-            }
-            None => {
-                let size = desc.data.size();
-
-                let mut buffer = self.new_buffer(BufferDesc {
-                    size,
-                    usage: desc.usage | crate::generic::BufferUsage::HOST_WRITE,
-                    name: desc.name,
-                });
-
-                if size > 0 && buffer.map(..).is_ok() {
-                    if let Ok(mut mapped) = buffer.write_mapped_range(..) {
-                        desc.data.write(mapped.as_mut());
-                    }
-                    buffer.unmap();
+        let size = desc.data.size();
+        let mut buffer = self.new_buffer_mapped(BufferDesc {
+            size,
+            usage: desc.usage,
+            name: desc.name,
+        });
+        {
+            let mut mapped = buffer
+                .write_mapped_range(..)
+                .expect("Failed to access initial buffer mapping");
+            match desc.data.as_bytes() {
+                Some(bytes) => mapped.write(0, bytes),
+                None => {
+                    // BufferInit closures need readable memory; WebGPU views are write-only.
+                    let mut bytes = vec![0; size];
+                    desc.data.write(&mut bytes);
+                    mapped.write(0, &bytes);
                 }
-
-                buffer
             }
         }
+        buffer.unmap();
+        buffer
     }
 
     fn new_image<T: ImageDims>(&self, desc: ImageDesc<T>) -> T::Image {
@@ -492,6 +502,14 @@ pub(super) fn create_bind_group_layouts(
     device: &wgpu::Device,
     argument_groups: &[ArgumentGroupLayout],
 ) -> Vec<wgpu::BindGroupLayout> {
+    create_bind_group_layouts_with_buffer_access(device, argument_groups, &[])
+}
+
+fn create_bind_group_layouts_with_buffer_access(
+    device: &wgpu::Device,
+    argument_groups: &[ArgumentGroupLayout],
+    storage_read_only: &[bool],
+) -> Vec<wgpu::BindGroupLayout> {
     argument_groups
         .iter()
         .map(|group| {
@@ -502,7 +520,16 @@ pub(super) fn create_bind_group_layouts(
                 .map(|(i, arg)| wgpu::BindGroupLayoutEntry {
                     binding: i as u32,
                     visibility: arg.stages.into_wgpu(),
-                    ty: arg.kind.into_wgpu(),
+                    ty: match arg.kind {
+                        crate::ArgumentKind::StorageBuffer => wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage {
+                                read_only: storage_read_only.get(i).copied().unwrap_or(false),
+                            },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        _ => arg.kind.into_wgpu(),
+                    },
                     count: arg.size.map(|s| {
                         debug_assert!(
                             u32::try_from(s.get()).is_ok(),

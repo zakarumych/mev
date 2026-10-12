@@ -6,9 +6,9 @@ use objc2_foundation::{NSArray, NSInteger, NSRange, NSUInteger};
 use objc2_metal::{
     MTLAccelerationStructureBoundingBoxGeometryDescriptor, MTLAccelerationStructureCommandEncoder,
     MTLAccelerationStructureGeometryDescriptor, MTLAccelerationStructureTriangleGeometryDescriptor,
-    MTLAccelerationStructureUsage, MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer, MTLClearColor,
-    MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLDevice, MTLIndexType,
-    MTLLoadAction, MTLOrigin, MTLPrimitiveAccelerationStructureDescriptor, MTLPrimitiveType,
+    MTLAccelerationStructureUsage, MTLBarrierScope, MTLBlitCommandEncoder, MTLBlitOption, MTLBuffer,
+    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLDevice,
+    MTLIndexType, MTLLoadAction, MTLOrigin, MTLPrimitiveAccelerationStructureDescriptor, MTLPrimitiveType,
     MTLRenderCommandEncoder, MTLRenderPassColorAttachmentDescriptor, MTLRenderPassDescriptor,
     MTLResourceOptions, MTLScissorRect, MTLSize, MTLStoreAction, MTLViewport,
 };
@@ -65,6 +65,16 @@ pub struct CommandBuffer {
 }
 
 impl CommandBuffer {
+    pub(super) fn queue(&self) -> Retained<ProtocolObject<dyn objc2_metal::MTLCommandQueue>> {
+        self.buffer.commandQueue()
+    }
+    pub(super) fn from_metal(buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>) -> Self {
+        Self { buffer }
+    }
+    pub(super) fn device(&self) -> Retained<ProtocolObject<dyn MTLDevice>> {
+        self.buffer.device()
+    }
+
     pub(super) fn commit(self) -> Retained<ProtocolObject<dyn MTLCommandBuffer>> {
         self.buffer.commit();
         self.buffer
@@ -77,6 +87,7 @@ pub struct CommandEncoder {
 }
 
 impl CommandEncoder {
+
     pub(super) fn new(
         device: Retained<ProtocolObject<dyn MTLDevice>>,
         buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
@@ -88,7 +99,9 @@ impl CommandEncoder {
 #[hidden_trait]
 impl crate::traits::SyncCommandEncoder for CommandEncoder {
     #[inline(always)]
-    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {
+        // No MTLCommandEncoder exists at this scope to attach a barrier to; every resource mev binds gets Metal's automatic hazard tracking once a sub-encoder is created.
+    }
 
     #[inline(always)]
     fn init_image(
@@ -97,6 +110,7 @@ impl crate::traits::SyncCommandEncoder for CommandEncoder {
         _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
+        // No MTLCommandEncoder exists at this scope to attach a barrier to; every resource mev binds gets Metal's automatic hazard tracking once a sub-encoder is created.
     }
 }
 
@@ -285,7 +299,9 @@ impl Drop for CopyCommandEncoder<'_> {
 #[hidden_trait]
 impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
     #[inline(always)]
-    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {
+        // MTLBlitCommandEncoder has no barrier API; blit commands execute strictly in encoding order with automatic synchronization between them.
+    }
 
     #[inline(always)]
     fn init_image(
@@ -294,6 +310,7 @@ impl crate::traits::SyncCommandEncoder for CopyCommandEncoder<'_> {
         _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
+        // MTLBlitCommandEncoder has no barrier API; blit commands execute strictly in encoding order with automatic synchronization between them.
     }
 }
 
@@ -611,16 +628,17 @@ pub struct ComputeCommandEncoder<'a> {
     _marker: PhantomData<&'a mut CommandBuffer>,
 }
 
-impl ComputeCommandEncoder<'_> {
+#[hidden_trait]
+impl NativeComputeCommandEncoder for ComputeCommandEncoder<'_> {
     #[doc(hidden)]
     #[inline(always)]
-    pub fn bindings(&self) -> Option<&Bindings> {
+    fn bindings(&self) -> Option<&Bindings> {
         self.bindings.as_deref()
     }
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn metal(&self) -> &ProtocolObject<dyn MTLComputeCommandEncoder> {
+    fn metal(&self) -> &ProtocolObject<dyn MTLComputeCommandEncoder> {
         self.encoder.as_ref()
     }
 }
@@ -635,7 +653,12 @@ impl Drop for ComputeCommandEncoder<'_> {
 #[hidden_trait]
 impl traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
     #[inline(always)]
-    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {}
+    fn barrier(&mut self, _prev_stages: PipelineStages, _next_stages: PipelineStages) {
+        // Ignored on today's serial dispatch encoder (automatic hazard tracking already orders
+        // dispatches), but load-bearing insurance if mev ever adds a concurrent-dispatch encoder.
+        self.encoder
+            .memoryBarrierWithScope(MTLBarrierScope::Buffers | MTLBarrierScope::Textures);
+    }
 
     #[inline(always)]
     fn init_image(
@@ -644,6 +667,9 @@ impl traits::SyncCommandEncoder for ComputeCommandEncoder<'_> {
         _next_use: PipelineStages,
         _image: impl AsRef<Image>,
     ) {
+        // Metal has no image layout/discard concept; a texture memory barrier is the only
+        // encoder-side action available to mark the image's prior undefined content as irrelevant.
+        self.encoder.memoryBarrierWithScope(MTLBarrierScope::Textures);
     }
 }
 
@@ -725,22 +751,23 @@ pub struct RenderCommandEncoder<'a> {
     _marker: PhantomData<&'a mut CommandBuffer>,
 }
 
-impl RenderCommandEncoder<'_> {
+#[hidden_trait]
+impl NativeRenderCommandEncoder for RenderCommandEncoder<'_> {
     #[doc(hidden)]
     #[inline(always)]
-    pub fn vertex_bindings(&self) -> Option<&Bindings> {
+    fn vertex_bindings(&self) -> Option<&Bindings> {
         self.vertex_bindings.as_deref()
     }
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn fragment_bindings(&self) -> Option<&Bindings> {
+    fn fragment_bindings(&self) -> Option<&Bindings> {
         self.fragment_bindings.as_deref()
     }
 
     #[doc(hidden)]
     #[inline(always)]
-    pub fn metal(&self) -> &ProtocolObject<dyn MTLRenderCommandEncoder> {
+    fn metal(&self) -> &ProtocolObject<dyn MTLRenderCommandEncoder> {
         &self.encoder
     }
 }
@@ -1112,4 +1139,16 @@ impl crate::traits::AccelerationStructureCommandEncoder
     }
 
     fn build_tlas(&mut self, tlas: &Tlas, desc: TlasBuildDesc, scratch: impl AsBufferSlice) {}
+}
+
+
+trait NativeComputeCommandEncoder {
+    fn bindings(&self) -> Option<&Bindings>;
+    fn metal(&self) -> &ProtocolObject<dyn MTLComputeCommandEncoder>;
+}
+
+trait NativeRenderCommandEncoder {
+    fn vertex_bindings(&self) -> Option<&Bindings>;
+    fn fragment_bindings(&self) -> Option<&Bindings>;
+    fn metal(&self) -> &ProtocolObject<dyn MTLRenderCommandEncoder>;
 }

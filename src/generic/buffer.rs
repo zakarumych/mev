@@ -1,8 +1,6 @@
 use std::{
     borrow::Cow,
-    mem::ManuallyDrop,
     ops::{Range, RangeFrom, RangeFull, RangeTo},
-    ptr::NonNull,
 };
 
 use crate::{Extent, HasW, HasX, HasY, HasZ, PixelFormat, Stride, backend::Buffer};
@@ -44,7 +42,7 @@ bitflags::bitflags! {
         const HOST_WRITE = 0x0002_0000;
 
         /// Buffer is transient and will be used for a short time and then discarded.
-        /// This is a hint to the backend that it can optimize memory usage for this buffer.
+        /// This permits memory allocation strategies suited to temporary buffers.
         const TRANSIENT = 0x0100_0000;
     }
 }
@@ -70,19 +68,19 @@ pub struct BufferDesc<'a> {
 /// [`AutoDeviceRepr`](crate::generic::AutoDeviceRepr) uniform/storage
 /// structs - `NoUninit` carries no std140/430 layout semantics, it only
 /// means "safe to view as bytes"), and closures wrapped in [`InitMapped`]
-/// that write directly into freshly mapped buffer memory.
+/// that initialize mapped contents.
 pub trait BufferInit {
     /// Size in bytes of the buffer required to hold the initialized data.
     fn size(&self) -> usize;
 
     /// Returns the data as a byte slice, if available without mapping buffer memory.
     ///
-    /// Lets backends with a direct upload-on-creation path skip an explicit map/copy/unmap round trip.
+    /// Allows initialization to consume existing bytes without invoking `write`.
     fn as_bytes(&self) -> Option<&[u8]> {
         None
     }
 
-    /// Writes initial contents into freshly mapped buffer memory.
+    /// Writes initial contents into the supplied byte slice.
     /// `mem.len() == self.size()`.
     fn write(self, mem: &mut [u8]);
 }
@@ -167,9 +165,8 @@ where
     }
 }
 
-/// Initializes a freshly-allocated buffer by calling `write` with its
-/// freshly mapped memory. `size` must equal the number of bytes `write`
-/// will fill.
+/// Initializes a freshly allocated buffer by calling `write` with a mutable
+/// byte slice. `size` must equal the number of bytes `write` will fill.
 pub struct InitMapped<F> {
     pub size: usize,
     pub write: F,
@@ -241,110 +238,6 @@ impl BufferRange for RangeFull {
     }
 }
 
-pub struct BufferMappedRange<'a> {
-    buffer: &'a mut Buffer,
-    ptr: NonNull<u8>,
-    offset: usize,
-    size: usize,
-}
-
-impl<'a> BufferMappedRange<'a> {
-    pub(crate) fn new(
-        buffer: &'a mut Buffer,
-        ptr: NonNull<u8>,
-        offset: usize,
-        size: usize,
-    ) -> Self {
-        BufferMappedRange {
-            buffer,
-            ptr,
-            offset,
-            size,
-        }
-    }
-
-    pub fn read(&self, offset: usize, data: &mut [u8]) {
-        assert!(offset + data.len() <= self.size);
-
-        unsafe {
-            let src = self.ptr.as_ptr().add(offset);
-            std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), data.len());
-        }
-    }
-}
-
-impl<'a> AsRef<[u8]> for BufferMappedRange<'a> {
-    fn as_ref(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.size) }
-    }
-}
-
-pub struct BufferMappedRangeMut<'a> {
-    buffer: &'a mut Buffer,
-    ptr: NonNull<u8>,
-    offset: usize,
-    size: usize,
-}
-
-impl<'a> BufferMappedRangeMut<'a> {
-    pub(crate) fn new(
-        buffer: &'a mut Buffer,
-        ptr: NonNull<u8>,
-        offset: usize,
-        size: usize,
-    ) -> Self {
-        BufferMappedRangeMut {
-            buffer,
-            ptr,
-            offset,
-            size,
-        }
-    }
-
-    pub fn read(&self, offset: usize, data: &mut [u8]) {
-        assert!(offset + data.len() <= self.size);
-
-        unsafe {
-            let src = self.ptr.as_ptr().add(offset);
-            std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), data.len());
-        }
-    }
-
-    pub fn write(&mut self, offset: usize, data: &[u8]) {
-        assert!(offset + data.len() <= self.size);
-
-        unsafe {
-            let dst = self.ptr.as_ptr().add(offset);
-            std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
-        }
-    }
-
-    pub fn flush(&mut self) -> Result<(), crate::generic::DeviceError> {
-        let offset = self.offset;
-        let size = self.size;
-        let mut me = ManuallyDrop::new(self);
-        me.buffer.flush_range(offset, size)
-    }
-}
-
-impl<'a> Drop for BufferMappedRangeMut<'a> {
-    fn drop(&mut self) {
-        let _ = self.buffer.flush_range(self.offset, self.size);
-    }
-}
-
-impl<'a> AsRef<[u8]> for BufferMappedRangeMut<'a> {
-    fn as_ref(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const u8, self.size) }
-    }
-}
-
-impl<'a> AsMut<[u8]> for BufferMappedRangeMut<'a> {
-    fn as_mut(&mut self) -> &mut [u8] {
-        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.size) }
-    }
-}
-
 /// Slice of a buffer is a reference to a buffer with offset and size.
 /// Mostly found in function arguments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -391,43 +284,6 @@ impl BufferSlice<'_> {
             offset: self.offset,
             size: self.size,
         }
-    }
-}
-
-impl Buffer {
-    /// Returns buffer slice with given range.
-    #[inline(always)]
-    pub fn slice<R>(&self, range: R) -> BufferSlice<'_>
-    where
-        R: BufferRange,
-    {
-        let range = range.range(self.size());
-        BufferSlice {
-            buffer: Cow::Borrowed(self),
-            offset: range.start,
-            size: range.end - range.start,
-        }
-    }
-
-    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
-    #[inline(always)]
-    pub fn split_at(&self, at: usize) -> (BufferSlice<'_>, BufferSlice<'_>) {
-        let size = self.size();
-        debug_assert!(at <= size);
-        let at = at.min(size);
-
-        let before = BufferSlice {
-            buffer: Cow::Borrowed(self),
-            offset: 0,
-            size: at,
-        };
-        let after = BufferSlice {
-            buffer: Cow::Borrowed(self),
-            offset: at,
-            size: size - at,
-        };
-
-        (before, after)
     }
 }
 

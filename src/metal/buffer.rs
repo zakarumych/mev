@@ -1,17 +1,22 @@
+use super::mapped::{BufferMappedRange, BufferMappedRangeMut};
 use std::{
     fmt,
     hash::{Hash, Hasher},
     num::NonZero,
     ptr::NonNull,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
+use mev_proc::hidden_trait;
 use objc2::{msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_foundation::{NSRange, NSUInteger};
 use objc2_metal::{MTLBuffer, MTLComputeCommandEncoder, MTLRenderCommandEncoder};
-use mev_proc::hidden_trait;
 
 use crate::{
-    BufferMappedRange, BufferMappedRangeMut, BufferRange, BufferSlice, BufferUsage, DeviceError,
+    BufferRange, BufferSlice, BufferUsage, DeviceError,
     generic::{ArgumentKind, Automatic, Storage, Uniform},
 };
 
@@ -21,12 +26,28 @@ use super::arguments::ArgumentsField;
 pub struct Buffer {
     buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     usage: BufferUsage,
+    initial_mapping: Arc<AtomicBool>,
 }
 
 impl Buffer {
     #[inline(always)]
     pub(super) fn new(buffer: Retained<ProtocolObject<dyn MTLBuffer>>, usage: BufferUsage) -> Self {
-        Buffer { buffer, usage }
+        Buffer {
+            buffer,
+            usage,
+            initial_mapping: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(super) fn initially_mapped(
+        buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
+        usage: BufferUsage,
+    ) -> Self {
+        Self {
+            buffer,
+            usage,
+            initial_mapping: Arc::new(AtomicBool::new(true)),
+        }
     }
 
     #[inline(always)]
@@ -73,6 +94,15 @@ impl crate::traits::Resource for Buffer {}
 
 #[hidden_trait]
 impl crate::traits::Buffer for Buffer {
+    /// Returns buffer slice with given range.
+    fn slice<R: crate::BufferRange>(&self, range: R) -> crate::BufferSlice<'_> {
+        crate::BufferSlice::from(self).slice(range)
+    }
+
+    /// Splits buffer into two ranges, from start to `at` and from `at` to end.
+    fn split_at(&self, at: usize) -> (crate::BufferSlice<'_>, crate::BufferSlice<'_>) {
+        crate::BufferSlice::from(self).split_at(at)
+    }
     #[inline(always)]
     fn size(&self) -> usize {
         self.buffer.length() as usize
@@ -103,13 +133,19 @@ impl crate::traits::Buffer for Buffer {
     }
 
     #[inline(always)]
-    fn unmap(&mut self) {}
+    fn unmap(&mut self) {
+        self.initial_mapping.store(false, Ordering::Relaxed);
+    }
 
     fn read_mapped_range<R>(&mut self, range: R) -> Result<BufferMappedRange<'_>, DeviceError>
     where
         R: BufferRange,
     {
         assert!(self.detached());
+        assert!(
+            self.usage.contains(BufferUsage::HOST_READ),
+            "Buffer requires HOST_READ for reading"
+        );
 
         let ptr = self.buffer.contents();
 
@@ -138,6 +174,11 @@ impl crate::traits::Buffer for Buffer {
         R: BufferRange,
     {
         assert!(self.detached());
+        assert!(
+            self.initial_mapping.load(Ordering::Relaxed)
+                || self.usage.contains(BufferUsage::HOST_WRITE),
+            "Buffer requires HOST_WRITE after its initial mapping"
+        );
 
         let ptr = self.buffer.contents();
 
@@ -162,6 +203,10 @@ impl crate::traits::Buffer for Buffer {
     }
 
     fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), DeviceError> {
+        assert!(
+            self.usage.contains(BufferUsage::HOST_WRITE),
+            "Buffer requires HOST_WRITE"
+        );
         let length = self.buffer.length() as usize;
 
         assert!(offset <= length, "Offset out of bounds");
@@ -176,6 +221,10 @@ impl crate::traits::Buffer for Buffer {
     }
 
     fn read(&mut self, offset: usize, data: &mut [u8]) -> Result<(), DeviceError> {
+        assert!(
+            self.usage.contains(BufferUsage::HOST_READ),
+            "Buffer requires HOST_READ"
+        );
         let length = self.buffer.length() as usize;
 
         assert!(offset <= length, "Offset out of bounds");

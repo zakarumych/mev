@@ -128,8 +128,11 @@ fn engine_version() -> u32 {
     vk::make_api_version(0, major, minor, patch)
 }
 
-impl Instance {
-    pub fn load() -> Result<Self, DeviceError> {
+impl crate::traits::Resource for Instance {}
+
+#[hidden_trait]
+impl crate::traits::Instance for Instance {
+    fn load() -> Result<Self, DeviceError> {
         // Load the Vulkan entry points.
 
         // SAFETY:
@@ -514,7 +517,9 @@ impl Instance {
                 continue;
             }
 
-            let mut mev_features = Features::empty();
+            let mut mev_features = Features::BUFFER_MAP
+                | Features::BUFFER_MAP_AT_CREATION
+                | Features::BUFFER_WRITE_COMMAND;
 
             if has_surface && unsafe { has_extension(&extensions, "VK_KHR_swapchain") } {
                 mev_features |= Features::SURFACE;
@@ -544,6 +549,13 @@ impl Instance {
                 }
             } else {
                 properties.properties = unsafe { instance.get_physical_device_properties(device) };
+            }
+
+            if version >= Version::V1_2
+                && properties.properties.api_version >= vk::API_VERSION_1_2
+                && features12.timeline_semaphore != 0
+            {
+                mev_features |= Features::TIMELINE_EVENTS;
             }
 
             // let memory = unsafe { instance.get_physical_device_memory_properties(device) };
@@ -643,12 +655,11 @@ impl Instance {
             android_surface,
         })
     }
-}
 
-impl crate::traits::Resource for Instance {}
+    async fn load_async() -> Result<Self, DeviceError> {
+        Self::load()
+    }
 
-#[hidden_trait]
-impl crate::traits::Instance for Instance {
     fn capabilities(&self) -> &Capabilities {
         &self.capabilities
     }
@@ -822,6 +833,10 @@ impl crate::traits::Instance for Instance {
     fn new_device(&self, desc: DeviceDesc) -> Result<(Device, Vec<Queue>), DeviceError> {
         let physical_device = self.devices[desc.idx];
         let device_caps = &self.capabilities.devices[desc.idx];
+        assert!(
+            device_caps.features.contains(desc.features),
+            "Requested device features are unsupported"
+        );
 
         let result = unsafe {
             self.instance
@@ -917,6 +932,27 @@ impl crate::traits::Instance for Instance {
         let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
         let mut features_swapchain_maintenance1 =
             ash::vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT::default();
+
+        let available_features = &self.vk_features[desc.idx];
+        if desc.features.contains(Features::TIMELINE_EVENTS) {
+            features12.timeline_semaphore = 1;
+        }
+        if self.version >= Version::V1_2
+            && properties.properties.api_version >= vk::API_VERSION_1_2
+            && available_features.features12.shader_float16 != 0
+            && available_features.features11.storage_buffer16_bit_access != 0
+            && available_features
+                .features11
+                .uniform_and_storage_buffer16_bit_access
+                != 0
+            && available_features.features11.storage_input_output16 != 0
+        {
+            // Naga emits these storage capabilities with native f16 arithmetic.
+            features12.shader_float16 = 1;
+            features11.storage_buffer16_bit_access = 1;
+            features11.uniform_and_storage_buffer16_bit_access = 1;
+            features11.storage_input_output16 = 1;
+        }
 
         if self.version < Version::V1_1 {
             enabled_extension_names.push(extension_name!("VK_KHR_descriptor_update_template"));
